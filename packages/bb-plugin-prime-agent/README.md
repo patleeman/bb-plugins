@@ -69,3 +69,11 @@ bb thread spawn --provider acp-prime-agent --model <provider>/<model> --prompt "
 ## License
 
 MIT
+
+## Session restore
+
+The shim launches prime-agent with `--continue`, so each fresh ACP process
+re-attaches to the most recent prime-agent session transcript instead of
+starting blank. This keeps BB chat history across stop/start and is harmless
+for a first run (there is nothing to resume). The ACP `session/load` protocol
+itself is implemented by prime-agent; this plugin cannot change that part.

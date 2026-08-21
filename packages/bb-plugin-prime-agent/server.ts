@@ -65,7 +65,10 @@ for a in "$@"; do
 	fi
 done
 # shellcheck disable=SC2086
-exec prime-agent $out
+# Resume the most recent prime-agent session so a BB restart keeps the
+# conversation history instead of starting blank. Harmless for the first run
+# (nothing to resume); prime-agent ACP still honours a later session/load.
+exec prime-agent --continue $out
 `;
 
 const LOGO = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
