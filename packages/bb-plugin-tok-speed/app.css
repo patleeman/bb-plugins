@@ -1,0 +1,28 @@
+/* The action row is already revealed when the user hovers the message. Keep
+   the metric in that same row, alongside the native message controls. */
+.group\/message [data-bb-tok-speed]::before {
+  color: var(--muted-foreground);
+  content: attr(data-bb-tok-speed);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 0.6875rem;
+  letter-spacing: 0.01em;
+  line-height: 1.75rem;
+  margin-right: 0.25rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.group\/message:hover [data-bb-tok-speed]::before,
+.group\/message:focus-within [data-bb-tok-speed]::before {
+  opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .group\/message [data-bb-tok-speed]::before {
+    opacity: 1;
+  }
+}

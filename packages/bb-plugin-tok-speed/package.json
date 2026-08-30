@@ -1,0 +1,35 @@
+{
+  "name": "bb-plugin-tok-speed",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Show pooled provider generation speed in each assistant message's hover menu.",
+  "engines": {
+    "bb": ">=0.36",
+    "bbPluginSdk": "^0.4.24"
+  },
+  "bb": {
+    "name": "Tok Speed",
+    "description": "Paints a small provider tokens-per-second figure in every assistant message's hover menu — host tool time excluded.",
+    "branding": {
+      "icon": "Gauge"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "bb plugin build .",
+    "clean": "rm -rf dist",
+    "test": "vitest run --config vitest.config.mts"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.4.24",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.10"
+  }
+}
