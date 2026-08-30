@@ -2,8 +2,8 @@
 //
 // Answers the app content script's `turnRates` RPC: for the requested threads,
 // page through the event log (`bb.sdk.threads.events.list`) and, per turn,
-// compute the pooled provider generation throughput of that turn (see
-// src/rate.ts for the exact definition). The app paints the result in each
+// compute the pooled visible provider-output speed of that turn (see src/rate.ts
+// for the exact definition). The app paints the result in each
 // assistant message's hover menu. The pure computation is unit-tested and dependency-free;
 // this file only does I/O and the event → EventRow mapping.
 

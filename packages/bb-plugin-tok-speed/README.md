@@ -1,16 +1,16 @@
 # Tok Speed
 
 Tok Speed displays a small `tok/s` label in each assistant message's hover
-action row. The number is provider generation throughput for that turn: total
-output tokens divided by the sum of active provider-item time. It deliberately
-excludes time spent running commands, fetching tool results, or otherwise
-waiting on the host, so it answers “how fast was the provider generating?”
+action row. The number is visible provider-output speed for that turn: visible
+output tokens divided by active assistant-message time. It deliberately
+excludes hidden reasoning, commands, tool results, and other host work, so it
+answers “how quickly did the provider stream the text I saw?”
 
 The plugin reads BB's provider item lifecycle events and
-`thread/tokenUsage/updated`. Providers that do not report usable output usage
-or completed provider item timings simply have no label. The label's tooltip
-includes the output tokens and provider usage samples included in the pooled
-rate.
+`thread/tokenUsage/updated`. Providers that do not report usable visible-output
+usage or completed assistant-message timings simply have no label. The label's
+tooltip includes the visible output tokens and usage samples included in the
+pooled rate.
 
 ## Staged preview
 

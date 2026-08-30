@@ -91,7 +91,7 @@ function rateKey(threadId: string, turnId: string): string {
 
 function tooltipFor(rate: TurnRate, label: string): string {
   const sampleWord = rate.responseCount === 1 ? "sample" : "samples";
-  return `Provider generation: ${label} tok/s across ${rate.responseCount} ${sampleWord} (${rate.totalOutputTokens.toLocaleString("en-US")} output tokens; host tool time excluded)`;
+  return `Provider output: ${label} tok/s across ${rate.responseCount} ${sampleWord} (${rate.totalOutputTokens.toLocaleString("en-US")} visible output tokens; reasoning and host tool time excluded)`;
 }
 
 function clearDecoration(message: HTMLElement): void {

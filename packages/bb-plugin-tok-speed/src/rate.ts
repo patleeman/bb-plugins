@@ -2,17 +2,19 @@
 //
 // A turn consists of a sequence of provider responses. `last.outputTokens` is
 // the output-token delta for the response represented by the provider's usage
-// update (reasoning + visible text), not a running total.
+// update (reasoning + visible text), not a running total. The badge subtracts
+// `last.reasoningOutputTokens` so it measures the visible output stream.
 //
 // The host event log also contains the time spent executing commands and other
 // tools. Usage updates may arrive after those items, so using
 // `item/started → tokenUsage` as the denominator makes a fast provider look
-// slow. Instead, this module sums the durations of completed provider-owned
-// items and deliberately leaves host-executed items out of the denominator.
+// slow. Instead, this module sums the durations of completed assistant-message
+// items and deliberately leaves hidden reasoning and host-executed items out
+// of the denominator.
 //
-// The value shown in the assistant hover menu is pooled provider throughput:
-// total output tokens divided by total active provider-item time. It is a
-// useful generation-speed indicator, not a hardware benchmark or end-to-end
+// The value shown in the assistant hover menu is pooled visible-output speed:
+// visible output tokens divided by active agent-message time. It is a useful
+// provider decode-speed indicator, not a hardware benchmark or end-to-end
 // wall-clock measurement.
 
 /** A single provider usage sample inside a turn, with its measured timing. */
@@ -21,16 +23,16 @@ export interface ResponseSample {
   kind: string;
   /** Item id that anchored the response. */
   itemId: string;
-  /** Output tokens reported by the sample (`tokenUsage.last.outputTokens`). */
+  /** Visible output tokens reported by the sample. */
   outputTokens: number;
-  /** Active provider-item duration in milliseconds. */
+  /** Active assistant-message duration in milliseconds. */
   durationMs: number;
 }
 
 /** Throughput summary for one turn, keyed by the thread-scoped turn id. */
 export interface TurnRate {
   turnId: string;
-  /** Pooled output tokens / measured provider time, or null if the provider
+  /** Pooled visible output tokens / measured message time, or null if the provider
    *  did not report usable usage for this turn. */
   rate: number | null;
   /** Sum of the sampled output tokens, for the tooltip. */
@@ -51,7 +53,10 @@ export interface EventRow {
     target?: { expectedTurnId?: string } | null;
     item?: { type?: string; id?: string } | null;
     tokenUsage?: {
-      last?: { outputTokens?: number | null } | null;
+      last?: {
+        outputTokens?: number | null;
+        reasoningOutputTokens?: number | null;
+      } | null;
     } | null;
   } | null;
 }
@@ -83,17 +88,13 @@ interface ProviderInterval {
   completedAt: number;
 }
 
-// These are provider-streamed items. Host-executed items such as
-// `commandExecution`, `fileChange`, `mcpToolCall`, `delegation`, and
-// `webFetch` are intentionally absent: their lifecycle includes work
-// performed by the user's system rather than model generation. A reasoning
-// item normally starts a response, but some providers omit reasoning and begin
-// with visible text or a tool request.
+// Only visible provider output anchors the badge. Reasoning and tool-call
+// items are provider work, but their lifecycle measures hidden thinking or
+// structured tool-request generation rather than the text stream the user is
+// watching. Host-executed items such as `commandExecution`, `fileChange`,
+// `mcpToolCall`, `delegation`, and `webFetch` are also intentionally absent.
 const PROVIDER_ITEM_KINDS = new Set([
-  "reasoning",
   "agentMessage",
-  "toolCall",
-  "plan",
 ]);
 
 /**
@@ -103,8 +104,8 @@ const PROVIDER_ITEM_KINDS = new Set([
  * The walk is linear in the event count. Responses are matched to turns by the
  * *turn-scoped* item and usage scopes, so interleaved delegation turns in the
  * same thread are kept distinct. Completed provider-item intervals are
- * assigned to the next usage update for their turn; host item lifecycles are
- * never added to the denominator.
+ * assigned to the next usage update for their turn; hidden reasoning and host
+ * item lifecycles are never added to the denominator.
  */
 export function computeTurnRates(args: ComputeTurnRatesArgs): Map<string, TurnRate> {
   const { events } = args;
@@ -201,7 +202,10 @@ export function computeTurnRates(args: ComputeTurnRatesArgs): Map<string, TurnRa
       intervalsByTurn.delete(scopeTurnId);
     }
 
-    const outputTokens = event.data?.tokenUsage?.last?.outputTokens ?? 0;
+    const usageLast = event.data?.tokenUsage?.last;
+    const reportedOutputTokens = usageLast?.outputTokens ?? 0;
+    const reasoningOutputTokens = usageLast?.reasoningOutputTokens ?? 0;
+    const outputTokens = reportedOutputTokens - reasoningOutputTokens;
     if (!Number.isFinite(outputTokens) || outputTokens <= 0 || ready.length === 0) {
       continue;
     }

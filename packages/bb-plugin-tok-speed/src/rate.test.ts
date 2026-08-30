@@ -43,13 +43,14 @@ function usage(
   createdAt: number,
   turnId: string,
   outputTokens: number | null,
+  reasoningOutputTokens = 0,
 ): EventRow {
   return {
     seq,
     createdAt,
     type: "thread/tokenUsage/updated",
     scope: { kind: "turn", turnId },
-    data: { tokenUsage: { last: { outputTokens } } },
+    data: { tokenUsage: { last: { outputTokens, reasoningOutputTokens } } },
   };
 }
 
@@ -64,10 +65,11 @@ function requested(seq: number, createdAt: number, expectedTurnId: string): Even
 }
 
 describe("computeTurnRates", () => {
-  it("pools provider time and excludes host execution", () => {
+  it("pools visible provider output and excludes reasoning and host execution", () => {
     const result = computeTurnRates({
       turnIds: ["turn-1"],
       events: [
+        // Hidden reasoning is provider work, but not visible output speed.
         started(1, 0, "turn-1", "reasoning", "response-1-reasoning"),
         completed(2, 600, "turn-1", "reasoning", "response-1-reasoning"),
         started(3, 600, "turn-1", "agentMessage", "response-1-message"),
@@ -75,26 +77,28 @@ describe("computeTurnRates", () => {
         // This host-executed interval must not be part of provider speed.
         started(5, 1_100, "turn-1", "commandExecution", "host-command-1"),
         completed(6, 1_900, "turn-1", "commandExecution", "host-command-1"),
-        usage(7, 2_000, "turn-1", 100),
+        usage(7, 2_000, "turn-1", 100, 50),
         started(8, 3_000, "turn-1", "reasoning", "response-2-reasoning"),
         completed(9, 3_300, "turn-1", "reasoning", "response-2-reasoning"),
-        started(10, 3_300, "turn-1", "toolCall", "response-2-tool"),
-        completed(11, 3_400, "turn-1", "toolCall", "response-2-tool"),
-        started(12, 3_500, "turn-1", "commandExecution", "host-command-2"),
-        completed(13, 4_500, "turn-1", "commandExecution", "host-command-2"),
-        usage(14, 5_000, "turn-1", 200),
+        started(10, 3_300, "turn-1", "agentMessage", "response-2-message"),
+        completed(11, 3_400, "turn-1", "agentMessage", "response-2-message"),
+        started(12, 3_400, "turn-1", "toolCall", "response-2-tool"),
+        completed(13, 3_500, "turn-1", "toolCall", "response-2-tool"),
+        started(14, 3_600, "turn-1", "commandExecution", "host-command-2"),
+        completed(15, 4_600, "turn-1", "commandExecution", "host-command-2"),
+        usage(16, 5_000, "turn-1", 200, 100),
       ],
     });
 
     expect(result.get("turn-1")).toMatchObject({
       turnId: "turn-1",
-      totalOutputTokens: 300,
+      totalOutputTokens: 150,
       responseCount: 2,
     });
-    expect(result.get("turn-1")?.rate).toBeCloseTo(214.2857142857143, 12);
+    expect(result.get("turn-1")?.rate).toBe(300);
   });
 
-  it("measures a tool-only response when reasoning is omitted", () => {
+  it("does not report a tool-only response as visible output", () => {
     const result = computeTurnRates({
       turnIds: ["turn-1"],
       events: [
@@ -104,7 +108,7 @@ describe("computeTurnRates", () => {
       ],
     });
 
-    expect(result.get("turn-1")?.rate).toBe(50);
+    expect(result.get("turn-1")).toBeUndefined();
   });
 
   it("does not carry provider intervals across a same-turn steer", () => {
@@ -114,8 +118,8 @@ describe("computeTurnRates", () => {
         started(1, 0, "turn-1", "reasoning", "stale"),
         completed(2, 10_000, "turn-1", "reasoning", "stale"),
         requested(3, 10_100, "turn-1"),
-        started(4, 10_200, "turn-1", "reasoning", "current"),
-        completed(5, 10_700, "turn-1", "reasoning", "current"),
+        started(4, 10_200, "turn-1", "agentMessage", "current"),
+        completed(5, 10_700, "turn-1", "agentMessage", "current"),
         usage(6, 10_800, "turn-1", 100),
       ],
     });
@@ -131,19 +135,19 @@ describe("computeTurnRates", () => {
     const result = computeTurnRates({
       turnIds: ["turn-a", "turn-b"],
       events: [
-        started(1, 0, "turn-a", "reasoning", "a-first"),
-        completed(2, 100, "turn-a", "reasoning", "a-first"),
-        started(3, 100, "turn-b", "reasoning", "b-first"),
-        completed(4, 150, "turn-b", "reasoning", "b-first"),
+        started(1, 0, "turn-a", "agentMessage", "a-first"),
+        completed(2, 100, "turn-a", "agentMessage", "a-first"),
+        started(3, 100, "turn-b", "agentMessage", "b-first"),
+        completed(4, 150, "turn-b", "agentMessage", "b-first"),
         usage(5, 200, "turn-b", 10),
         usage(6, 300, "turn-a", 20),
-        started(7, 400, "turn-a", "reasoning", "a-too-fast"),
-        completed(8, 401, "turn-a", "reasoning", "a-too-fast"),
+        started(7, 400, "turn-a", "agentMessage", "a-too-fast"),
+        completed(8, 401, "turn-a", "agentMessage", "a-too-fast"),
         usage(9, 402, "turn-a", 100),
-        started(10, 500, "turn-b", "reasoning", "b-too-long"),
+        started(10, 500, "turn-b", "agentMessage", "b-too-long"),
         usage(11, 2_300_001, "turn-b", 100),
-        started(12, 2_000_000, "turn-a", "reasoning", "a-invalid"),
-        completed(13, 2_000_100, "turn-a", "reasoning", "a-invalid"),
+        started(12, 2_000_000, "turn-a", "agentMessage", "a-invalid"),
+        completed(13, 2_000_100, "turn-a", "agentMessage", "a-invalid"),
         usage(14, 2_001_000, "turn-a", null),
       ],
     });
@@ -156,6 +160,25 @@ describe("computeTurnRates", () => {
     expect(result.get("turn-b")).toMatchObject({
       rate: 200,
       totalOutputTokens: 10,
+      responseCount: 1,
+    });
+  });
+
+  it("does not let hidden reasoning make visible output look slow", () => {
+    const result = computeTurnRates({
+      turnIds: ["turn-1"],
+      events: [
+        started(1, 0, "turn-1", "reasoning", "long-thinking"),
+        completed(2, 600_000, "turn-1", "reasoning", "long-thinking"),
+        started(3, 600_000, "turn-1", "agentMessage", "visible-output"),
+        completed(4, 601_000, "turn-1", "agentMessage", "visible-output"),
+        usage(5, 601_001, "turn-1", 1_000, 900),
+      ],
+    });
+
+    expect(result.get("turn-1")).toMatchObject({
+      rate: 100,
+      totalOutputTokens: 100,
       responseCount: 1,
     });
   });

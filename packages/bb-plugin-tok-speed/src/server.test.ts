@@ -15,8 +15,8 @@ function event(type: string, createdAt: number, seq: number, data: EventRow["dat
 describe("computeThreadRates", () => {
   it("returns thread-qualified rate objects rather than Map entries", () => {
     const result = computeThreadRates("thread-1", [
-      event("item/started", 0, 1, { item: { type: "reasoning", id: "item-1" } }),
-      event("item/completed", 1_000, 2, { item: { type: "reasoning", id: "item-1" } }),
+      event("item/started", 0, 1, { item: { type: "agentMessage", id: "item-1" } }),
+      event("item/completed", 1_000, 2, { item: { type: "agentMessage", id: "item-1" } }),
       event("thread/tokenUsage/updated", 1_001, 3, {
         tokenUsage: { last: { outputTokens: 100 } },
       }),

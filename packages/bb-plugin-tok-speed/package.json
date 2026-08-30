@@ -2,14 +2,14 @@
   "name": "bb-plugin-tok-speed",
   "version": "0.1.0",
   "type": "module",
-  "description": "Show pooled provider generation speed in each assistant message's hover menu.",
+  "description": "Show visible provider output speed in each assistant message's hover menu.",
   "engines": {
     "bb": ">=0.36",
     "bbPluginSdk": "^0.4.24"
   },
   "bb": {
     "name": "Tok Speed",
-    "description": "Paints a small provider tokens-per-second figure in every assistant message's hover menu — host tool time excluded.",
+    "description": "Paints a small visible provider-output tokens-per-second figure in every assistant message's hover menu — hidden reasoning and host tool time excluded.",
     "branding": {
       "icon": "Gauge"
     },
