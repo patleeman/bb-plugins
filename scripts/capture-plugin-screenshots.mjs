@@ -81,7 +81,11 @@ class CdpClient {
       returnByValue: true,
     });
     if (result.exceptionDetails) {
-      throw new Error(result.exceptionDetails.text ?? "Runtime evaluation failed");
+      throw new Error(
+        result.exceptionDetails.exception?.description ??
+          result.exceptionDetails.text ??
+          "Runtime evaluation failed",
+      );
     }
     if (result.result?.subtype === "error") {
       throw new Error(result.result.description ?? "Runtime evaluation failed");
@@ -483,6 +487,61 @@ const captures = [
     },
   },
   {
+    id: "tok-speed",
+    packageDir: "bb-plugin-tok-speed",
+    setup: async (client) => {
+      await client.navigate(threadUrl);
+      const assistantPoint = await client.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll('[data-timeline-row-id]'))
+          .find((candidate) => candidate.dataset.timelineRowId?.includes(':assistant:'));
+        const group = row?.querySelector('[class~="group/message"]');
+        if (!group) throw new Error('Assistant message group not found');
+        group.scrollIntoView({ block: 'center', inline: 'nearest' });
+        const rect = group.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: Math.max(rect.top + 4, rect.bottom - 8) };
+      })()`);
+      await client.command("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: assistantPoint.x,
+        y: assistantPoint.y,
+        buttons: 0,
+      });
+      await sleep(500);
+      const started = Date.now();
+      while (Date.now() - started < 15000) {
+        const count = await client.evaluate(`Array.from(
+          document.querySelectorAll('[data-bb-tok-speed]'),
+        ).filter((element) => element.getAttribute('data-bb-tok-speed')?.includes('tok/s')).length`);
+        if (count > 0) break;
+        await sleep(250);
+      }
+      await client.evaluate(`(() => {
+        const labels = Array.from(document.querySelectorAll('[data-bb-tok-speed]'))
+          .filter((element) => element.getAttribute('data-bb-tok-speed')?.includes('tok/s'));
+        if (labels.length === 0) {
+          throw new Error('Tok Speed did not decorate an assistant message');
+        }
+        labels[0].scrollIntoView({ block: 'center', inline: 'nearest' });
+        return true;
+      })()`);
+      const point = await client.evaluate(`(() => {
+        const label = Array.from(document.querySelectorAll('[data-bb-tok-speed]'))
+          .find((element) => element.getAttribute('data-bb-tok-speed')?.includes('tok/s'));
+        const group = label?.closest('[class~="group/message"]');
+        if (!group) throw new Error('Tok Speed message group not found');
+        const rect = group.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: Math.max(rect.top + 4, rect.bottom - 8) };
+      })()`);
+      await client.command("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: point.x,
+        y: point.y,
+        buttons: 0,
+      });
+      await sleep(500);
+    },
+  },
+  {
     id: "council",
     packageDir: "bb-plugin-council",
     setup: async (client) => {
@@ -501,6 +560,8 @@ const captures = [
       await client.waitForText("ds4flash.gguf");
       await client.waitForText("MODEL SELECTOR");
       await client.waitForText("ds4/");
+      await client.waitForText("metal/cuda/rocm/cpu");
+      await client.waitForText("0731 support GGUF");
     },
   },
   {
@@ -563,6 +624,60 @@ const captures = [
       await client.navigate("/plugins/traces/traces");
       await client.waitForText("Index ready");
       await client.waitForText("matching sessions");
+    },
+  },
+  {
+    id: "omp",
+    packageDir: "bb-plugin-omp",
+    setup: async (client) => {
+      await client.navigate("/settings/providers");
+      await client.waitForText("OhMyPi");
+      await client.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("div"))
+          .find((candidate) => candidate.classList.contains("group/provider-row") &&
+            candidate.innerText.includes("OhMyPi"));
+        if (!row) throw new Error("OhMyPi provider row not found");
+        const makeDefault = Array.from(row.querySelectorAll("button"))
+          .find((candidate) => candidate.innerText.trim() === "Make default");
+        if (makeDefault) makeDefault.click();
+        return true;
+      })()`);
+      await client.navigate("/");
+      await client.clickFirstButtonWithAria("New thread in bb-plugins");
+      await client.waitForAriaButton("Provider, model and reasoning (⇧ ⌘ M)");
+      await client.clickAriaButtonWithPointer("Provider, model and reasoning (⇧ ⌘ M)");
+      await client.waitForText("GLM 5.3 Flashopenrouter");
+      await client.evaluate(`(() => {
+        const option = Array.from(document.querySelectorAll('[role="option"]'))
+          .find((candidate) => candidate.innerText.trim() === "GLM 5.3 Flashopenrouter");
+        if (!option) throw new Error("OpenRouter GLM 5.3 Flash model option not found");
+        option.click();
+        return true;
+      })()`);
+      await client.waitForText("Reasoning");
+      await client.waitForText("Low");
+      await client.waitForText("Medium");
+      await client.waitForText("High");
+      await client.evaluate(`(() => {
+        const dialog = document.querySelector('[role="dialog"]');
+        const scrollable = Array.from(dialog?.querySelectorAll("*") ?? [])
+          .find((candidate) => candidate.scrollHeight > candidate.clientHeight);
+        if (!scrollable) throw new Error("OMP model picker list is not scrollable");
+        scrollable.scrollTop = scrollable.scrollHeight;
+        const visible = (text) => Array.from(dialog.querySelectorAll("button"))
+          .some((candidate) => {
+            if (candidate.innerText.trim() !== text) return false;
+            const rect = candidate.getBoundingClientRect();
+            return rect.bottom > 0 && rect.top < window.innerHeight;
+          });
+        const text = dialog?.innerText ?? "";
+        if (!text.includes("GLM 5.3 Flashopenrouter") ||
+            !text.includes("Low") || !text.includes("Medium") || !text.includes("High") ||
+            !visible("Low") || !visible("Medium") || !visible("High")) {
+          throw new Error("OMP reasoning options are not visible in the model picker");
+        }
+        return true;
+      })()`);
     },
   },
   {
