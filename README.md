@@ -34,6 +34,8 @@ Plugins for [bb](https://github.com/patleeman/bb).
   explorer.
 - [`bb-plugin-copy-session-id`](packages/bb-plugin-copy-session-id/) — add a
   Copy session ID action to thread context menus in the left sidebar.
+- [`bb-plugin-tok-speed`](packages/bb-plugin-tok-speed/) — show pooled provider
+  generation speed in each assistant message's hover menu.
 - [`bb-plugin-ua-fetch`](packages/bb-plugin-ua-fetch/) — fetch web content with
   adaptive user-agent probing and cached winners.
 

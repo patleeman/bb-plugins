@@ -3,7 +3,8 @@
 Configure a local **DwarfStar** (`antirez/ds4`, a.k.a. ds4.c) inference
 server for BB. Once the setup is complete, choose its model in BB's model
 picker: the plugin starts `ds4-server` for matching turns and stops it after
-the configured idle grace period.
+the configured idle grace period. Current DwarfStar builds support DeepSeek V4
+Flash/PRO and selected GLM 5.2 GGUFs.
 
 ## Staged preview
 
@@ -18,7 +19,7 @@ model (see the [ds4 README](https://github.com/antirez/ds4#readme)):
 git clone https://github.com/antirez/ds4 ~/workingdir/ds4
 cd ~/workingdir/ds4 && make
 ./download_model.sh ds4f-q2      # or another target for your hardware
-./download_model.sh dspark-support
+./download_model.sh ds4f-dspark  # optional, for Flash DSpark acceleration
 ```
 
 ## Install
@@ -61,13 +62,11 @@ bb plugin build      # optional: precompile the frontend
   - `bb ds4 complete <prompt>` — one-shot completion against the local server
 - **Agent tools** (available to every BB agent): `ds4_status` and
   `ds4_complete` — BB agents can check the server and run prompts on the local
-  DeepSeek V4 Flash model directly.
+  DwarfStar model directly.
 - **Agent connections**: write/merge provider configs so external agents can
   reach the server:
-  - Pi/BB → `~/.pi/agent/models.json` (provider `ds4`, model
-    `deepseek-v4-flash`)
-  - opencode → `~/.config/opencode/opencode.json` (provider `ds4`, agent
-    `ds4`)
+  - Pi/BB → `~/.pi/agent/models.json` (provider `ds4`, selected DwarfStar model)
+  - opencode → `~/.config/opencode/opencode.json` (provider `ds4`, agent `ds4`)
   - Codex CLI → `~/.codex/config.toml` (`[model_providers.ds4]`, Responses
     wire API)
   Existing files are merged (never clobbered) and a timestamped
@@ -112,20 +111,21 @@ connection error; retrying that turn uses the now-warm server.
 | --- | --- | --- |
 | `ds4Dir` | `""` | DS4 checkout dir. Empty = auto-detect (`DS4_DIR`, `~/workingdir/ds4`, `~/ds4`, …) |
 | `modelPath` | `""` | GGUF path; absolute or relative to `ds4Dir`. Empty = `ds4flash.gguf` |
-| `modelSelector` | `ds4/` | Exact model id or namespace from BB's model picker; matches `ds4/deepseek-v4-flash` by default |
+| `modelSelector` | `ds4/` | Exact model id or namespace from BB's model picker; matches DwarfStar's DeepSeek V4 and GLM 5.2 ids by default |
 | `providerId` | `""` | Optional exact BB provider id filter; empty matches the model across providers |
 | `idleTimeoutSeconds` | `300` | How long to keep the server warm after the last matching turn |
-| `backend` | `auto` | `metal` \| `cuda` \| `cpu` |
+| `backend` | `auto` | `metal` \| `cuda` \| `rocm` \| `cpu` |
 | `host` | `127.0.0.1` | Bind address |
 | `port` | `8000` | Bind port |
 | `ctx` | `100000` | Context tokens (`-c`) |
+| `maxTokens` | `384000` | Default maximum output tokens (`-n`) |
 | `kvDiskDir` | `/tmp/ds4-kv` | Disk KV cache dir; empty disables it |
 | `kvDiskSpaceMb` | `8192` | KV cache disk budget |
 | `power` | `""` | GPU duty cycle (`--power 1..100`) |
 | `extraArgs` | `""` | Extra flags appended to the command line |
-| `dspark` | `true` | Enable DSpark speculative decoding; requires the support GGUF |
-| `dsparkSupportPath` | `""` | Absolute or DS4-relative support GGUF path; empty auto-detects `gguf/DeepSeek-V4-Flash-DSpark-support.gguf` |
-| `dsparkConfidence` | `0.9` | DSpark confidence pruning threshold (`0..1`) |
+| `dspark` | `false` | Enable the Flash-only DSpark optimization; requires the matching 0731 support GGUF |
+| `dsparkSupportPath` | `""` | Absolute or DS4-relative support GGUF path; empty auto-detects `gguf/DeepSeek-V4-Flash-DSpark-support-0731.gguf` |
+| `dsparkConfidence` | `""` | DSpark threshold (`0..1`); empty uses DwarfStar's backend default (Metal `0.6`, CUDA/ROCm `0.7`) |
 | `restartOnCrash` | `true` | Restart after a crash (backoff) |
 | `configurePi` / `configureOpencode` / `configureCodex` | `true`/`false`/`false` | Which agent configs `bb ds4 agents apply` writes by default |
 
@@ -135,12 +135,14 @@ connection error; retrying that turn uses the now-warm server.
   server). The interactive **`ds4-agent`** TUI is launched into a BB terminal
   (`bb ds4 agent`) where you drive it directly — sessions save under
   `~/.ds4/kvcache` via `/save`.
-- DSpark is enabled by default for both `ds4-server` and `ds4-agent`, using
-  `--mtp <support.gguf> --dspark`. Download the support model with
-  `./download_model.sh dspark-support`; the plugin refuses to start while the
-  configured support file is missing so it cannot silently fall back to a
-  non-DSpark run. Set `dspark=false` for an explicit baseline or unsupported
-  model.
+- DSpark is opt-in for `ds4-server` and `ds4-agent`, using
+  `--mtp <support.gguf> --dspark`. For the current Flash checkpoint, download
+  it with `./download_model.sh ds4f-dspark`; the plugin refuses to start while
+  the configured support file is missing or the model path is not recognizable
+  as Flash, so it cannot silently run an incompatible DSpark combination.
+  Leave `dspark=false` for GLM 5.2, DeepSeek V4 PRO, or a baseline run. Older
+  checkouts using the pre-0731 support filename are still detected as a
+  compatibility fallback.
 - The plugin runs on the machine that runs the BB server (full-trust plugin
   code); it spawns the process locally and writes agent configs on the same
   host.

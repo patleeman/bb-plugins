@@ -6,10 +6,15 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, isAbsolute } from "node:path";
 import { execFileSync } from "node:child_process";
+import { inferDwarfStarModelId } from "./model-selection.ts";
 
-export type BackendChoice = "auto" | "metal" | "cuda" | "cpu";
+export type BackendChoice = "auto" | "metal" | "cuda" | "rocm" | "cpu";
 
-export const DEFAULT_DSPARK_SUPPORT_FILE = "DeepSeek-V4-Flash-DSpark-support.gguf";
+/** Current support checkpoint shipped by DwarfStar's ds4f-dspark target. */
+export const DEFAULT_DSPARK_SUPPORT_FILE =
+  "DeepSeek-V4-Flash-DSpark-support-0731.gguf";
+/** Kept as a fallback for older checkouts that predate the 0731 checkpoint. */
+const LEGACY_DSPARK_SUPPORT_FILE = "DeepSeek-V4-Flash-DSpark-support.gguf";
 
 export interface RunSettings {
   ds4Dir: string;
@@ -46,7 +51,8 @@ export interface ResolvedRunConfig {
   dspark: boolean;
   /** Absolute path to the DSpark support GGUF, or null when no checkout exists. */
   dsparkSupportPath: string | null;
-  dsparkConfidence: number;
+  /** null lets DwarfStar choose its backend-specific default. */
+  dsparkConfidence: number | null;
   fingerprint: string;
 }
 
@@ -57,6 +63,26 @@ export function splitArgs(s: string): string[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(s))) out.push(m[1] ?? m[2] ?? m[3]);
   return out;
+}
+
+/** Parse the optional DSpark threshold; empty/auto delegates to DwarfStar. */
+export function parseDsparkConfidence(raw: string): number | null {
+  const input = raw.trim().toLowerCase();
+  if (!input || input === "auto" || input === "default") return null;
+  const value = Number(input);
+  return Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
+}
+
+/**
+ * DSpark's external support GGUF is currently paired only with Flash. Keep
+ * the opt-in path safe when a user points the same checkout at PRO, GLM, or a
+ * custom model whose family cannot be verified from its filename.
+ */
+export function validateDsparkModelPath(modelPath: string | null): string | null {
+  if (!modelPath) return null;
+  return inferDwarfStarModelId(modelPath) === "deepseek-v4-flash"
+    ? null
+    : `DSpark is supported only with a Flash model. The configured model path is not recognizable as Flash: ${modelPath}. Disable dspark or set modelPath to a supported Flash GGUF.`;
 }
 
 /**
@@ -98,18 +124,14 @@ export function resolveConfig(s: RunSettings): ResolvedRunConfig {
   const ctx = parseInt(s.ctx, 10) || 100000;
   const maxTokens = parseInt(s.maxTokens, 10) || 0;
   const backend: BackendChoice =
-    s.backend === "metal" || s.backend === "cuda" || s.backend === "cpu"
+    s.backend === "metal" ||
+    s.backend === "cuda" ||
+    s.backend === "rocm" ||
+    s.backend === "cpu"
       ? s.backend
       : "auto";
-  const dspark = s.dspark !== false;
-  const confidenceInput = s.dsparkConfidence.trim();
-  const parsedConfidence = /^[0-9]+(?:\.[0-9]+)?$/.test(confidenceInput)
-    ? Number(confidenceInput)
-    : Number.NaN;
-  const dsparkConfidence =
-    Number.isFinite(parsedConfidence) && parsedConfidence >= 0 && parsedConfidence <= 1
-      ? parsedConfidence
-      : 0.9;
+  const dspark = s.dspark === true;
+  const dsparkConfidence = parseDsparkConfidence(s.dsparkConfidence);
 
   const modelPath = s.modelPath
     ? isAbsolute(s.modelPath)
@@ -130,6 +152,8 @@ export function resolveConfig(s: RunSettings): ResolvedRunConfig {
       : [
           join(ds4Dir, "gguf", DEFAULT_DSPARK_SUPPORT_FILE),
           join(ds4Dir, DEFAULT_DSPARK_SUPPORT_FILE),
+          join(ds4Dir, "gguf", LEGACY_DSPARK_SUPPORT_FILE),
+          join(ds4Dir, LEGACY_DSPARK_SUPPORT_FILE),
         ].find((candidate) => existsSync(candidate)) ??
         join(ds4Dir, "gguf", DEFAULT_DSPARK_SUPPORT_FILE)
     : null;
@@ -147,7 +171,7 @@ export function resolveConfig(s: RunSettings): ResolvedRunConfig {
   if (dspark) {
     if (dsparkSupportPath) args.push("--mtp", dsparkSupportPath);
     args.push("--dspark");
-    if (dsparkConfidence !== 0.9) {
+    if (dsparkConfidence !== null) {
       args.push("--dspark-confidence", String(dsparkConfidence));
     }
   }
@@ -200,12 +224,14 @@ export function agentCommand(cfg: ResolvedRunConfig): {
   const bin = cfg.ds4Dir ? join(cfg.ds4Dir, "ds4-agent") : "ds4-agent";
   const args: string[] = [];
   if (cfg.modelPath) args.push("-m", cfg.modelPath);
-  const backend = cfg.args.find((a) => a === "--metal" || a === "--cuda" || a === "--cpu");
+  const backend = cfg.args.find(
+    (a) => a === "--metal" || a === "--cuda" || a === "--rocm" || a === "--cpu",
+  );
   if (backend) args.push(backend);
   if (cfg.dspark) {
     if (cfg.dsparkSupportPath) args.push("--mtp", cfg.dsparkSupportPath);
     args.push("--dspark");
-    if (cfg.dsparkConfidence !== 0.9) {
+    if (cfg.dsparkConfidence !== null) {
       args.push("--dspark-confidence", String(cfg.dsparkConfidence));
     }
   }

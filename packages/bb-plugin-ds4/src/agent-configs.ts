@@ -31,6 +31,13 @@ export interface AgentConfigOpts {
   port: number;
   ctx: number;
   maxTokens: number;
+  /** Primary model id (kept for compatibility with existing callers). */
+  modelId: string;
+  /**
+   * Every model id to advertise, primary first. When omitted, only modelId
+   * is written (previous single-model behavior).
+   */
+  modelIds?: string[];
 }
 
 const home = homedir();
@@ -113,10 +120,40 @@ function parseJsonc(src: string): unknown {
 
 // --- pi ---
 
-function piModelEntry(port: number, ctx: number, maxTokens: number) {
+function modelLabel(modelId: string): string {
+  switch (modelId) {
+    case "deepseek-v4-flash":
+      return "DeepSeek V4 Flash";
+    case "deepseek-v4-pro":
+      return "DeepSeek V4 PRO";
+    case "glm-5.2":
+      return "GLM 5.2";
+    case "glm-5.3-flash":
+      return "GLM 5.3 Flash";
+    default:
+      return modelId;
+  }
+}
+
+export function piCompatibilityForModel(modelId: string) {
+  const isGlm = modelId.trim().toLowerCase().startsWith("glm-") ||
+    modelId.trim().toLowerCase().startsWith("zai/glm-");
   return {
-    id: "deepseek-v4-flash",
-    name: "DeepSeek V4 Flash (ds4.c local)",
+    supportsStore: false,
+    supportsDeveloperRole: false,
+    supportsReasoningEffort: true,
+    supportsUsageInStreaming: true,
+    maxTokensField: "max_tokens",
+    supportsStrictMode: false,
+    thinkingFormat: isGlm ? "zai" : "deepseek",
+    ...(isGlm ? {} : { requiresReasoningContentOnAssistantMessages: true }),
+  };
+}
+
+function piModelEntry(modelId: string, port: number, ctx: number, maxTokens: number) {
+  return {
+    id: modelId,
+    name: `${modelLabel(modelId)} (ds4.c local)`,
     api: "openai-completions",
     provider: "ds4",
     baseUrl: `http://127.0.0.1:${port}/v1`,
@@ -125,16 +162,7 @@ function piModelEntry(port: number, ctx: number, maxTokens: number) {
     contextWindow: ctx,
     maxTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: {
-      supportsStore: false,
-      supportsDeveloperRole: false,
-      supportsReasoningEffort: true,
-      supportsUsageInStreaming: true,
-      maxTokensField: "max_tokens",
-      supportsStrictMode: false,
-      thinkingFormat: "deepseek",
-      requiresReasoningContentOnAssistantMessages: true,
-    },
+    compat: piCompatibilityForModel(modelId),
     thinkingLevelMap: {
       off: null,
       minimal: "low",
@@ -154,22 +182,14 @@ function writePi(opts: AgentConfigOpts): ApplyResult {
     ? (parseJsonc(readFileSync(path, "utf8")) as Record<string, unknown>)
     : {};
   const providers = ((data.providers as Record<string, unknown>) ?? {});
+  const ids = opts.modelIds?.length ? opts.modelIds : [opts.modelId];
   providers["ds4"] = {
     name: "ds4.c local",
     baseUrl: `http://127.0.0.1:${opts.port}/v1`,
     api: "openai-completions",
     apiKey: "dsv4-local",
-    compat: {
-      supportsStore: false,
-      supportsDeveloperRole: false,
-      supportsReasoningEffort: true,
-      supportsUsageInStreaming: true,
-      maxTokensField: "max_tokens",
-      supportsStrictMode: false,
-      thinkingFormat: "deepseek",
-      requiresReasoningContentOnAssistantMessages: true,
-    },
-    models: [piModelEntry(opts.port, opts.ctx, opts.maxTokens)],
+    compat: piCompatibilityForModel(opts.modelId),
+    models: ids.map((id) => piModelEntry(id, opts.port, opts.ctx, opts.maxTokens)),
   };
   data["providers"] = providers;
   const backup = writeWithBackup(path, JSON.stringify(data, null, 2) + "\n");
@@ -231,6 +251,14 @@ function writeOpencode(opts: AgentConfigOpts): ApplyResult {
     ? (JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>)
     : { $schema: "https://opencode.ai/config.json" };
   const providers = ((data["provider"] as Record<string, unknown>) ?? {});
+  const ids = opts.modelIds?.length ? opts.modelIds : [opts.modelId];
+  const models: Record<string, unknown> = {};
+  for (const id of ids) {
+    models[id] = {
+      name: `${modelLabel(id)} (ds4.c local)`,
+      limit: { context: opts.ctx, output: opts.maxTokens },
+    };
+  }
   providers["ds4"] = {
     name: "ds4.c (local)",
     npm: "@ai-sdk/openai-compatible",
@@ -238,18 +266,13 @@ function writeOpencode(opts: AgentConfigOpts): ApplyResult {
       baseURL: `http://127.0.0.1:${opts.port}/v1`,
       apiKey: "dsv4-local",
     },
-    models: {
-      "deepseek-v4-flash": {
-        name: "DeepSeek V4 Flash (ds4.c local)",
-        limit: { context: opts.ctx, output: opts.maxTokens },
-      },
-    },
+    models,
   };
   data["provider"] = providers;
   const agents = ((data["agent"] as Record<string, unknown>) ?? {});
   agents["ds4"] = {
-    description: "DeepSeek V4 Flash served by local ds4-server",
-    model: "ds4/deepseek-v4-flash",
+    description: `${modelLabel(opts.modelId)} served by local ds4-server`,
+    model: `ds4/${opts.modelId}`,
     temperature: 0,
   };
   data["agent"] = agents;

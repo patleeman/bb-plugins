@@ -236,9 +236,9 @@ function SetupSection() {
       </div>
       <p className="text-xs text-muted-foreground">
         The selector defaults to <code className="font-mono">ds4/</code>, which
-        matches <code className="font-mono">ds4/deepseek-v4-flash</code>.
-        Leave the provider filter empty unless the same model id is used by
-        more than one provider.
+        matches DwarfStar&apos;s DeepSeek V4 and GLM 5.2 model ids. Leave the
+        provider filter empty unless the same model id is used by more than
+        one provider.
       </p>
     </div>
   );

@@ -3,7 +3,7 @@
 // provider configs (pi / opencode / Codex CLI), and expose the local model to
 // BB agents through native tools and a `bb ds4` CLI.
 
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
@@ -25,12 +25,20 @@ import {
 } from "./src/process-recovery";
 import {
   resolveConfig,
+  detectDs4Dir,
   agentCommand,
   shellQuote,
+  validateDsparkModelPath,
   type BackendChoice,
   type ResolvedRunConfig,
   type RunSettings,
 } from "./src/run-config";
+import {
+  scanModelCatalog,
+  catalogPathFor,
+  advertisedModelIds,
+  type CatalogEntry,
+} from "./src/model-catalog";
 import {
   allStatuses,
   applyTargets,
@@ -42,8 +50,13 @@ import {
   persistentLogPath,
 } from "./src/persistent-log";
 import {
+  inferDwarfStarModelId,
+  canonicalModelId,
+  CANONICAL_MODEL_ORDER,
+  isDwarfStarModel,
   matchesModelSelection,
   parseIdleTimeoutMs,
+  type CanonicalDwarfStarModelId,
 } from "./src/model-selection";
 
 // ---------------------------------------------------------------------------
@@ -70,7 +83,7 @@ const configSchema = z.object({
   backend: z.string(),
   dspark: z.boolean(),
   dsparkSupportPath: z.string().nullable(),
-  dsparkConfidence: z.number(),
+  dsparkConfidence: z.number().nullable(),
   fingerprint: z.string(),
 });
 const statusSchema = z.object({
@@ -182,6 +195,26 @@ const ADOPTED_HEALTH_GRACE_MS = 120_000;
 
 type ServerEndpoint = { host: string; port: number };
 
+const CANONICAL_DWARFSTAR_MODEL_IDS = [
+  "deepseek-v4-flash",
+  "deepseek-v4-pro",
+  "glm-5.2",
+] as const;
+
+function preferredDwarfStarModel(
+  models: readonly string[],
+  modelPath: string | null = null,
+): string {
+  const configuredModel = inferDwarfStarModelId(modelPath);
+  if (configuredModel) return configuredModel;
+  const normalized = new Set(models.map((model) => model.trim().toLowerCase()));
+  return (
+    CANONICAL_DWARFSTAR_MODEL_IDS.find((model) => normalized.has(model)) ??
+    models.find(isDwarfStarModel) ??
+    "deepseek-v4-flash"
+  );
+}
+
 export default async function plugin(bb: BbPluginApi) {
   bb.log.info("loaded");
 
@@ -203,7 +236,7 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "BB model selector",
       description:
-        "Exact model id or namespace used in BB's model picker. The default `ds4/` matches `ds4/deepseek-v4-flash`.",
+        "Exact model id or namespace used in BB's model picker. The default `ds4/` matches DwarfStar's DeepSeek V4 and GLM model ids.",
       default: "ds4/",
     },
     providerId: {
@@ -223,8 +256,8 @@ export default async function plugin(bb: BbPluginApi) {
     backend: {
       type: "select",
       label: "Backend",
-      description: "metal/cuda/cpu; auto lets ds4-server pick.",
-      options: ["auto", "metal", "cuda", "cpu"],
+      description: "metal/cuda/rocm/cpu; auto lets ds4-server pick.",
+      options: ["auto", "metal", "cuda", "rocm", "cpu"],
       default: "auto",
     },
     host: { type: "string", label: "Bind host", default: "127.0.0.1" },
@@ -268,21 +301,22 @@ export default async function plugin(bb: BbPluginApi) {
       type: "boolean",
       label: "Enable DSpark speculative decoding",
       description:
-        "On by default. Requires DeepSeek-V4-Flash-DSpark-support.gguf; disable only for a baseline or unsupported model.",
-      default: true,
+        "Off by default because DSpark is an opt-in Flash-only optimization. Enable it with the matching 0731 support GGUF.",
+      default: false,
     },
     dsparkSupportPath: {
       type: "string",
       label: "DSpark support GGUF path",
       description:
-        "Absolute or DS4-relative path. Empty auto-detects gguf/DeepSeek-V4-Flash-DSpark-support.gguf.",
+        "Absolute or DS4-relative path. Empty auto-detects the 0731 support GGUF.",
       default: "",
     },
     dsparkConfidence: {
       type: "string",
       label: "DSpark confidence threshold",
-      description: "0–1; the upstream default is 0.9.",
-      default: "0.9",
+      description:
+        "0–1; empty uses DwarfStar's backend-specific default (Metal 0.6, CUDA/ROCm 0.7).",
+      default: "",
     },
     restartOnCrash: {
       type: "boolean",
@@ -314,6 +348,88 @@ export default async function plugin(bb: BbPluginApi) {
   let latestSettings: StoredSettings = await settings.get();
   const demandThreads = new Set<string>();
   let lastDemandAt: number | null = null;
+
+  // --- model catalog + picker-driven model switching -----------------------
+  // The model picker lists every downloaded DwarfStar model. Selecting one
+  // stores a persisted override (the plugin cannot write its own settings)
+  // and restarts the server with that model's GGUF. An explicit modelPath
+  // setting always wins over the override.
+  const kv = bb.storage.kv;
+  const MODEL_OVERRIDE_KEY = "modelOverride";
+  let modelOverride: CanonicalDwarfStarModelId | null = null;
+  try {
+    const storedOverride = await kv.get<string>(MODEL_OVERRIDE_KEY);
+    modelOverride =
+      storedOverride &&
+      (CANONICAL_MODEL_ORDER as string[]).includes(storedOverride)
+        ? (storedOverride as CanonicalDwarfStarModelId)
+        : null;
+  } catch {
+    modelOverride = null;
+  }
+  let catalogCache: { at: number; entries: CatalogEntry[] } | null = null;
+
+  function catalogNow(): CatalogEntry[] {
+    const now = Date.now();
+    if (catalogCache && now - catalogCache.at < 10_000) {
+      return catalogCache.entries;
+    }
+    const entries = scanModelCatalog(detectDs4Dir(latestSettings.ds4Dir ?? ""));
+    catalogCache = { at: now, entries };
+    return entries;
+  }
+
+  function effectiveSettings(s: RunSettings): RunSettings {
+    if (!modelOverride || s.modelPath) return s;
+    const path = catalogPathFor(catalogNow(), modelOverride);
+    return path ? { ...s, modelPath: path } : s;
+  }
+
+  function primaryModelId(cfg: ResolvedRunConfig): string {
+    return (
+      resolvedModelId(cfg.modelPath) ??
+      preferredDwarfStarModel(lastHealth?.models ?? [], cfg.modelPath)
+    );
+  }
+
+  /** Infer the model family through symlinks (ds4flash.gguf may point anywhere). */
+  function resolvedModelId(path: string | null): CanonicalDwarfStarModelId | null {
+    if (!path) return null;
+    let real = path;
+    try {
+      real = realpathSync(path);
+    } catch {
+      // broken or missing link; fall back to the literal path
+    }
+    return inferDwarfStarModelId(real);
+  }
+
+  function advertisedIds(cfg: ResolvedRunConfig): string[] {
+    return advertisedModelIds(catalogNow(), cfg.modelPath);
+  }
+
+  let modelSwitch: Promise<void> = Promise.resolve();
+
+  function syncSelectedModel(selectedModel: string): Promise<void> {
+    const run = async () => {
+      const desired = canonicalModelId(selectedModel);
+      if (!desired) return;
+      const cfg = await currentConfig();
+      if (resolvedModelId(cfg.modelPath) === desired) return;
+      const path = catalogPathFor(catalogNow(), desired);
+      if (!path) return;
+      modelOverride = desired;
+      await kv.set(MODEL_OVERRIDE_KEY, desired);
+      bb.log.info(`switching model to ${desired} (${path})`);
+      await stopProc({ terminateExternal: true });
+      await ensureStarted();
+      void publishState();
+    };
+    const next = modelSwitch.then(run, run);
+    modelSwitch = next.catch(() => undefined);
+    return next;
+  }
+
   let startPromise: Promise<void> | null = null;
   let startPromiseEpoch: number | null = null;
   let activeStop: Promise<void> | null = null;
@@ -360,9 +476,9 @@ export default async function plugin(bb: BbPluginApi) {
       kvDiskSpaceMb: s.kvDiskSpaceMb ?? "8192",
       power: s.power ?? "",
       extraArgs: s.extraArgs ?? "",
-      dspark: s.dspark ?? true,
+      dspark: s.dspark ?? false,
       dsparkSupportPath: s.dsparkSupportPath ?? "",
-      dsparkConfidence: s.dsparkConfidence ?? "0.9",
+      dsparkConfidence: s.dsparkConfidence ?? "",
       restartOnCrash: s.restartOnCrash ?? true,
       configurePi: s.configurePi ?? true,
       configureOpencode: s.configureOpencode ?? false,
@@ -402,7 +518,7 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   async function currentConfig(): Promise<ResolvedRunConfig> {
-    return resolveConfig(await currentSettings());
+    return resolveConfig(effectiveSettings(await currentSettings()));
   }
 
   function endpointFromArgs(args: string[], fallback: ServerEndpoint): ServerEndpoint {
@@ -416,13 +532,15 @@ export default async function plugin(bb: BbPluginApi) {
     };
   }
 
-  function dsparkSupportError(cfg: ResolvedRunConfig): string | null {
+  function dsparkConfigError(cfg: ResolvedRunConfig): string | null {
     if (!cfg.dspark) return null;
+    const modelError = validateDsparkModelPath(cfg.modelPath);
+    if (modelError) return modelError;
     if (!cfg.dsparkSupportPath) {
       return "DSpark is enabled but its support GGUF path could not be resolved. Set dsparkSupportPath or disable dspark.";
     }
     if (!existsSync(cfg.dsparkSupportPath)) {
-      return `DSpark support GGUF not found: ${cfg.dsparkSupportPath}. Run ./download_model.sh dspark-support or set dsparkSupportPath; disable dspark only for a baseline.`;
+      return `DSpark support GGUF not found: ${cfg.dsparkSupportPath}. Run ./download_model.sh ds4f-dspark or set dsparkSupportPath; disable dspark for GLM/PRO or a baseline run.`;
     }
     return null;
   }
@@ -514,7 +632,7 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   function looksLikeDs4(health: z.infer<typeof healthSchema>): boolean {
-    return health.ok && health.models.some((model) => /deepseek-v4/i.test(model));
+    return health.ok && health.models.some(isDwarfStarModel);
   }
 
   function healthIsReady(health: z.infer<typeof healthSchema> | null): boolean {
@@ -704,7 +822,7 @@ export default async function plugin(bb: BbPluginApi) {
       await publishState();
       return;
     }
-    const dsparkError = dsparkSupportError(cfg);
+    const dsparkError = dsparkConfigError(cfg);
     if (dsparkError) {
       lastError = dsparkError;
       bb.log.error(lastError);
@@ -1235,6 +1353,8 @@ export default async function plugin(bb: BbPluginApi) {
         port: cfg.port,
         ctx: cfg.ctx,
         maxTokens: cfg.maxTokens,
+        modelId: primaryModelId(cfg),
+        modelIds: advertisedIds(cfg),
       });
       for (const r of results) {
         if (r.ok) bb.log.info(`agent config written: ${r.message}`);
@@ -1257,7 +1377,7 @@ export default async function plugin(bb: BbPluginApi) {
     terminalId: string;
     title: string;
   }> {
-    const dsparkError = dsparkSupportError(cfg);
+    const dsparkError = dsparkConfigError(cfg);
     if (dsparkError) throw new Error(dsparkError);
     const hosts = await bb.sdk.hosts.list();
     const host = hosts.find((h) => h.status === "connected") ?? hosts[0];
@@ -1290,7 +1410,7 @@ export default async function plugin(bb: BbPluginApi) {
         authorization: "Bearer dsv4-local",
       },
       body: JSON.stringify({
-        model: "deepseek-v4-flash",
+        model: preferredDwarfStarModel(lastHealth?.models ?? [], cfg.modelPath),
         messages,
         max_tokens: params.maxTokens,
         stream: false,
@@ -1401,6 +1521,8 @@ export default async function plugin(bb: BbPluginApi) {
               port: cfg.port,
               ctx: cfg.ctx,
               maxTokens: cfg.maxTokens,
+              modelId: primaryModelId(cfg),
+              modelIds: advertisedIds(cfg),
             });
             const out = results
               .map((r) => `${r.ok ? "ok   " : "FAIL "} ${r.id}: ${r.message}${r.backup ? ` (backup: ${r.backup})` : ""}`)
@@ -1485,7 +1607,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "ds4_complete",
     description:
-      "Run a one-shot text completion on the local DS4 (DwarfStar) DeepSeek V4 Flash server (OpenAI-compatible API). Fails if the server is not ready.",
+      "Run a one-shot text completion on the local DS4 (DwarfStar) OpenAI-compatible server. Fails if the server is not ready.",
     presentation: {
       label: {
         pending: "Querying local DS4 model",
@@ -1526,10 +1648,17 @@ export default async function plugin(bb: BbPluginApi) {
       acquireDemand(context.thread.id);
       // Resolve from the cached settings so proc.start() is reached before
       // the synchronous model-resolution callback returns to BB.
-      void ensureStarted(resolveConfig(toRunSettings(latestSettings))).catch((err) => {
+      void ensureStarted(
+        resolveConfig(effectiveSettings(toRunSettings(latestSettings))),
+      ).catch((err) => {
         lastError = `automatic ds4-server start failed: ${String(err)}`;
         bb.log.error(lastError);
         void publishState();
+      });
+      // Spin the server up with the selected model when the picker choice
+      // maps to a different downloaded DwarfStar model than the loaded one.
+      void syncSelectedModel(context.provider.model).catch((err) => {
+        bb.log.error(`model switch failed: ${String(err)}`);
       });
     }
     return {
@@ -1548,11 +1677,48 @@ export default async function plugin(bb: BbPluginApi) {
   bb.events.on("thread.archived", ({ thread }) => releaseAllDemandFor(thread.id));
   bb.events.on("thread.deleted", ({ thread }) => releaseAllDemandFor(thread.id));
 
+  // Refresh the managed agent provider configs once per load so every
+  // downloaded DwarfStar model shows up in the pickers without a manual
+  // `bb ds4 agents apply`.
+  void (async () => {
+    try {
+      const cfg = await currentConfig();
+      const s = await currentSettings();
+      const targets = (["pi", "opencode", "codex"] as AgentTargetId[]).filter(
+        (t) =>
+          t === "pi"
+            ? s.configurePi
+            : t === "opencode"
+              ? s.configureOpencode
+              : s.configureCodex,
+      );
+      if (!targets.length) return;
+      const results = applyTargets(targets, {
+        port: cfg.port,
+        ctx: cfg.ctx,
+        maxTokens: cfg.maxTokens,
+        modelId: primaryModelId(cfg),
+        modelIds: advertisedIds(cfg),
+      });
+      for (const r of results) {
+        if (r.ok) bb.log.info(`startup agent config: ${r.message}`);
+        else bb.log.error(`startup agent config failed: ${r.message}`);
+      }
+    } catch (err) {
+      bb.log.warn(`startup agent config refresh failed: ${String(err)}`);
+    }
+  })();
+
   // -------------------------------------------------------------------------
   // Settings change logging + dispose
   // -------------------------------------------------------------------------
   settings.onChange((next, prev) => {
     latestSettings = next;
+    // An explicit modelPath setting replaces any picker-driven override.
+    if ((next.modelPath ?? "") !== (prev.modelPath ?? "")) {
+      modelOverride = null;
+      void kv.delete(MODEL_OVERRIDE_KEY).catch(() => undefined);
+    }
     const n = next as Record<string, unknown>;
     const p = prev as Record<string, unknown>;
     const changed = Object.keys(n).filter(
@@ -1610,7 +1776,7 @@ function renderStatus(st: StatusDto): string {
       : []),
     `ctx:       ${st.config.ctx}`,
     `max out:   ${st.config.maxTokens}`,
-    `dspark:    ${st.config.dspark ? `on (confidence ${st.config.dsparkConfidence})` : "off"}`,
+    `dspark:    ${st.config.dspark ? `on (confidence ${st.config.dsparkConfidence ?? "upstream default"})` : "off"}`,
     `model:     ${st.config.modelPath ?? "(none)"}`,
     `dir:       ${st.config.ds4Dir ?? "(not found)"}`,
     `dspark GGUF: ${st.config.dsparkSupportPath ?? "(not found)"}`,
