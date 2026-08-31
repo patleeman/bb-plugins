@@ -4,7 +4,8 @@ Configure a local **DwarfStar** (`antirez/ds4`, a.k.a. ds4.c) inference
 server for BB. Once the setup is complete, choose its model in BB's model
 picker: the plugin starts `ds4-server` for matching turns and stops it after
 the configured idle grace period. Current DwarfStar builds support DeepSeek V4
-Flash/PRO and selected GLM 5.2 GGUFs.
+Flash/PRO, GLM 5.2, and GLM 5.3 Flash GGUFs. GLM 5.3 Flash vision is supported
+when its encoder sidecar is available.
 
 ## Staged preview
 
@@ -20,6 +21,9 @@ git clone https://github.com/antirez/ds4 ~/workingdir/ds4
 cd ~/workingdir/ds4 && make
 ./download_model.sh ds4f-q2      # or another target for your hardware
 ./download_model.sh ds4f-dspark  # optional, for Flash DSpark acceleration
+# For GLM 5.3 Flash vision:
+./download_model.sh glm53-q2
+./download_model.sh glm53-vision
 ```
 
 ## Install
@@ -33,8 +37,12 @@ bb plugin build      # optional: precompile the frontend
 ## What you get
 
 - **DwarfStar setup** (Settings → Plugins → DwarfStar): checkout/model paths,
-  BB model selector, optional provider filter, idle grace period, runtime
-  tuning, and optional external-agent configuration.
+  GLM 5.3 vision encoder path, BB model selector, optional provider filter, idle
+  grace period, runtime tuning, and optional external-agent configuration.
+- **GLM 5.3 Flash vision**: `visionPath=auto` finds the standard
+  `gguf/GLM-5.3-Flash-Vision-Encoder.gguf` sidecar when the selected model is
+  GLM 5.3 Flash. Set an absolute or DS4-relative path to override it, or clear
+  the setting to keep vision disabled.
 - **Demand-driven supervision**: the local server starts when BB resolves a
   matching model for a turn, stays warm while matching turns are active, and
   stops after the last one is idle. Plugin-owned processes also stop as part of
@@ -71,6 +79,10 @@ bb plugin build      # optional: precompile the frontend
     wire API)
   Existing files are merged (never clobbered) and a timestamped
   `.ds4bak-<ts>` copy is kept before each write.
+  When vision is enabled, the generated GLM 5.3 Pi and opencode models
+  advertise both text and image input. DwarfStar's OpenAI Chat, Responses, and
+  Anthropic endpoints accept inline PNG/JPEG image data; remote image URLs and
+  file paths are not accepted.
 
 ## Supervision behavior
 
@@ -111,7 +123,8 @@ connection error; retrying that turn uses the now-warm server.
 | --- | --- | --- |
 | `ds4Dir` | `""` | DS4 checkout dir. Empty = auto-detect (`DS4_DIR`, `~/workingdir/ds4`, `~/ds4`, …) |
 | `modelPath` | `""` | GGUF path; absolute or relative to `ds4Dir`. Empty = `ds4flash.gguf` |
-| `modelSelector` | `ds4/` | Exact model id or namespace from BB's model picker; matches DwarfStar's DeepSeek V4 and GLM 5.2 ids by default |
+| `visionPath` | `auto` | GLM 5.3 vision encoder path; auto-detects the standard sidecar, absolute/DS4-relative paths override it, and empty disables vision |
+| `modelSelector` | `ds4/` | Exact model id or namespace from BB's model picker; matches DwarfStar's DeepSeek V4, GLM 5.2, and GLM 5.3 Flash ids by default |
 | `providerId` | `""` | Optional exact BB provider id filter; empty matches the model across providers |
 | `idleTimeoutSeconds` | `300` | How long to keep the server warm after the last matching turn |
 | `backend` | `auto` | `metal` \| `cuda` \| `rocm` \| `cpu` |
@@ -136,13 +149,32 @@ connection error; retrying that turn uses the now-warm server.
   (`bb ds4 agent`) where you drive it directly — sessions save under
   `~/.ds4/kvcache` via `/save`.
 - DSpark is opt-in for `ds4-server` and `ds4-agent`, using
-  `--mtp <support.gguf> --dspark`. For the current Flash checkpoint, download
+  `--mtp-model <support.gguf> --dspark`. For the current Flash checkpoint, download
   it with `./download_model.sh ds4f-dspark`; the plugin refuses to start while
   the configured support file is missing or the model path is not recognizable
   as Flash, so it cannot silently run an incompatible DSpark combination.
   Leave `dspark=false` for GLM 5.2, DeepSeek V4 PRO, or a baseline run. Older
   checkouts using the pre-0731 support filename are still detected as a
   compatibility fallback.
+- GLM 5.3 Flash vision uses a separate encoder GGUF. The plugin passes
+  `--vision <encoder.gguf>` to both `ds4-server` and `ds4-agent`; the latter
+  exposes the native `view_image` tool. The native `ds4_complete` input accepts
+  up to 16 inline PNG/JPEG data-URI images, capped at 16 MiB per image and
+  32 MiB combined by the plugin, with prompt and system text capped at 8 MiB
+  and all completion content capped at 40 MiB. Serialized completion request
+  bodies are capped at 60 MiB, below the upstream 64 MiB HTTP limit. Download
+  the sidecar with
+  `./download_model.sh glm53-vision`; `visionPath=auto` then enables it for a
+  GLM 5.3 model in the same checkout. Run `bb ds4 agents apply` afterward to
+  refresh managed agent configs in an existing BB session.
+- The native `ds4_complete` tool also accepts an optional `imageUrls` array of
+  inline PNG/JPEG data URIs when the encoder is configured.
+- Vision startup requires a recognizable GLM 5.3 model path (a symlink may
+  carry the recognizable name) and a GPU backend; CPU vision is rejected.
+  While vision is enabled, model/backend/vision overrides are rejected in
+  `extraArgs`, and `--chdir` is rejected so process recovery remains cwd-safe.
+  Vision also rejects explicit multi-GPU placement flags because the current
+  upstream GLM 5.3 path does not support multi-GPU vision startup.
 - The plugin runs on the machine that runs the BB server (full-trust plugin
   code); it spawns the process locally and writes agent configs on the same
   host.

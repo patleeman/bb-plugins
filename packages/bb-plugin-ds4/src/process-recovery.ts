@@ -6,6 +6,7 @@
 import {
   existsSync,
   mkdirSync,
+  realpathSync,
   readFileSync,
   renameSync,
   unlinkSync,
@@ -13,7 +14,19 @@ import {
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+
+const PROCESS_PATH_FLAGS = new Set([
+  "-m",
+  "--model",
+  "--vision",
+  "--mtp",
+  "--mtp-model",
+  "--kv-disk-dir",
+  "--dir-steering-file",
+  "--trace",
+  "--chdir",
+]);
 
 export interface Ds4ProcessRecord {
   pid: number;
@@ -126,6 +139,31 @@ export function processCommand(pid: number): string | null {
   }
 }
 
+/** Return the operating-system working directory for a process when available. */
+export function processWorkingDirectory(pid: number): string | null {
+  try {
+    const output = execFileSync(
+      "lsof",
+      ["-a", "-p", String(pid), "-d", "cwd", "-Fn"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    );
+    const match = output.match(/^n(.+)$/m);
+    if (match?.[1]) return match[1];
+  } catch {
+    // Fall through to pwdx on Linux and other systems that provide it.
+  }
+  try {
+    const output = execFileSync("pwdx", [String(pid)], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const match = output.match(/^\d+:\s+(.+)$/);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Return the operating-system start signature for a PID when available. */
 export function processStartTime(pid: number): string | null {
   try {
@@ -163,15 +201,91 @@ export function processMatchesCommand(
   pid: number,
   bin: string,
   args: string[],
+  expectedCwd: string | null = null,
 ): boolean {
   const command = processCommand(pid);
   if (!command) return false;
   const tokens = tokenizeProcessCommand(command);
   if (tokens.length !== args.length + 1) return false;
   const executable = tokens[0];
-  const expectedExecutable = basename(bin);
-  if (executable !== bin && executable !== expectedExecutable) return false;
-  return args.every((arg, index) => tokens[index + 1] === arg);
+  const exactArgs = args.every((arg, index) => tokens[index + 1] === arg);
+  const hasRelativePathArg = args.some(
+    (arg, index) => isProcessPathArg(args, index) && !isAbsolute(arg),
+  );
+  if (executable === bin && exactArgs && (!expectedCwd || !hasRelativePathArg)) {
+    return true;
+  }
+
+  const processCwd = processWorkingDirectory(pid);
+  if (!processExecutableValuesMatch(executable, bin, processCwd, expectedCwd)) return false;
+  return args.every((arg, index) =>
+    processPathValuesMatch(
+      tokens[index + 1],
+      arg,
+      processCwd,
+      expectedCwd,
+      isProcessPathArg(args, index),
+    ),
+  );
+}
+
+function processExecutableValuesMatch(
+  actual: string,
+  expected: string,
+  actualCwd: string | null,
+  expectedCwd: string | null,
+): boolean {
+  if (actual === expected) return true;
+  const actualPath = canonicalProcessPath(actual, actualCwd);
+  const expectedPath = canonicalProcessPath(expected, expectedCwd);
+  return actualPath !== null && expectedPath !== null && actualPath === expectedPath;
+}
+
+function processPathValuesMatch(
+  actual: string,
+  expected: string,
+  actualCwd: string | null,
+  expectedCwd: string | null,
+  forcePath = false,
+): boolean {
+  if (actual === expected && !forcePath) return true;
+  if (!forcePath && !looksLikeProcessPath(actual) && !looksLikeProcessPath(expected)) {
+    return false;
+  }
+  const actualPath = canonicalProcessPath(actual, actualCwd);
+  const expectedPath = canonicalProcessPath(expected, expectedCwd);
+  return actualPath !== null && expectedPath !== null && actualPath === expectedPath;
+}
+
+function isProcessPathArg(args: readonly string[], index: number): boolean {
+  return index > 0 && PROCESS_PATH_FLAGS.has(args[index - 1]);
+}
+
+function looksLikeProcessPath(value: string): boolean {
+  return (
+    isAbsolute(value) ||
+    value.startsWith("./") ||
+    value.startsWith("../") ||
+    value.includes("/") ||
+    /\.gguf(?:\.part)?$/i.test(value)
+  );
+}
+
+function canonicalProcessPath(value: string, cwd: string | null): string | null {
+  const path = isAbsolute(value) ? value : cwd ? resolve(cwd, value) : null;
+  if (!path) return null;
+  try {
+    return realpathSync(path);
+  } catch {
+    if (!isAbsolute(value) && cwd) {
+      try {
+        return resolve(realpathSync(cwd), value);
+      } catch {
+        // Keep the resolved path when neither the target nor cwd exists.
+      }
+    }
+    return path;
+  }
 }
 
 /** Parse the argv-shaped output returned by `ps -o command=` without a shell. */

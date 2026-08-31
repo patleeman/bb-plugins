@@ -73,6 +73,9 @@ export class Ds4Process {
   get cmdline(): string[] | null {
     return this._cmdline;
   }
+  get cwd(): string | null {
+    return this._cwd;
+  }
   get exitInfo(): ExitInfo | null {
     return this._exitInfo;
   }

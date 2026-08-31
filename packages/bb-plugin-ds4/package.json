@@ -16,7 +16,7 @@
     "app": "./app.tsx"
   },
   "scripts": {
-    "test": "node --test src/model-selection.test.ts src/lifecycle-notifications.test.ts src/process-recovery.test.ts src/run-config.test.ts src/agent-configs.test.ts",
+    "test": "node --test src/model-selection.test.ts src/model-catalog.test.ts src/lifecycle-notifications.test.ts src/process-recovery.test.ts src/run-config.test.ts src/agent-configs.test.ts src/request-payload.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

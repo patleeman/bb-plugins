@@ -45,6 +45,11 @@ export function isDwarfStarModel(model: string): boolean {
   return DWARFSTAR_MODEL_IDS.has(model.trim().toLowerCase());
 }
 
+/** Return true when the model family supports DwarfStar's vision sidecar. */
+export function isDwarfStarVisionModel(model: string): boolean {
+  return canonicalModelId(model) === "glm-5.3-flash";
+}
+
 /** Infer the canonical engine family from a supported model filename. */
 export function inferDwarfStarModelId(
   modelPath: string | null,

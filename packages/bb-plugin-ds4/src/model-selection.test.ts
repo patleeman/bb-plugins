@@ -4,6 +4,7 @@ import {
   canonicalModelId,
   inferDwarfStarModelId,
   isDwarfStarModel,
+  isDwarfStarVisionModel,
   matchesModelSelection,
   parseIdleTimeoutMs,
 } from "./model-selection.ts";
@@ -16,6 +17,13 @@ test("recognizes current DwarfStar model ids", () => {
   assert.equal(isDwarfStarModel("glm-5.3-flash"), true);
   assert.equal(isDwarfStarModel("zai/glm-5.3-flash-reasoner"), true);
   assert.equal(isDwarfStarModel("llama-3.3"), false);
+});
+
+test("identifies the GLM 5.3 model family with vision support", () => {
+  assert.equal(isDwarfStarVisionModel("glm-5.3-flash"), true);
+  assert.equal(isDwarfStarVisionModel("zai/glm-5.3-flash-reasoner"), true);
+  assert.equal(isDwarfStarVisionModel("glm-5.2"), false);
+  assert.equal(isDwarfStarVisionModel("deepseek-v4-flash"), false);
 });
 
 test("infers the canonical model from current GGUF filenames", () => {

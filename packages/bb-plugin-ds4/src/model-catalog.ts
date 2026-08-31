@@ -4,6 +4,7 @@
 
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { DEFAULT_GLM53_VISION_FILE } from "./run-config.ts";
 import {
   CANONICAL_MODEL_ORDER,
   inferDwarfStarModelId,
@@ -36,7 +37,9 @@ export function scanModelCatalog(ds4Dir: string | null): CatalogEntry[] {
       continue;
     }
     for (const name of names) {
-      if (!name.toLowerCase().endsWith(".gguf")) continue;
+      const normalizedName = name.toLowerCase();
+      if (!normalizedName.endsWith(".gguf")) continue;
+      if (normalizedName === DEFAULT_GLM53_VISION_FILE.toLowerCase()) continue;
       if (name.endsWith(".part")) continue;
       const full = join(dir, name);
       let size = 0;
@@ -78,9 +81,10 @@ export function catalogPathFor(
 export function advertisedModelIds(
   catalog: CatalogEntry[],
   configuredModelPath: string | null,
+  configuredModelId: CanonicalDwarfStarModelId | null = null,
 ): string[] {
   const ids = catalog.map((e) => e.id);
-  const configured = inferDwarfStarModelId(configuredModelPath);
+  const configured = configuredModelId ?? inferDwarfStarModelId(configuredModelPath);
   if (configured && !ids.includes(configured)) ids.push(configured);
   return ids.length ? ids : configured ? [configured] : ["deepseek-v4-flash"];
 }

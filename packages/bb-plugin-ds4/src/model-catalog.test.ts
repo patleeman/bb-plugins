@@ -8,6 +8,7 @@ import {
   catalogPathFor,
   scanModelCatalog,
 } from "./model-catalog.ts";
+import { DEFAULT_GLM53_VISION_FILE } from "./run-config.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "ds4-catalog-"));
 after(() => rmSync(dir, { recursive: true, force: true }));
@@ -16,6 +17,7 @@ after(() => rmSync(dir, { recursive: true, force: true }));
 // larger duplicate of the Flash entry to exercise the largest-wins rule.
 mkdirSync(join(dir, "gguf"));
 writeFileSync(join(dir, "gguf", "GLM-5.3-Flash-Q2.gguf"), "0123456789");
+writeFileSync(join(dir, "gguf", DEFAULT_GLM53_VISION_FILE), "0".repeat(64));
 writeFileSync(join(dir, "gguf", "DeepSeek-V4-Flash-small.gguf"), "01234567");
 writeFileSync(join(dir, "gguf", "download.gguf.part"), "partial");
 writeFileSync(join(dir, "gguf", "unknown-model.gguf"), "00000000");
@@ -62,4 +64,8 @@ test("advertised ids list every downloaded model; unknown custom names add nothi
 test("advertised ids fall back to the configured or default model", () => {
   assert.deepEqual(advertisedModelIds([], "/tmp/ds4/GLM-5.2.gguf"), ["glm-5.2"]);
   assert.deepEqual(advertisedModelIds([], "/tmp/ds4/custom.gguf"), ["deepseek-v4-flash"]);
+  assert.deepEqual(
+    advertisedModelIds([], "/tmp/ds4/GLM-5.3-Flash.gguf", "glm-5.3-flash"),
+    ["glm-5.3-flash"],
+  );
 });

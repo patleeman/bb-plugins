@@ -6,6 +6,7 @@
 import { existsSync, mkdirSync, readFileSync, copyFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { isDwarfStarVisionModel } from "./model-selection.ts";
 
 export type AgentTargetId = "pi" | "opencode" | "codex";
 
@@ -38,6 +39,8 @@ export interface AgentConfigOpts {
    * is written (previous single-model behavior).
    */
   modelIds?: string[];
+  /** Advertise image input when a GLM 5.3 vision encoder is configured. */
+  vision?: boolean;
 }
 
 const home = homedir();
@@ -150,7 +153,22 @@ export function piCompatibilityForModel(modelId: string) {
   };
 }
 
-function piModelEntry(modelId: string, port: number, ctx: number, maxTokens: number) {
+export function inputModalitiesForModel(
+  modelId: string,
+  visionEnabled: boolean,
+): ("text" | "image")[] {
+  return visionEnabled && isDwarfStarVisionModel(modelId)
+    ? ["text", "image"]
+    : ["text"];
+}
+
+function piModelEntry(
+  modelId: string,
+  port: number,
+  ctx: number,
+  maxTokens: number,
+  visionEnabled: boolean,
+) {
   return {
     id: modelId,
     name: `${modelLabel(modelId)} (ds4.c local)`,
@@ -158,7 +176,7 @@ function piModelEntry(modelId: string, port: number, ctx: number, maxTokens: num
     provider: "ds4",
     baseUrl: `http://127.0.0.1:${port}/v1`,
     reasoning: true,
-    input: ["text"],
+    input: inputModalitiesForModel(modelId, visionEnabled),
     contextWindow: ctx,
     maxTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -189,7 +207,9 @@ function writePi(opts: AgentConfigOpts): ApplyResult {
     api: "openai-completions",
     apiKey: "dsv4-local",
     compat: piCompatibilityForModel(opts.modelId),
-    models: ids.map((id) => piModelEntry(id, opts.port, opts.ctx, opts.maxTokens)),
+    models: ids.map((id) =>
+      piModelEntry(id, opts.port, opts.ctx, opts.maxTokens, opts.vision === true),
+    ),
   };
   data["providers"] = providers;
   const backup = writeWithBackup(path, JSON.stringify(data, null, 2) + "\n");
@@ -257,6 +277,9 @@ function writeOpencode(opts: AgentConfigOpts): ApplyResult {
     models[id] = {
       name: `${modelLabel(id)} (ds4.c local)`,
       limit: { context: opts.ctx, output: opts.maxTokens },
+      ...(opts.vision && isDwarfStarVisionModel(id)
+        ? { modalities: { input: ["text", "image"], output: ["text"] } }
+        : {}),
     };
   }
   providers["ds4"] = {

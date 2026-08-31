@@ -3,7 +3,7 @@
 // provider configs (pi / opencode / Codex CLI), and expose the local model to
 // BB agents through native tools and a `bb ds4` CLI.
 
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
@@ -20,13 +20,19 @@ import {
   parseExistingDs4Pid,
   processMatchesCommand,
   processStartTime,
+  processWorkingDirectory,
   readProcessRecord,
   writeProcessRecord,
 } from "./src/process-recovery";
 import {
   resolveConfig,
   detectDs4Dir,
+  dwarfStarVisionBackendError,
+  dwarfStarVisionExtraArgsError,
   agentCommand,
+  dwarfStarVisionArgsError,
+  isDwarfStarVisionProcessReady,
+  resolvedDwarfStarModelId,
   shellQuote,
   validateDsparkModelPath,
   type BackendChoice,
@@ -58,6 +64,13 @@ import {
   parseIdleTimeoutMs,
   type CanonicalDwarfStarModelId,
 } from "./src/model-selection";
+import {
+  buildDwarfStarChatRequest,
+  completionRequestBodySizeError,
+  completionPayloadSizeError,
+  completeInputSchema,
+  serializeDwarfStarChatRequest,
+} from "./src/request-payload";
 
 // ---------------------------------------------------------------------------
 // Schemas / contract
@@ -76,6 +89,7 @@ const configSchema = z.object({
   bin: z.string().nullable(),
   args: z.array(z.string()),
   modelPath: z.string().nullable(),
+  visionPath: z.string().nullable(),
   host: z.string(),
   port: z.number(),
   ctx: z.number(),
@@ -172,14 +186,7 @@ export const rpcContract = defineRpcContract({
     output: z.object({ terminalId: z.string(), title: z.string() }),
   },
   complete: {
-    input: z
-      .object({
-        prompt: z.string().min(1),
-        system: z.string().optional(),
-        maxTokens: z.number().int().min(1).max(16384).default(1024),
-        temperature: z.number().min(0).max(2).optional(),
-      })
-      .strict(),
+    input: completeInputSchema,
     output: z.object({ text: z.string() }),
   },
 });
@@ -199,6 +206,7 @@ const CANONICAL_DWARFSTAR_MODEL_IDS = [
   "deepseek-v4-flash",
   "deepseek-v4-pro",
   "glm-5.2",
+  "glm-5.3-flash",
 ] as const;
 
 function preferredDwarfStarModel(
@@ -231,6 +239,13 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Model GGUF path",
       description: "Absolute path, or relative to the DS4 directory. Empty = ds4flash.gguf.",
       default: "",
+    },
+    visionPath: {
+      type: "string",
+      label: "GLM 5.3 vision encoder path",
+      description:
+        "Use auto to detect gguf/GLM-5.3-Flash-Vision-Encoder.gguf for a GLM 5.3 Flash model; set an absolute or DS4-relative path to override, or leave empty to disable vision.",
+      default: "auto",
     },
     modelSelector: {
       type: "string",
@@ -347,6 +362,7 @@ export default async function plugin(bb: BbPluginApi) {
   type StoredSettings = Awaited<ReturnType<typeof settings.get>>;
   let latestSettings: StoredSettings = await settings.get();
   const demandThreads = new Set<string>();
+  let inFlightCompletions = 0;
   let lastDemandAt: number | null = null;
 
   // --- model catalog + picker-driven model switching -----------------------
@@ -387,25 +403,45 @@ export default async function plugin(bb: BbPluginApi) {
 
   function primaryModelId(cfg: ResolvedRunConfig): string {
     return (
-      resolvedModelId(cfg.modelPath) ??
+      resolvedDwarfStarModelId(cfg.modelPath) ??
       preferredDwarfStarModel(lastHealth?.models ?? [], cfg.modelPath)
     );
   }
 
-  /** Infer the model family through symlinks (ds4flash.gguf may point anywhere). */
-  function resolvedModelId(path: string | null): CanonicalDwarfStarModelId | null {
-    if (!path) return null;
-    let real = path;
-    try {
-      real = realpathSync(path);
-    } catch {
-      // broken or missing link; fall back to the literal path
-    }
-    return inferDwarfStarModelId(real);
+  function advertisedIds(cfg: ResolvedRunConfig): string[] {
+    return advertisedModelIds(
+      catalogNow(),
+      cfg.modelPath,
+      resolvedDwarfStarModelId(cfg.modelPath),
+    );
   }
 
-  function advertisedIds(cfg: ResolvedRunConfig): string[] {
-    return advertisedModelIds(catalogNow(), cfg.modelPath);
+  async function refreshConfiguredAgentConfigs(
+    cfg: ResolvedRunConfig,
+    logPrefix = "agent config",
+  ): Promise<void> {
+    const s = await currentSettings();
+    const targets = (["pi", "opencode", "codex"] as AgentTargetId[]).filter(
+      (t) =>
+        t === "pi"
+          ? s.configurePi
+          : t === "opencode"
+            ? s.configureOpencode
+            : s.configureCodex,
+    );
+    if (!targets.length) return;
+    const results = applyTargets(targets, {
+      port: cfg.port,
+      ctx: cfg.ctx,
+      maxTokens: cfg.maxTokens,
+      modelId: primaryModelId(cfg),
+      modelIds: advertisedIds(cfg),
+      vision: visionEnabled(cfg),
+    });
+    for (const r of results) {
+      if (r.ok) bb.log.info(`${logPrefix}: ${r.message}`);
+      else bb.log.error(`${logPrefix} failed: ${r.message}`);
+    }
   }
 
   let modelSwitch: Promise<void> = Promise.resolve();
@@ -415,7 +451,7 @@ export default async function plugin(bb: BbPluginApi) {
       const desired = canonicalModelId(selectedModel);
       if (!desired) return;
       const cfg = await currentConfig();
-      if (resolvedModelId(cfg.modelPath) === desired) return;
+      if (resolvedDwarfStarModelId(cfg.modelPath) === desired) return;
       const path = catalogPathFor(catalogNow(), desired);
       if (!path) return;
       modelOverride = desired;
@@ -423,6 +459,10 @@ export default async function plugin(bb: BbPluginApi) {
       bb.log.info(`switching model to ${desired} (${path})`);
       await stopProc({ terminateExternal: true });
       await ensureStarted();
+      await refreshConfiguredAgentConfigs(
+        await currentConfig(),
+        "model-switch agent config",
+      );
       void publishState();
     };
     const next = modelSwitch.then(run, run);
@@ -467,6 +507,7 @@ export default async function plugin(bb: BbPluginApi) {
     return {
       ds4Dir: s.ds4Dir ?? "",
       modelPath: s.modelPath ?? "",
+      visionPath: s.visionPath ?? "auto",
       backend: (s.backend ?? "auto") as BackendChoice,
       host: s.host ?? "127.0.0.1",
       port: s.port ?? "8000",
@@ -517,6 +558,10 @@ export default async function plugin(bb: BbPluginApi) {
     lastDemandAt = proc.isRunning ? Date.now() : null;
   }
 
+  function hasActiveDemand(): boolean {
+    return demandThreads.size > 0 || inFlightCompletions > 0;
+  }
+
   async function currentConfig(): Promise<ResolvedRunConfig> {
     return resolveConfig(effectiveSettings(await currentSettings()));
   }
@@ -543,6 +588,33 @@ export default async function plugin(bb: BbPluginApi) {
       return `DSpark support GGUF not found: ${cfg.dsparkSupportPath}. Run ./download_model.sh ds4f-dspark or set dsparkSupportPath; disable dspark for GLM/PRO or a baseline run.`;
     }
     return null;
+  }
+
+  function visionConfigError(cfg: ResolvedRunConfig): string | null {
+    const extraArgsError = dwarfStarVisionExtraArgsError(cfg.extraArgs, cfg.visionPath);
+    if (extraArgsError) return extraArgsError;
+    const argsError = dwarfStarVisionArgsError(cfg.args, cfg.visionPath);
+    if (argsError) return argsError;
+    if (!cfg.visionPath) return null;
+    const backendError = dwarfStarVisionBackendError(cfg.backend, cfg.visionPath);
+    if (backendError) return backendError;
+    if (resolvedDwarfStarModelId(cfg.modelPath) !== "glm-5.3-flash") {
+      return `Vision is supported only with a GLM 5.3 Flash model. The configured model path is ${cfg.modelPath ?? "not set"}; disable vision or select a GLM-5.3-Flash GGUF.`;
+    }
+    if (!existsSync(cfg.visionPath)) {
+      return `GLM 5.3 vision encoder not found: ${cfg.visionPath}. Run ./download_model.sh glm53-vision or set visionPath to the downloaded encoder.`;
+    }
+    return null;
+  }
+
+  function visionEnabled(cfg: ResolvedRunConfig): boolean {
+    if (!cfg.visionPath || visionConfigError(cfg)) return false;
+    return isDwarfStarVisionProcessReady(
+      proc.isExternal,
+      proc.cmdline,
+      cfg.visionPath,
+      proc.cwd,
+    );
   }
 
   function deriveDisplay(state: ProcessState, cfg: ResolvedRunConfig): string {
@@ -675,13 +747,13 @@ export default async function plugin(bb: BbPluginApi) {
       record &&
         recordStartMatches &&
         isProcessAlive(record.pid) &&
-        processMatchesCommand(record.pid, record.bin, record.args),
+        processMatchesCommand(record.pid, record.bin, record.args, record.cwd),
     );
     const recordMatches = Boolean(
       recordIdentityMatches &&
         record?.fingerprint === cfg.fingerprint &&
         record.bin === cfg.bin &&
-        processMatchesCommand(record.pid, cfg.bin, cfg.args) &&
+        processMatchesCommand(record.pid, cfg.bin, cfg.args, record.cwd ?? cfg.ds4Dir) &&
         (record.ownership !== "external" || options.allowExternal !== false),
     );
     const canUseRecordedExternal =
@@ -711,7 +783,8 @@ export default async function plugin(bb: BbPluginApi) {
       pid =
         candidates.find(
           (candidate) =>
-            isProcessAlive(candidate) && processMatchesCommand(candidate, commandBin!, commandArgs),
+            isProcessAlive(candidate) &&
+            processMatchesCommand(candidate, commandBin!, commandArgs, cfg.ds4Dir),
         ) ?? null;
       if (!pid) {
         return false;
@@ -720,6 +793,9 @@ export default async function plugin(bb: BbPluginApi) {
 
     const processStartedAt =
       (useRecorded ? record?.processStartedAt : undefined) ?? processStartTime(pid);
+    const commandCwd = useRecorded
+      ? record?.cwd ?? cfg.ds4Dir ?? homedir()
+      : cfg.ds4Dir ?? homedir();
     const health = await requestHealth(cfg, endpoint);
     // An HTTP 200 with no models is a valid loading state for a recovered
     // server. Only reject a live candidate when it has reported a different
@@ -732,9 +808,10 @@ export default async function plugin(bb: BbPluginApi) {
     }
     // Re-check identity after the health request so a recycled PID cannot be
     // adopted after the original process disappeared during the request.
-    if (!processMatchesCommand(pid, commandBin!, commandArgs)) {
+    if (!processMatchesCommand(pid, commandBin!, commandArgs, commandCwd)) {
       return false;
     }
+    const adoptedCwd = processWorkingDirectory(pid) ?? commandCwd;
     const observedStart = processStartTime(pid);
     if (processStartedAt && observedStart && processStartedAt !== observedStart) return false;
     if (options.isCurrent && !options.isCurrent()) return false;
@@ -742,7 +819,7 @@ export default async function plugin(bb: BbPluginApi) {
     proc.adopt(pid, {
       ownership,
       cmdline: [commandBin!, ...commandArgs],
-      cwd: useRecorded ? record?.cwd ?? cfg.ds4Dir ?? homedir() : cfg.ds4Dir ?? homedir(),
+      cwd: adoptedCwd,
       startedAt: useRecorded ? record?.startedAt : undefined,
     });
     if (!proc.isAdopted || proc.pid !== pid) return false;
@@ -760,7 +837,7 @@ export default async function plugin(bb: BbPluginApi) {
       fingerprint: useRecorded ? record?.fingerprint ?? cfg.fingerprint : cfg.fingerprint,
       bin: commandBin!,
       args: commandArgs,
-      cwd: useRecorded ? record?.cwd ?? cfg.ds4Dir ?? homedir() : cfg.ds4Dir ?? homedir(),
+      cwd: adoptedCwd,
       startedAt: useRecorded ? record?.startedAt ?? Date.now() : Date.now(),
       host: endpoint.host,
       port: endpoint.port,
@@ -771,6 +848,19 @@ export default async function plugin(bb: BbPluginApi) {
       bb.log.info(`recovered ds4-server orphan (pid ${pid})`);
     } else {
       bb.log.warn(`using existing ds4-server (pid ${pid}); it is not owned by this plugin`);
+    }
+    const externalSettingsChanged =
+      ownership === "external" &&
+      useRecorded &&
+      record?.fingerprint !== cfg.fingerprint;
+    if (externalSettingsChanged) {
+      bb.log.info("leaving agent configs unchanged for an external server using previous settings");
+    } else {
+      try {
+        await refreshConfiguredAgentConfigs(cfg, "recovered agent config");
+      } catch (err) {
+        bb.log.warn(`recovered agent config refresh failed: ${String(err)}`);
+      }
     }
     await publishState();
     return true;
@@ -790,7 +880,7 @@ export default async function plugin(bb: BbPluginApi) {
     if (record.processStartedAt && observedStart && record.processStartedAt !== observedStart) {
       return false;
     }
-    if (!processMatchesCommand(record.pid, record.bin, record.args)) return false;
+    if (!processMatchesCommand(record.pid, record.bin, record.args, record.cwd)) return false;
     proc.adopt(record.pid, {
       ownership: "managed",
       cmdline: [record.bin, ...record.args],
@@ -818,6 +908,13 @@ export default async function plugin(bb: BbPluginApi) {
     }
     if (cfg.modelPath && !existsSync(cfg.modelPath)) {
       lastError = `Model not found: ${cfg.modelPath}. Download it first (./download_model.sh) or set modelPath.`;
+      bb.log.error(lastError);
+      await publishState();
+      return;
+    }
+    const visionError = visionConfigError(cfg);
+    if (visionError) {
+      lastError = visionError;
       bb.log.error(lastError);
       await publishState();
       return;
@@ -881,6 +978,11 @@ export default async function plugin(bb: BbPluginApi) {
         ownership: "managed",
         processStartedAt: activeProcessStartedAt ?? undefined,
       });
+    }
+    try {
+      await refreshConfiguredAgentConfigs(cfg, "agent config");
+    } catch (err) {
+      bb.log.warn(`agent config refresh failed: ${String(err)}`);
     }
     await publishState();
   }
@@ -951,7 +1053,7 @@ export default async function plugin(bb: BbPluginApi) {
       bb.log.info("leaving the existing external ds4-server running");
       return false;
     }
-    if (options.onlyIfNoDemand && demandThreads.size > 0) {
+    if (options.onlyIfNoDemand && hasActiveDemand()) {
       return false;
     }
     if (stopWaitPromise) {
@@ -973,6 +1075,7 @@ export default async function plugin(bb: BbPluginApi) {
     const stoppedPid = proc.pid;
     let expectedAdoptedCommand: string[] | null = null;
     let expectedAdoptedProcessStartedAt: string | null = null;
+    let expectedAdoptedCwd: string | null = null;
     if (proc.isAdopted && stoppedPid) {
       let cfg: ResolvedRunConfig;
       try {
@@ -984,13 +1087,15 @@ export default async function plugin(bb: BbPluginApi) {
       const expectedCommand = proc.cmdline;
       const expectedBin = expectedCommand?.[0] ?? cfg.bin;
       const expectedArgs = expectedCommand?.slice(1) ?? cfg.args;
+      const expectedCwd = proc.cwd ?? cfg.ds4Dir ?? homedir();
+      expectedAdoptedCwd = expectedCwd;
       expectedAdoptedProcessStartedAt =
         activeProcessStartedAt ?? processStartTime(stoppedPid);
       const observedStart = processStartTime(stoppedPid);
       if (
         !expectedBin ||
         !isProcessAlive(stoppedPid) ||
-        !processMatchesCommand(stoppedPid, expectedBin, expectedArgs) ||
+        !processMatchesCommand(stoppedPid, expectedBin, expectedArgs, expectedCwd) ||
         Boolean(
           expectedAdoptedProcessStartedAt &&
             observedStart &&
@@ -1008,10 +1113,17 @@ export default async function plugin(bb: BbPluginApi) {
         return false;
       }
       expectedAdoptedCommand = [expectedBin, ...expectedArgs];
-      if (options.onlyIfNoDemand && demandThreads.size > 0) {
+      if (options.onlyIfNoDemand && hasActiveDemand()) {
         finishStopWait();
         return false;
       }
+    }
+    // Recheck after the adopted-process identity work above and immediately
+    // before stopping. A completion can begin while that asynchronous check
+    // is in progress, so the first guard alone is not sufficient.
+    if (options.onlyIfNoDemand && hasActiveDemand()) {
+      finishStopWait();
+      return false;
     }
     if (activeStop) {
       await activeStop;
@@ -1025,6 +1137,7 @@ export default async function plugin(bb: BbPluginApi) {
               pid,
               expectedAdoptedCommand![0],
               expectedAdoptedCommand!.slice(1),
+              expectedAdoptedCwd,
             ) &&
             (() => {
               if (!expectedAdoptedProcessStartedAt) return true;
@@ -1115,7 +1228,7 @@ export default async function plugin(bb: BbPluginApi) {
         while (!signal.aborted) {
           const cfg = await currentConfig();
           const s = await currentSettings();
-          const hasDemand = demandThreads.size > 0;
+          const hasDemand = hasActiveDemand();
 
           // A managed orphan may be all that remains after an abrupt host
           // daemon disconnect. Reclaim it only when there is no active demand,
@@ -1129,7 +1242,7 @@ export default async function plugin(bb: BbPluginApi) {
                 isCurrent: () => !disposed && !shuttingDown && !signal.aborted,
               })) ||
               reclaimRecordedProcess();
-            if (recovered && demandThreads.size === 0) {
+            if (recovered && !hasActiveDemand()) {
               const stopped = await stopProc({ onlyIfNoDemand: true });
               if (stopped) {
                 lastDemandAt = null;
@@ -1200,7 +1313,7 @@ export default async function plugin(bb: BbPluginApi) {
               bb.log.info("stopping ds4-server after the configured idle period");
               stopped = await stopProc({ onlyIfNoDemand: true });
             }
-            if (stopped || (!proc.isRunning && demandThreads.size === 0)) {
+            if (stopped || (!proc.isRunning && !hasActiveDemand())) {
               lastDemandAt = null;
             }
             if (stopped && !proc.isExternal) {
@@ -1224,6 +1337,7 @@ export default async function plugin(bb: BbPluginApi) {
                   adoptedPid,
                   adoptedCommand[0],
                   adoptedCommand.slice(1),
+                  proc.cwd,
                 ),
             );
             if (!identityStillMatches) {
@@ -1355,6 +1469,7 @@ export default async function plugin(bb: BbPluginApi) {
         maxTokens: cfg.maxTokens,
         modelId: primaryModelId(cfg),
         modelIds: advertisedIds(cfg),
+        vision: visionEnabled(cfg),
       });
       for (const r of results) {
         if (r.ok) bb.log.info(`agent config written: ${r.message}`);
@@ -1377,6 +1492,8 @@ export default async function plugin(bb: BbPluginApi) {
     terminalId: string;
     title: string;
   }> {
+    const visionError = visionConfigError(cfg);
+    if (visionError) throw new Error(visionError);
     const dsparkError = dsparkConfigError(cfg);
     if (dsparkError) throw new Error(dsparkError);
     const hosts = await bb.sdk.hosts.list();
@@ -1395,27 +1512,60 @@ export default async function plugin(bb: BbPluginApi) {
     return { terminalId: term.id, title: term.title ?? "ds4-agent" };
   }
 
-  async function ds4Complete(
+  async function performDs4Complete(
     cfg: ResolvedRunConfig,
-    params: { prompt: string; system?: string; maxTokens: number; temperature?: number },
+    params: {
+      prompt: string;
+      system?: string;
+      maxTokens: number;
+      temperature?: number;
+      imageUrls?: string[];
+    },
   ): Promise<string> {
-    const url = `http://${cfg.host}:${cfg.port}/v1/chat/completions`;
-    const messages: { role: string; content: string }[] = [];
-    if (params.system) messages.push({ role: "system", content: params.system });
-    messages.push({ role: "user", content: params.prompt });
+    if (proc.isExternal && !externalServerMatchesCurrentConfig(cfg)) {
+      throw new Error(
+        "The adopted external ds4-server is using previous settings. Run `bb ds4 stop` and start it again to apply the current configuration.",
+      );
+    }
+    const endpoint = proc.isAdopted && activeEndpoint
+      ? activeEndpoint
+      : { host: cfg.host, port: cfg.port };
+    const url = `http://${endpoint.host}:${endpoint.port}/v1/chat/completions`;
+    const imageUrls = params.imageUrls ?? [];
+    const contentSizeError = completionPayloadSizeError(
+      params.prompt,
+      params.system,
+      imageUrls,
+    );
+    if (contentSizeError) throw new Error(contentSizeError);
+    if (imageUrls.length && !visionEnabled(cfg)) {
+      const visionError = cfg.visionPath
+        ? visionConfigError(cfg) ??
+          (proc.isExternal
+            ? "The adopted external ds4-server was not started with the configured GLM 5.3 vision encoder. Restart it with --vision or stop it so the plugin can start the configured server."
+            : "Image input is unavailable because the ds4-server is not configured with the GLM 5.3 vision encoder.")
+        : "Image input is disabled. Set visionPath to auto and download ./download_model.sh glm53-vision, or set it to the encoder path.";
+      throw new Error(visionError);
+    }
+    const requestBody = serializeDwarfStarChatRequest(
+      buildDwarfStarChatRequest(
+        primaryModelId(cfg),
+        params.prompt,
+        params.system,
+        params.maxTokens,
+        params.temperature,
+        imageUrls,
+      ),
+    );
+    const requestBodySizeError = completionRequestBodySizeError(requestBody);
+    if (requestBodySizeError) throw new Error(requestBodySizeError);
     const res = await fetch(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         authorization: "Bearer dsv4-local",
       },
-      body: JSON.stringify({
-        model: preferredDwarfStarModel(lastHealth?.models ?? [], cfg.modelPath),
-        messages,
-        max_tokens: params.maxTokens,
-        stream: false,
-        ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
-      }),
+      body: requestBody,
       signal: AbortSignal.timeout(180_000),
     });
     if (!res.ok) {
@@ -1424,6 +1574,41 @@ export default async function plugin(bb: BbPluginApi) {
     }
     const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
     return (data.choices?.[0]?.message?.content ?? "").trim();
+  }
+
+  async function ds4Complete(
+    cfg: ResolvedRunConfig,
+    params: {
+      prompt: string;
+      system?: string;
+      maxTokens: number;
+      temperature?: number;
+      imageUrls?: string[];
+    },
+  ): Promise<string> {
+    inFlightCompletions += 1;
+    lastDemandAt ??= Date.now();
+    try {
+      return await performDs4Complete(cfg, params);
+    } finally {
+      inFlightCompletions = Math.max(0, inFlightCompletions - 1);
+      if (inFlightCompletions === 0 && demandThreads.size === 0) {
+        lastDemandAt = Date.now();
+      }
+    }
+  }
+
+  function externalServerMatchesCurrentConfig(cfg: ResolvedRunConfig): boolean {
+    if (!proc.isExternal) return true;
+    const pid = proc.pid;
+    const command = proc.cmdline;
+    if (!pid || !cfg.bin || !command?.[0] || command.length < 1) return false;
+    return processMatchesCommand(
+      pid,
+      cfg.bin,
+      cfg.args,
+      proc.cwd ?? cfg.ds4Dir,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -1523,6 +1708,7 @@ export default async function plugin(bb: BbPluginApi) {
               maxTokens: cfg.maxTokens,
               modelId: primaryModelId(cfg),
               modelIds: advertisedIds(cfg),
+              vision: visionEnabled(cfg),
             });
             const out = results
               .map((r) => `${r.ok ? "ok   " : "FAIL "} ${r.id}: ${r.message}${r.backup ? ` (backup: ${r.backup})` : ""}`)
@@ -1607,22 +1793,15 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "ds4_complete",
     description:
-      "Run a one-shot text completion on the local DS4 (DwarfStar) OpenAI-compatible server. Fails if the server is not ready.",
+      "Run a one-shot text or image completion on the local DS4 (DwarfStar) OpenAI-compatible server. Pass inline PNG/JPEG data URIs in imageUrls when a GLM 5.3 vision encoder is configured. Fails if the server is not ready.",
     presentation: {
       label: {
         pending: "Querying local DS4 model",
         completed: "Queried local DS4 model",
       },
     },
-    parameters: z
-      .object({
-        prompt: z.string().min(1).describe("The user prompt to send"),
-        system: z.string().optional().describe("Optional system prompt"),
-        maxTokens: z.number().int().min(1).max(16384).default(1024),
-        temperature: z.number().min(0).max(2).optional(),
-      })
-      .strict(),
-    async execute({ prompt, system, maxTokens, temperature }) {
+    parameters: completeInputSchema,
+    async execute({ prompt, system, maxTokens, temperature, imageUrls }) {
       if (!(proc.state === "running" && healthIsReady(lastHealth))) {
         return `DS4 server is not ready (state=${proc.state}). Start it with \`bb ds4 start\` first.`;
       }
@@ -1632,6 +1811,7 @@ export default async function plugin(bb: BbPluginApi) {
           system,
           maxTokens,
           temperature,
+          imageUrls,
         });
       } catch (err) {
         return `ds4_complete failed: ${String(err)}`;
@@ -1676,38 +1856,6 @@ export default async function plugin(bb: BbPluginApi) {
   bb.events.on("thread.failed", ({ thread }) => releaseAllDemandFor(thread.id));
   bb.events.on("thread.archived", ({ thread }) => releaseAllDemandFor(thread.id));
   bb.events.on("thread.deleted", ({ thread }) => releaseAllDemandFor(thread.id));
-
-  // Refresh the managed agent provider configs once per load so every
-  // downloaded DwarfStar model shows up in the pickers without a manual
-  // `bb ds4 agents apply`.
-  void (async () => {
-    try {
-      const cfg = await currentConfig();
-      const s = await currentSettings();
-      const targets = (["pi", "opencode", "codex"] as AgentTargetId[]).filter(
-        (t) =>
-          t === "pi"
-            ? s.configurePi
-            : t === "opencode"
-              ? s.configureOpencode
-              : s.configureCodex,
-      );
-      if (!targets.length) return;
-      const results = applyTargets(targets, {
-        port: cfg.port,
-        ctx: cfg.ctx,
-        maxTokens: cfg.maxTokens,
-        modelId: primaryModelId(cfg),
-        modelIds: advertisedIds(cfg),
-      });
-      for (const r of results) {
-        if (r.ok) bb.log.info(`startup agent config: ${r.message}`);
-        else bb.log.error(`startup agent config failed: ${r.message}`);
-      }
-    } catch (err) {
-      bb.log.warn(`startup agent config refresh failed: ${String(err)}`);
-    }
-  })();
 
   // -------------------------------------------------------------------------
   // Settings change logging + dispose
@@ -1778,6 +1926,7 @@ function renderStatus(st: StatusDto): string {
     `max out:   ${st.config.maxTokens}`,
     `dspark:    ${st.config.dspark ? `on (confidence ${st.config.dsparkConfidence ?? "upstream default"})` : "off"}`,
     `model:     ${st.config.modelPath ?? "(none)"}`,
+    `vision:    ${st.config.visionPath ?? "off"}`,
     `dir:       ${st.config.ds4Dir ?? "(not found)"}`,
     `dspark GGUF: ${st.config.dsparkSupportPath ?? "(not found)"}`,
     `backend:   ${st.config.backend}`,

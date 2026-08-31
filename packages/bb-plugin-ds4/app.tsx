@@ -203,6 +203,8 @@ function SetupSection() {
     typeof values?.idleTimeoutSeconds === "string"
       ? values.idleTimeoutSeconds
       : "300";
+  const visionPath =
+    typeof values?.visionPath === "string" ? values.visionPath : "auto";
 
   return (
     <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4 text-sm">
@@ -214,7 +216,7 @@ function SetupSection() {
           model and stops after the last matching turn has been idle.
         </p>
       </div>
-      <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+      <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-4">
         <div>
           <span className="block uppercase tracking-wide">Model selector</span>
           <code className="font-mono text-foreground">
@@ -233,12 +235,19 @@ function SetupSection() {
             {isLoading ? "…" : `${idleTimeout}s`}
           </code>
         </div>
+        <div className="min-w-0">
+          <span className="block uppercase tracking-wide">Vision encoder</span>
+          <code className="block truncate font-mono text-foreground" title={visionPath}>
+            {isLoading ? "…" : visionPath || "off"}
+          </code>
+        </div>
       </div>
       <p className="text-xs text-muted-foreground">
         The selector defaults to <code className="font-mono">ds4/</code>, which
-        matches DwarfStar&apos;s DeepSeek V4 and GLM 5.2 model ids. Leave the
-        provider filter empty unless the same model id is used by more than
-        one provider.
+        matches DwarfStar&apos;s DeepSeek V4, GLM 5.2, and GLM 5.3 Flash model ids.
+        The vision encoder defaults to <code className="font-mono">auto</code>:
+        after downloading the GLM 5.3 sidecar, it is picked up from the DS4
+        checkout automatically. Leave it empty to disable vision.
       </p>
     </div>
   );
