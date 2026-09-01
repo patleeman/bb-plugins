@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { spawn, type ChildProcess } from "node:child_process";
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
@@ -40,6 +41,7 @@ import {
   resolvedDwarfStarModelId,
   shellQuote,
   validateDsparkModelPath,
+  validateDsparkSupportPath,
   type BackendChoice,
   type ResolvedRunConfig,
   type RunSettings,
@@ -56,8 +58,12 @@ import {
 } from "./src/persistent-log";
 import {
   CONFIGURED_DWARFSTAR_MODEL_ID,
+  DWARFSTAR_MODEL_PRESET_OPTIONS,
+  isDwarfStarVisionModel,
   isDwarfStarModel,
+  normalizeDwarfStarModelPreset,
   parseIdleTimeoutMs,
+  wireDwarfStarModelId,
 } from "./src/model-selection";
 import {
   buildDwarfStarChatRequest,
@@ -66,6 +72,18 @@ import {
   completeInputSchema,
   serializeDwarfStarChatRequest,
 } from "./src/request-payload";
+import {
+  orphanCleanupIsDue,
+  providerLeaseVetoesStart,
+} from "./src/supervisor-policy";
+import {
+  classifyModelFile,
+  createModelDownloadPlan,
+  hasModelFilePartial,
+  isUsableModelFile,
+  type ModelDownloadPlan,
+  type ModelDownloadTarget,
+} from "./src/model-download";
 
 // ---------------------------------------------------------------------------
 // Schemas / contract
@@ -146,6 +164,26 @@ const applyResultSchema = z.object({
   backup: z.string().optional(),
   message: z.string(),
 });
+const modelFileSchema = z.object({
+  kind: z.enum(["model", "vision", "dspark"]),
+  label: z.string(),
+  path: z.string().nullable(),
+  required: z.boolean(),
+  state: z.enum(["present", "missing", "partial", "unavailable"]),
+  downloadTarget: z.string().nullable(),
+});
+const modelFilesStatusSchema = z.object({
+  preset: z.string(),
+  modelId: z.string().nullable(),
+  modelDisplayName: z.string(),
+  files: z.array(modelFileSchema),
+  complete: z.boolean(),
+  downloadable: z.boolean(),
+  downloading: z.boolean(),
+  currentTarget: z.string().nullable(),
+  error: z.string().nullable(),
+  message: z.string(),
+});
 
 export const rpcContract = defineRpcContract({
   status: { input: z.null(), output: statusSchema },
@@ -172,6 +210,8 @@ export const rpcContract = defineRpcContract({
       .strict(),
     output: z.object({ results: z.array(applyResultSchema) }),
   },
+  modelFiles: { input: z.null(), output: modelFilesStatusSchema },
+  downloadModels: { input: z.null(), output: modelFilesStatusSchema },
   launchAgent: {
     input: z.null(),
     output: z.object({ terminalId: z.string(), title: z.string() }),
@@ -183,6 +223,7 @@ export const rpcContract = defineRpcContract({
 });
 
 export type StatusDto = z.infer<typeof statusSchema>;
+type ModelFilesStatusDto = z.infer<typeof modelFilesStatusSchema>;
 
 // ---------------------------------------------------------------------------
 // Plugin factory
@@ -207,6 +248,7 @@ const DS4_BASH_POLL_MS = 100;
 function dwarfStarModelDisplayName(modelId: string): string {
   switch (modelId) {
     case "deepseek-v4-flash": return "DeepSeek V4 Flash";
+    case "deepseek-v4-flash-vision-exp": return "DeepSeek V4 Flash Vision Experimental";
     case "deepseek-v4-pro": return "DeepSeek V4 Pro";
     case "glm-5.2": return "GLM 5.2";
     case "glm-5.3-flash": return "GLM 5.3 Flash";
@@ -242,17 +284,26 @@ export default async function plugin(bb: BbPluginApi) {
         "Directory containing ds4-server. Empty = auto-detect (DS4_DIR, ~/workingdir/ds4, ~/ds4, …).",
       default: "",
     },
+    modelPreset: {
+      type: "select",
+      label: "Model",
+      description:
+        "Select the single GGUF loaded by DwarfStar. Auto uses Model GGUF path; the named options find their standard files in the DS4 checkout.",
+      options: [...DWARFSTAR_MODEL_PRESET_OPTIONS],
+      default: "auto",
+    },
     modelPath: {
       type: "string",
       label: "Model GGUF path",
-      description: "Absolute path, or relative to the DS4 directory. Empty = ds4flash.gguf.",
+      description:
+        "Advanced override: absolute path, or relative to the DS4 directory. Used when Model is auto; empty = ds4flash.gguf.",
       default: "",
     },
     visionPath: {
       type: "string",
-      label: "GLM 5.3 vision encoder path",
+      label: "Vision encoder path",
       description:
-        "Use auto to detect gguf/GLM-5.3-Flash-Vision-Encoder.gguf for a GLM 5.3 Flash model; set an absolute or DS4-relative path to override, or leave empty to disable vision.",
+        "Use auto to detect the selected model's standard encoder; set an absolute or DS4-relative path to override, or leave empty to disable vision.",
       default: "auto",
     },
     ctx: {
@@ -341,6 +392,19 @@ export default async function plugin(bb: BbPluginApi) {
   let latestSettings: StoredSettings = await settings.get();
   let inFlightCompletions = 0;
   let lastDemandAt: number | null = null;
+  type ModelDownloadJob = {
+    ds4Dir: string;
+    preset: string;
+    targets: ModelDownloadTarget[];
+    currentTarget: ModelDownloadTarget | null;
+    child: ChildProcess | null;
+    processGroupIds: Set<number>;
+    cancelPromise: Promise<void> | null;
+    cancelled: boolean;
+    output: string;
+    error: string | null;
+  };
+  let modelDownloadJob: ModelDownloadJob | null = null;
 
   function primaryModelId(cfg: ResolvedRunConfig): string {
     return resolvedDwarfStarModelId(cfg.modelPath) ?? CONFIGURED_DWARFSTAR_MODEL_ID;
@@ -387,6 +451,7 @@ export default async function plugin(bb: BbPluginApi) {
     return {
       ds4Dir: s.ds4Dir ?? "",
       modelPath: s.modelPath ?? "",
+      modelPreset: s.modelPreset ?? "auto",
       visionPath: s.visionPath ?? "auto",
       backend: (s.backend ?? "auto") as BackendChoice,
       host: s.host ?? "127.0.0.1",
@@ -451,6 +516,298 @@ export default async function plugin(bb: BbPluginApi) {
 
   async function currentConfig(): Promise<ResolvedRunConfig> {
     return resolveConfig(await currentSettings());
+  }
+
+  function modelDownloadPlanForConfig(
+    cfg: ResolvedRunConfig,
+  ): ModelDownloadPlan {
+    return createModelDownloadPlan({
+      ds4Dir: cfg.ds4Dir,
+      modelPreset: latestSettings.modelPreset ?? "auto",
+      modelPath: cfg.modelPath,
+      visionSetting: latestSettings.visionPath ?? "auto",
+      visionPath: cfg.visionPath,
+      dspark: cfg.dspark,
+      dsparkSupportPath: cfg.dsparkSupportPath,
+    });
+  }
+
+  function modelDownloadFileState(path: string | null) {
+    if (!path) return "unavailable" as const;
+    return classifyModelFile(
+      regularFileExists(path),
+      hasModelFilePartial(path),
+    );
+  }
+
+  function regularFileExists(path: string): boolean {
+    return isUsableModelFile(path);
+  }
+
+  function matchingModelDownloadJob(
+    cfg: ResolvedRunConfig,
+    plan: ModelDownloadPlan,
+  ): ModelDownloadJob | null {
+    const job = modelDownloadJob;
+    return job && job.ds4Dir === cfg.ds4Dir && job.preset === plan.preset
+      ? job
+      : null;
+  }
+
+  function modelFilesStatusForConfig(
+    cfg: ResolvedRunConfig,
+  ): ModelFilesStatusDto {
+    const plan = modelDownloadPlanForConfig(cfg);
+    const job = matchingModelDownloadJob(cfg, plan);
+    if (modelDownloadJob) pruneModelDownloadProcessGroups(modelDownloadJob);
+    const activeDownloadJob =
+      modelDownloadJob &&
+      (modelDownloadJob.currentTarget !== null ||
+        modelDownloadJob.processGroupIds.size > 0)
+        ? modelDownloadJob
+        : null;
+    const anyDownloadActive = activeDownloadJob !== null;
+    const files = plan.files.map((file) => ({
+      kind: file.kind,
+      label: file.label,
+      path: file.path,
+      required: file.required,
+      state: modelDownloadFileState(file.path),
+      downloadTarget: file.target,
+    }));
+    const complete = files.every((file) => file.state === "present");
+    const missingTargets = plan.targets.filter((target) =>
+      files.some(
+        (file) => file.downloadTarget === target && file.state !== "present",
+      ),
+    );
+    const scriptAvailable =
+      cfg.ds4Dir !== null && regularFileExists(join(cfg.ds4Dir, "download_model.sh"));
+    const downloading = activeDownloadJob !== null;
+    const downloadable =
+      scriptAvailable &&
+      plan.downloadable &&
+      missingTargets.length > 0 &&
+      !anyDownloadActive;
+    let message: string;
+    if (downloading && job) {
+      message = `Downloading ${job.currentTarget ?? "model files"}…`;
+    } else if (downloading) {
+      message = "Another DwarfStar model download is already in progress.";
+    } else if (job?.error) {
+      message = `Download failed: ${job.error}`;
+    } else if (anyDownloadActive && !job) {
+      message = "Another DwarfStar model download is already in progress.";
+    } else if (plan.error) {
+      message = plan.error;
+    } else if (!scriptAvailable) {
+      message = "DS4 download_model.sh was not found in the selected checkout.";
+    } else if (complete) {
+      message = "All selected model files are present.";
+    } else if (missingTargets.length === 0) {
+      message = "Some files use custom paths and must be downloaded manually.";
+    } else {
+      message = "Required model files are missing.";
+    }
+    return {
+      preset: plan.preset,
+      modelId: plan.modelId,
+      modelDisplayName: plan.displayName,
+      files,
+      complete,
+      downloadable,
+      downloading,
+      currentTarget: job?.currentTarget ?? null,
+      error: job?.error ?? null,
+      message,
+    };
+  }
+
+  function appendModelDownloadOutput(
+    job: ModelDownloadJob,
+    chunk: Buffer | string,
+  ): void {
+    const text = Buffer.from(chunk).toString("utf8");
+    job.output = `${job.output}${text}`.slice(-4000);
+  }
+
+  function signalModelDownloadProcess(
+    job: ModelDownloadJob,
+    signal: NodeJS.Signals,
+  ): void {
+    const child = job.child;
+    let signaledProcessGroup = false;
+    for (const processGroupId of job.processGroupIds) {
+      try {
+        // The downloader is detached so the shell and its hf/curl descendants
+        // share a process group that can be terminated together. Keep every
+        // live group until it is confirmed dead so a successful shell cannot
+        // orphan a descendant that is still running.
+        process.kill(-processGroupId, signal);
+        signaledProcessGroup = true;
+      } catch {
+        // The group already exited between the checks.
+      }
+    }
+    if (signaledProcessGroup || child?.pid === undefined) return;
+    try {
+      child.kill(signal);
+    } catch {
+      // The child already exited between the checks.
+    }
+  }
+
+  function modelDownloadProcessGroupAlive(processGroupId: number): boolean {
+    try {
+      process.kill(-processGroupId, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "EPERM";
+    }
+  }
+
+  function pruneModelDownloadProcessGroups(job: ModelDownloadJob): void {
+    for (const processGroupId of job.processGroupIds) {
+      if (!modelDownloadProcessGroupAlive(processGroupId)) {
+        job.processGroupIds.delete(processGroupId);
+      }
+    }
+  }
+
+  function waitForModelDownloadProcessGroups(
+    job: ModelDownloadJob,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    return new Promise((resolvePromise) => {
+      const deadline = Date.now() + timeoutMs;
+      const poll = () => {
+        pruneModelDownloadProcessGroups(job);
+        if (job.processGroupIds.size === 0) {
+          resolvePromise(true);
+          return;
+        }
+        if (Date.now() >= deadline) {
+          resolvePromise(false);
+          return;
+        }
+        setTimeout(poll, 100);
+      };
+      poll();
+    });
+  }
+
+  function cancelModelDownload(job: ModelDownloadJob): Promise<void> {
+    if (job.cancelPromise) return job.cancelPromise;
+    job.cancelled = true;
+    signalModelDownloadProcess(job, "SIGTERM");
+    job.cancelPromise = (async () => {
+      const exitedAfterTerm = await waitForModelDownloadProcessGroups(job, 12_000);
+      if (!exitedAfterTerm) {
+        signalModelDownloadProcess(job, "SIGKILL");
+        await waitForModelDownloadProcessGroups(job, 1_000);
+      }
+    })();
+    return job.cancelPromise;
+  }
+
+  function runModelDownloadTarget(
+    job: ModelDownloadJob,
+    target: ModelDownloadTarget,
+  ): Promise<void> {
+    const script = join(job.ds4Dir, "download_model.sh");
+    return new Promise((resolvePromise, reject) => {
+      if (job.cancelled) {
+        resolvePromise();
+        return;
+      }
+      let settled = false;
+      let child: ChildProcess | null = null;
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        if (job.child === child) job.child = null;
+        pruneModelDownloadProcessGroups(job);
+        if (error) reject(error);
+        else resolvePromise();
+      };
+      try {
+        child = spawn(script, [target], {
+          cwd: job.ds4Dir,
+          env: { ...process.env },
+          stdio: ["ignore", "pipe", "pipe"],
+          detached: true,
+        });
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      const activeChild = child;
+      if (activeChild === null) {
+        finish(new Error("download_model.sh did not start a child process."));
+        return;
+      }
+      job.child = activeChild;
+      if (activeChild.pid !== undefined) {
+        job.processGroupIds.add(activeChild.pid);
+      }
+      activeChild.stdout?.on("data", (chunk: Buffer | string) =>
+        appendModelDownloadOutput(job, chunk),
+      );
+      activeChild.stderr?.on("data", (chunk: Buffer | string) =>
+        appendModelDownloadOutput(job, chunk),
+      );
+      activeChild.once("error", (error) =>
+        finish(job.cancelled ? undefined : error),
+      );
+      activeChild.once("close", (code, signal) => {
+        if (job.cancelled || code === 0) {
+          finish();
+        } else {
+          finish(new Error(
+            `download_model.sh ${target} exited with ${
+              signal ? `signal ${signal}` : `code ${code ?? "unknown"}`
+            }.`,
+          ));
+        }
+      });
+    });
+  }
+
+  function startModelDownload(
+    cfg: ResolvedRunConfig,
+    plan: ModelDownloadPlan,
+    targets: ModelDownloadTarget[],
+  ): void {
+    if (!cfg.ds4Dir || targets.length === 0) return;
+    const job: ModelDownloadJob = {
+      ds4Dir: cfg.ds4Dir,
+      preset: plan.preset,
+      targets,
+      currentTarget: null,
+      child: null,
+      processGroupIds: new Set(),
+      cancelPromise: null,
+      cancelled: false,
+      output: "",
+      error: null,
+    };
+    modelDownloadJob = job;
+    void (async () => {
+      try {
+        for (const target of targets) {
+          if (job.cancelled) return;
+          job.currentTarget = target;
+          bb.log.info(`downloading DwarfStar model files: ${target}`);
+          await runModelDownloadTarget(job, target);
+        }
+      } catch (error) {
+        job.error = error instanceof Error ? error.message : String(error);
+        bb.log.error(job.error);
+      } finally {
+        job.currentTarget = null;
+        job.child = null;
+      }
+    })();
   }
 
   type WorkspaceToolContext = {
@@ -665,8 +1022,14 @@ export default async function plugin(bb: BbPluginApi) {
     // Provider declarations are shared with remote workspace hosts. The
     // server worker must not publish a host-local GGUF path or a family
     // inferred from a symlink that may resolve differently on the target
-    // host. The bridge resolves the real settings for turns on that host.
-    return { id: CONFIGURED_DWARFSTAR_MODEL_ID };
+    // host. A named preset is a portable identity; the bridge resolves the
+    // actual file from the target host's settings for turns.
+    const preset = normalizeDwarfStarModelPreset(
+      String(latestSettings.modelPreset ?? "auto"),
+    );
+    return {
+      id: preset === "auto" ? CONFIGURED_DWARFSTAR_MODEL_ID : preset,
+    };
   }
 
   function providerDeclaration(model = configuredProviderModel()) {
@@ -718,6 +1081,7 @@ export default async function plugin(bb: BbPluginApi) {
         return {
           ds4Dir: String(s.ds4Dir ?? ""),
           modelPath: String(s.modelPath ?? ""),
+          modelPreset: String(s.modelPreset ?? "auto"),
           visionPath: String(s.visionPath ?? "auto"),
           backend: String(s.backend ?? "auto"),
           host: String(s.host ?? "127.0.0.1"),
@@ -775,9 +1139,14 @@ export default async function plugin(bb: BbPluginApi) {
     if (!cfg.dsparkSupportPath) {
       return "DSpark is enabled but its support GGUF path could not be resolved. Set dsparkSupportPath or disable dspark.";
     }
-    if (!existsSync(cfg.dsparkSupportPath)) {
+    if (!regularFileExists(cfg.dsparkSupportPath)) {
       return `DSpark support GGUF not found: ${cfg.dsparkSupportPath}. Run ./download_model.sh ds4f-dspark or set dsparkSupportPath; disable dspark for GLM/PRO or a baseline run.`;
     }
+    const supportError = validateDsparkSupportPath(
+      cfg.modelPath,
+      cfg.dsparkSupportPath,
+    );
+    if (supportError) return supportError;
     return null;
   }
 
@@ -789,11 +1158,12 @@ export default async function plugin(bb: BbPluginApi) {
     if (!cfg.visionPath) return null;
     const backendError = dwarfStarVisionBackendError(cfg.backend, cfg.visionPath);
     if (backendError) return backendError;
-    if (resolvedDwarfStarModelId(cfg.modelPath) !== "glm-5.3-flash") {
-      return `Vision is supported only with a GLM 5.3 Flash model. The configured model path is ${cfg.modelPath ?? "not set"}; disable vision or select a GLM-5.3-Flash GGUF.`;
+    const modelId = resolvedDwarfStarModelId(cfg.modelPath);
+    if (!modelId || !isDwarfStarVisionModel(modelId)) {
+      return `Vision is supported only with DeepSeek V4 Flash Vision Experimental or GLM 5.3 Flash. The configured model path is ${cfg.modelPath ?? "not set"}; select a vision model or disable vision.`;
     }
-    if (!existsSync(cfg.visionPath)) {
-      return `GLM 5.3 vision encoder not found: ${cfg.visionPath}. Run ./download_model.sh glm53-vision or set visionPath to the downloaded encoder.`;
+    if (!regularFileExists(cfg.visionPath)) {
+      return `Vision encoder not found: ${cfg.visionPath}. Download the encoder for the selected model or set visionPath to its downloaded path.`;
     }
     return null;
   }
@@ -1116,8 +1486,22 @@ export default async function plugin(bb: BbPluginApi) {
     return true;
   }
 
-  async function startProc(cfg: ResolvedRunConfig): Promise<void> {
-    if (disposed) return;
+  type EnsureStartedOptions = {
+    onlyIfNoProviderLease?: boolean;
+  };
+
+  function startVetoed(options: EnsureStartedOptions): boolean {
+    return providerLeaseVetoesStart(
+      options.onlyIfNoProviderLease === true,
+      hasActiveProviderTurnLease(),
+    );
+  }
+
+  async function startProc(
+    cfg: ResolvedRunConfig,
+    options: EnsureStartedOptions = {},
+  ): Promise<void> {
+    if (disposed || startVetoed(options)) return;
     if (proc.isRunning) return;
     if (!cfg.bin || !existsSync(cfg.bin)) {
       lastError =
@@ -1126,7 +1510,7 @@ export default async function plugin(bb: BbPluginApi) {
       await publishState();
       return;
     }
-    if (cfg.modelPath && !existsSync(cfg.modelPath)) {
+    if (cfg.modelPath && !regularFileExists(cfg.modelPath)) {
       lastError = `Model not found: ${cfg.modelPath}. Download it first (./download_model.sh) or set modelPath.`;
       bb.log.error(lastError);
       await publishState();
@@ -1152,10 +1536,19 @@ export default async function plugin(bb: BbPluginApi) {
     adoptedHealthFailureAt = null;
     adoptedHealthTimedOut = false;
     bb.log.info(`starting ds4-server: ${cfg.bin} ${cfg.args.join(" ")}`);
-    lastDemandAt ??= Date.now();
+    // A new process gets a fresh idle baseline. This also prevents an old
+    // orphan/release timestamp from stopping a later demand immediately.
+    lastDemandAt = Date.now();
     const startLogSeq = proc.logs(0, LOG_RING_LIMIT).nextOffset;
     lastStartLogSeq = startLogSeq;
     let managedPid: number | null = null;
+    // Keep this check adjacent to the synchronous spawn. The supervisor may
+    // have yielded before reaching this function while a provider lease began.
+    if (startVetoed(options)) {
+      activeEndpoint = null;
+      lastHealth = null;
+      return;
+    }
     proc.start({
       bin: cfg.bin,
       args: cfg.args,
@@ -1203,11 +1596,14 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   /** Start at most one local server process when a model call creates demand. */
-  async function ensureStarted(cfg?: ResolvedRunConfig): Promise<void> {
-    if (disposed) return;
+  async function ensureStarted(
+    cfg?: ResolvedRunConfig,
+    options: EnsureStartedOptions = {},
+  ): Promise<void> {
+    if (disposed || startVetoed(options)) return;
     if (stopWaitPromise) {
       await stopWaitPromise;
-      return ensureStarted(cfg);
+      return ensureStarted(cfg, options);
     }
     if (proc.isRunning) return;
     if (startPromise) {
@@ -1218,7 +1614,7 @@ export default async function plugin(bb: BbPluginApi) {
         startPromise = null;
         startPromiseEpoch = null;
       }
-      return ensureStarted(cfg);
+      return ensureStarted(cfg, options);
     }
 
     const epoch = lifecycleEpoch;
@@ -1232,17 +1628,19 @@ export default async function plugin(bb: BbPluginApi) {
       if (!isCurrent()) return;
       const resolved = cfg ?? (await currentConfig());
       if (!isCurrent()) return;
+      if (startVetoed(options)) return;
       if (await recoverExistingServer(resolved, { isCurrent })) return;
       if (!isCurrent()) return;
       // Another demand callback may have recovered or started the process
       // while the recovery check was awaiting health.
+      if (startVetoed(options)) return;
       if (proc.isRunning) return;
       if (reclaimRecordedProcess()) {
         bb.log.info("stopping the previous managed ds4-server before applying new settings");
         await stopProc({ cancelPendingStart: false });
       }
-      if (!isCurrent()) return;
-      await startProc(resolved);
+      if (!isCurrent() || startVetoed(options)) return;
+      await startProc(resolved, options);
     })();
     let tracked: Promise<void>;
     tracked = run.finally(() => {
@@ -1469,18 +1867,27 @@ export default async function plugin(bb: BbPluginApi) {
           // daemon disconnect. Reclaim it only when there is no active demand,
           // then stop it so a fresh turn owns the next process cleanly. Do not
           // scan for or interfere with unmarked, user-owned servers here.
-          if (!orphanCleanupDone && !hasStopDemand && proc.state === "stopped") {
-            orphanCleanupDone = true;
+          if (
+            !orphanCleanupDone &&
+            !hasStopDemand &&
+            proc.state === "stopped" &&
+            orphanCleanupIsDue(lastDemandAt, Date.now(), idleTimeoutMs())
+          ) {
             const recovered =
               (await recoverExistingServer(cfg, {
                 allowExternal: false,
                 isCurrent: () => !disposed && !shuttingDown && !signal.aborted,
               })) ||
               reclaimRecordedProcess();
-            if (recovered && !hasStopVeto()) {
+            if (!recovered) {
+              // The scan completed and found no managed orphan to clean.
+              orphanCleanupDone = true;
+            } else if (!hasStopVeto()) {
               const stopped = await stopProc({ onlyIfNoDemand: true });
               if (stopped) {
-                lastDemandAt = null;
+                // Keep the demand/release anchor. If another native demand
+                // starts this process later, startProc resets it at spawn.
+                orphanCleanupDone = true;
                 lastHealth = null;
                 await publishState();
               }
@@ -1527,7 +1934,7 @@ export default async function plugin(bb: BbPluginApi) {
             !hasActiveProviderTurnLease() &&
             (restartAfterDrift || proc.state === "stopped" || proc.state === "exited")
           ) {
-            await ensureStarted(cfg);
+            await ensureStarted(cfg, { onlyIfNoProviderLease: true });
           }
 
           if (
@@ -1547,7 +1954,7 @@ export default async function plugin(bb: BbPluginApi) {
             const since = Date.now() - (proc.exitInfo?.at ?? 0);
             if (!recovered && !signal.aborted && !shuttingDown && since >= crashBackoffMs) {
               bb.log.warn(`restarting after crash (backoff ${crashBackoffMs}ms)`);
-              await ensureStarted(cfg);
+              await ensureStarted(cfg, { onlyIfNoProviderLease: true });
             }
           }
 
@@ -1714,12 +2121,14 @@ export default async function plugin(bb: BbPluginApi) {
     },
     async applyAgentConfigs({ targets }) {
       const cfg = await currentConfig();
+      const configuredModelId = primaryModelId(cfg);
       const results = applyTargets(targets as AgentTargetId[], {
         port: cfg.port,
         ctx: cfg.ctx,
         maxTokens: cfg.maxTokens,
-        modelId: primaryModelId(cfg),
-        modelIds: advertisedIds(cfg),
+        modelId: wireDwarfStarModelId(configuredModelId),
+        modelIds: advertisedIds(cfg).map(wireDwarfStarModelId),
+        modelDisplayId: configuredModelId,
         vision: visionEnabled(cfg),
       });
       for (const r of results) {
@@ -1727,6 +2136,24 @@ export default async function plugin(bb: BbPluginApi) {
         else bb.log.error(`agent config failed: ${r.message}`);
       }
       return { results };
+    },
+    async modelFiles() {
+      return modelFilesStatusForConfig(await currentConfig());
+    },
+    async downloadModels() {
+      const cfg = await currentConfig();
+      const before = modelFilesStatusForConfig(cfg);
+      if (!before.downloadable) return before;
+      const targets = before.files
+        .filter(
+          (file) =>
+            file.downloadTarget !== null && file.state !== "present",
+        )
+        .map((file) => file.downloadTarget as ModelDownloadTarget)
+        .filter((target, index, all) => all.indexOf(target) === index);
+      const plan = modelDownloadPlanForConfig(cfg);
+      startModelDownload(cfg, plan, targets);
+      return modelFilesStatusForConfig(cfg);
     },
     async launchAgent() {
       const cfg = await currentConfig();
@@ -1790,17 +2217,17 @@ export default async function plugin(bb: BbPluginApi) {
     );
     if (contentSizeError) throw new Error(contentSizeError);
     if (imageUrls.length && !visionEnabled(cfg)) {
-      const visionError = cfg.visionPath
-        ? visionConfigError(cfg) ??
+        const visionError = cfg.visionPath
+          ? visionConfigError(cfg) ??
           (proc.isExternal
-            ? "The adopted external ds4-server was not started with the configured GLM 5.3 vision encoder. Restart it with --vision or stop it so the plugin can start the configured server."
-            : "Image input is unavailable because the ds4-server is not configured with the GLM 5.3 vision encoder.")
-        : "Image input is disabled. Set visionPath to auto and download ./download_model.sh glm53-vision, or set it to the encoder path.";
+            ? "The adopted external ds4-server was not started with the configured vision encoder. Restart it with --vision or stop it so the plugin can start the configured server."
+            : "Image input is unavailable because the ds4-server is not configured with the selected model's vision encoder.")
+        : "Image input is disabled. Set visionPath to auto and download the encoder for the selected model, or set it to the encoder path.";
       throw new Error(visionError);
     }
     const requestBody = serializeDwarfStarChatRequest(
       buildDwarfStarChatRequest(
-        primaryModelId(cfg),
+        wireDwarfStarModelId(primaryModelId(cfg)),
         params.prompt,
         params.system,
         params.maxTokens,
@@ -1941,12 +2368,14 @@ export default async function plugin(bb: BbPluginApi) {
             if (!targets.length) {
               return { exitCode: 1, stdout: "Pass at least one target: pi, opencode, or codex." };
             }
+            const configuredModelId = primaryModelId(cfg);
             const results = applyTargets(targets, {
               port: cfg.port,
               ctx: cfg.ctx,
               maxTokens: cfg.maxTokens,
-              modelId: primaryModelId(cfg),
-              modelIds: advertisedIds(cfg),
+              modelId: wireDwarfStarModelId(configuredModelId),
+              modelIds: advertisedIds(cfg).map(wireDwarfStarModelId),
+              modelDisplayId: configuredModelId,
               vision: visionEnabled(cfg),
             });
             const out = results
@@ -2032,7 +2461,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "ds4_complete",
     description:
-      "Run a one-shot text or image completion on the local DS4 (DwarfStar) OpenAI-compatible server. Pass inline PNG/JPEG data URIs in imageUrls when a GLM 5.3 vision encoder is configured. Fails if the server is not ready.",
+      "Run a one-shot text or image completion on the local DS4 (DwarfStar) OpenAI-compatible server. Pass inline PNG/JPEG data URIs in imageUrls when the selected vision model's encoder is configured. Fails if the server is not ready.",
     presentation: {
       label: {
         pending: "Querying local DS4 model",
@@ -2165,6 +2594,7 @@ export default async function plugin(bb: BbPluginApi) {
     if (changed.length) bb.log.info(`settings changed: ${changed.join(", ")}`);
     if (
       (next.modelPath ?? "") !== (prev.modelPath ?? "") ||
+      (next.modelPreset ?? "auto") !== (prev.modelPreset ?? "auto") ||
       (next.ds4Dir ?? "") !== (prev.ds4Dir ?? "")
     ) {
       try {
@@ -2176,11 +2606,14 @@ export default async function plugin(bb: BbPluginApi) {
     }
   });
 
-  bb.onDispose(() => {
+  bb.onDispose(async () => {
     disposed = true;
     shuttingDown = true;
     lifecycleEpoch += 1;
-    providerRegistration.dispose();
+      providerRegistration.dispose();
+    const downloadJob = modelDownloadJob;
+    modelDownloadJob = null;
+    if (downloadJob) await cancelModelDownload(downloadJob);
     if (logFlushTimer) {
       clearTimeout(logFlushTimer);
       logFlushTimer = null;

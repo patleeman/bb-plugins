@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   agentCommand,
+  DEFAULT_DEEPSEEK_VISION_FILE,
+  DEFAULT_DEEPSEEK_VISION_MODEL_FILE,
+  DEFAULT_DSPARK_VISION_SUPPORT_FILE,
   DEFAULT_GLM53_VISION_FILE,
   dwarfStarVisionBackendError,
   dwarfStarVisionArgsError,
@@ -15,6 +18,7 @@ import {
   resolveConfig,
   resolvedDwarfStarModelId,
   validateDsparkModelPath,
+  validateDsparkSupportPath,
   type ResolvedRunConfig,
 } from "./run-config.ts";
 
@@ -48,6 +52,47 @@ test("limits external DSpark support to recognizable Flash models", () => {
     validateDsparkModelPath("/models/custom-name.gguf") ?? "",
     /only with a Flash model/,
   );
+  assert.equal(
+    validateDsparkModelPath(
+      `/tmp/ds4/gguf/${DEFAULT_DEEPSEEK_VISION_MODEL_FILE}`,
+    ),
+    null,
+  );
+});
+
+test("matches Vision Experimental models with their DSpark support file", () => {
+  const modelPath = `/tmp/ds4/gguf/${DEFAULT_DEEPSEEK_VISION_MODEL_FILE}`;
+  const supportPath = `/tmp/ds4/gguf/${DEFAULT_DSPARK_VISION_SUPPORT_FILE}`;
+  assert.equal(validateDsparkSupportPath(modelPath, supportPath), null);
+  assert.match(
+    validateDsparkSupportPath(
+      modelPath,
+      "/tmp/ds4/gguf/DeepSeek-V4-Flash-DSpark-support-0731.gguf",
+    ) ?? "",
+    /requires its matching DSpark support/i,
+  );
+  assert.match(
+    validateDsparkSupportPath(
+      "/tmp/ds4/gguf/DeepSeek-V4-Flash-0731.gguf",
+      supportPath,
+    ) ?? "",
+    /only be used with the DeepSeek V4 Flash Vision Experimental/i,
+  );
+});
+
+test("matches Vision Experimental DSpark through the standard model symlink", () => {
+  const ds4Dir = mkdtempSync(join(tmpdir(), "ds4-dspark-link-"));
+  const modelPath = join(ds4Dir, "ds4flash.gguf");
+  const targetPath = join(ds4Dir, DEFAULT_DEEPSEEK_VISION_MODEL_FILE);
+  const supportPath = join(ds4Dir, DEFAULT_DSPARK_VISION_SUPPORT_FILE);
+  try {
+    writeFileSync(targetPath, "model");
+    writeFileSync(supportPath, "support");
+    symlinkSync(DEFAULT_DEEPSEEK_VISION_MODEL_FILE, modelPath);
+    assert.equal(validateDsparkSupportPath(modelPath, supportPath), null);
+  } finally {
+    rmSync(ds4Dir, { recursive: true, force: true });
+  }
 });
 
 test("passes the current ROCm and DSpark flags to ds4-agent", () => {
@@ -131,6 +176,52 @@ test("auto-detects the GLM 5.3 vision sidecar through the default model link", (
 
     assert.equal(cfg.visionPath, visionPath);
     assert.deepEqual(cfg.args.slice(0, 4), ["-m", join(ds4Dir, "ds4flash.gguf"), "--vision", visionPath]);
+  } finally {
+    rmSync(ds4Dir, { recursive: true, force: true });
+  }
+});
+
+test("resolves the DeepSeek Vision Experimental model preset and sidecars", () => {
+  const ds4Dir = mkdtempSync(join(tmpdir(), "ds4-vision-exp-"));
+  const modelPath = join(ds4Dir, "gguf", DEFAULT_DEEPSEEK_VISION_MODEL_FILE);
+  const visionPath = join(ds4Dir, "gguf", DEFAULT_DEEPSEEK_VISION_FILE);
+  const supportPath = join(ds4Dir, "gguf", DEFAULT_DSPARK_VISION_SUPPORT_FILE);
+  try {
+    mkdirSync(join(ds4Dir, "gguf"));
+    writeFileSync(join(ds4Dir, "ds4-server"), "");
+    writeFileSync(modelPath, "model");
+    writeFileSync(visionPath, "vision");
+    writeFileSync(supportPath, "support");
+    symlinkSync("gguf/GLM-5.3-Flash-Q2.gguf", join(ds4Dir, "ds4flash.gguf"));
+
+    const cfg = resolveConfig({
+      ds4Dir,
+      modelPath: "custom-path-is-ignored-for-named-presets.gguf",
+      modelPreset: "deepseek-v4-flash-vision-exp",
+      visionPath: "auto",
+      backend: "auto",
+      host: "127.0.0.1",
+      port: "8000",
+      ctx: "32768",
+      maxTokens: "1024",
+      kvDiskDir: "",
+      kvDiskSpaceMb: "8192",
+      power: "",
+      extraArgs: "",
+      dspark: true,
+      dsparkSupportPath: "",
+      dsparkConfidence: "",
+      restartOnCrash: true,
+    });
+
+    assert.equal(cfg.modelPath, modelPath);
+    assert.equal(cfg.visionPath, visionPath);
+    assert.equal(cfg.dsparkSupportPath, supportPath);
+    assert.deepEqual(
+      cfg.args.slice(0, 6),
+      ["-m", modelPath, "--vision", visionPath, "--host", "127.0.0.1"],
+    );
+    assert.equal(cfg.args.includes("--mtp-model"), true);
   } finally {
     rmSync(ds4Dir, { recursive: true, force: true });
   }

@@ -4,9 +4,12 @@
 
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
-import { inferDwarfStarModelId } from "./model-selection.ts";
+import {
+  inferDwarfStarModelId,
+  normalizeDwarfStarModelPreset,
+} from "./model-selection.ts";
 
 export type BackendChoice = "auto" | "metal" | "cuda" | "rocm" | "cpu";
 
@@ -18,14 +21,53 @@ export const DEFAULT_DSPARK_SUPPORT_FILE =
   "DeepSeek-V4-Flash-DSpark-support-0731.gguf";
 /** Kept as a fallback for older checkouts that predate the 0731 checkpoint. */
 const LEGACY_DSPARK_SUPPORT_FILE = "DeepSeek-V4-Flash-DSpark-support.gguf";
+/** DSpark support file paired with the DeepSeek Vision-Exp checkpoint. */
+export const DEFAULT_DSPARK_VISION_SUPPORT_FILE =
+  "DeepSeek-V4-Flash-Vision-Exp-DSpark-support.gguf";
+/** Current DeepSeek V4 Flash text checkpoint. */
+export const DEFAULT_DEEPSEEK_FLASH_MODEL_FILE =
+  "DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix-0731.gguf";
+/** Kept as a fallback for older checkouts that predate the 0731 checkpoint. */
+const LEGACY_DEEPSEEK_FLASH_MODEL_FILE =
+  "DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix.gguf";
+/** DeepSeek V4 Flash Vision Experimental language checkpoint. */
+export const DEFAULT_DEEPSEEK_VISION_MODEL_FILE =
+  "DeepSeek-V4-Flash-Vision-Exp-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8.gguf";
+/** Sidecar encoder shipped by DeepSeek V4 Flash Vision Experimental. */
+export const DEFAULT_DEEPSEEK_VISION_FILE =
+  "DeepSeek-V4-Flash-Vision-Encoder.gguf";
 /** Sidecar encoder shipped by DwarfStar's GLM 5.3 vision target. */
 export const DEFAULT_GLM53_VISION_FILE =
   "GLM-5.3-Flash-Vision-Encoder.gguf";
+/** Current GLM 5.3 Flash checkpoint. */
+export const DEFAULT_GLM53_MODEL_FILE = "GLM-5.3-Flash-Q2.gguf";
+
+/** Resolve the output directory used by DS4's download_model.sh. */
+export function resolveDwarfStarGgufDir(ds4Dir: string): string {
+  const configured = process.env.DS4_GGUF_DIR?.trim();
+  return configured
+    ? isAbsolute(configured)
+      ? resolve(configured)
+      : resolve(ds4Dir, configured)
+    : join(ds4Dir, "gguf");
+}
+
+/** Return standard GGUF locations, including the legacy checkout-root layout. */
+export function dwarfStarGgufFileCandidates(
+  ds4Dir: string,
+  file: string,
+): string[] {
+  const candidates = [join(resolveDwarfStarGgufDir(ds4Dir), file)];
+  if (!process.env.DS4_GGUF_DIR?.trim()) candidates.push(join(ds4Dir, file));
+  return candidates;
+}
 
 export interface RunSettings {
   ds4Dir: string;
   modelPath: string;
-  /** `auto` detects the standard GLM 5.3 encoder; empty disables vision. */
+  /** Known model selection; `auto` retains the custom/default path behavior. */
+  modelPreset?: string;
+  /** `auto` detects the selected model's standard encoder; empty disables vision. */
   visionPath: string;
   backend: BackendChoice;
   host: string;
@@ -49,7 +91,7 @@ export interface ResolvedRunConfig {
   bin: string | null;
   args: string[];
   modelPath: string | null;
-  /** Absolute path to the GLM 5.3 vision encoder, or null when disabled. */
+  /** Absolute path to the selected model's vision encoder, or null when disabled. */
   visionPath: string | null;
   /** Parsed flags supplied through the free-form extraArgs setting. */
   extraArgs: string[];
@@ -90,9 +132,29 @@ export function parseDsparkConfidence(raw: string): number | null {
  */
 export function validateDsparkModelPath(modelPath: string | null): string | null {
   if (!modelPath) return null;
-  return inferDwarfStarModelId(modelPath) === "deepseek-v4-flash"
+  const modelId = resolvedDwarfStarModelId(modelPath);
+  return modelId === "deepseek-v4-flash" ||
+    modelId === "deepseek-v4-flash-vision-exp"
     ? null
     : `DSpark is supported only with a Flash model. The configured model path is not recognizable as Flash: ${modelPath}. Disable dspark or set modelPath to a supported Flash GGUF.`;
+}
+
+/** Ensure a DSpark support file matches the selected Flash checkpoint. */
+export function validateDsparkSupportPath(
+  modelPath: string | null,
+  supportPath: string | null,
+): string | null {
+  if (!modelPath || !supportPath) return null;
+  const modelId = resolvedDwarfStarModelId(modelPath);
+  const isVisionModel = modelId === "deepseek-v4-flash-vision-exp";
+  const isVisionSupport = /vision(?:[-_. ]*exp)?/i.test(basename(supportPath));
+  if (isVisionModel && !isVisionSupport) {
+    return `The DeepSeek V4 Flash Vision Experimental model requires its matching DSpark support file (${DEFAULT_DSPARK_VISION_SUPPORT_FILE}).`;
+  }
+  if (!isVisionModel && isVisionSupport) {
+    return `The Vision Experimental DSpark support file can only be used with the DeepSeek V4 Flash Vision Experimental model.`;
+  }
+  return null;
 }
 
 /**
@@ -138,6 +200,52 @@ export function resolvedDwarfStarModelId(modelPath: string | null) {
   }
 }
 
+function presetModelCandidates(
+  ds4Dir: string,
+  modelPreset: ReturnType<typeof normalizeDwarfStarModelPreset>,
+): string[] {
+  switch (modelPreset) {
+    case "deepseek-v4-flash": {
+      const defaultLink = join(ds4Dir, "ds4flash.gguf");
+      const candidates = [
+        ...dwarfStarGgufFileCandidates(ds4Dir, DEFAULT_DEEPSEEK_FLASH_MODEL_FILE),
+        ...dwarfStarGgufFileCandidates(ds4Dir, LEGACY_DEEPSEEK_FLASH_MODEL_FILE),
+      ];
+      if (
+        !process.env.DS4_GGUF_DIR?.trim() &&
+        resolvedDwarfStarModelId(defaultLink) === "deepseek-v4-flash"
+      ) {
+        candidates.push(defaultLink);
+      }
+      return [...new Set(candidates)];
+    }
+    case "deepseek-v4-flash-vision-exp":
+      return dwarfStarGgufFileCandidates(ds4Dir, DEFAULT_DEEPSEEK_VISION_MODEL_FILE);
+    case "glm-5.3-flash":
+      return dwarfStarGgufFileCandidates(ds4Dir, DEFAULT_GLM53_MODEL_FILE);
+    case "auto":
+      return [];
+  }
+}
+
+function resolveModelPath(
+  ds4Dir: string | null,
+  modelPreset: string | undefined,
+  configuredPath: string,
+): string | null {
+  if (!ds4Dir) return null;
+  const preset = normalizeDwarfStarModelPreset(modelPreset);
+  if (preset === "auto") {
+    return configuredPath
+      ? isAbsolute(configuredPath)
+        ? configuredPath
+        : join(ds4Dir, configuredPath)
+      : join(ds4Dir, "ds4flash.gguf");
+  }
+  const candidates = presetModelCandidates(ds4Dir, preset);
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0] ?? null;
+}
+
 export function resolveConfig(s: RunSettings): ResolvedRunConfig {
   const ds4Dir = detectDs4Dir(s.ds4Dir);
   const port = parseInt(s.port, 10) || 8000;
@@ -153,25 +261,25 @@ export function resolveConfig(s: RunSettings): ResolvedRunConfig {
   const dspark = s.dspark === true;
   const dsparkConfidence = parseDsparkConfidence(s.dsparkConfidence);
 
-  const modelPath = s.modelPath
-    ? isAbsolute(s.modelPath)
-      ? s.modelPath
-      : join(ds4Dir ?? ".", s.modelPath)
-    : ds4Dir
-      ? join(ds4Dir, "ds4flash.gguf")
-      : null;
+  const modelPath = resolveModelPath(ds4Dir, s.modelPreset, s.modelPath);
 
   const bin = ds4Dir ? join(ds4Dir, "ds4-server") : null;
 
   const visionSetting = (s.visionPath ?? "").trim();
+  const modelId = resolvedDwarfStarModelId(modelPath);
+  const visionCandidates =
+    modelId === "deepseek-v4-flash-vision-exp"
+      ? ds4Dir
+        ? dwarfStarGgufFileCandidates(ds4Dir, DEFAULT_DEEPSEEK_VISION_FILE)
+        : []
+      : modelId === "glm-5.3-flash"
+        ? ds4Dir
+          ? dwarfStarGgufFileCandidates(ds4Dir, DEFAULT_GLM53_VISION_FILE)
+          : []
+        : [];
   const visionPath =
     visionSetting.toLowerCase() === "auto"
-        ? ds4Dir && resolvedDwarfStarModelId(modelPath) === "glm-5.3-flash"
-        ? [
-            join(ds4Dir, "gguf", DEFAULT_GLM53_VISION_FILE),
-            join(ds4Dir, DEFAULT_GLM53_VISION_FILE),
-          ].find((candidate) => existsSync(candidate)) ?? null
-        : null
+        ? visionCandidates.find((candidate) => existsSync(candidate)) ?? null
       : visionSetting
         ? isAbsolute(visionSetting)
           ? visionSetting
@@ -179,18 +287,25 @@ export function resolveConfig(s: RunSettings): ResolvedRunConfig {
         : null;
 
   const dsparkSupportSetting = s.dsparkSupportPath.trim();
+  const dsparkSupportCandidates =
+    modelId === "deepseek-v4-flash-vision-exp"
+      ? ds4Dir
+        ? dwarfStarGgufFileCandidates(ds4Dir, DEFAULT_DSPARK_VISION_SUPPORT_FILE)
+        : []
+      : ds4Dir
+        ? [
+            ...dwarfStarGgufFileCandidates(ds4Dir, DEFAULT_DSPARK_SUPPORT_FILE),
+            ...dwarfStarGgufFileCandidates(ds4Dir, LEGACY_DSPARK_SUPPORT_FILE),
+          ]
+        : [];
   const dsparkSupportPath = ds4Dir
     ? dsparkSupportSetting
       ? isAbsolute(dsparkSupportSetting)
         ? dsparkSupportSetting
         : join(ds4Dir, dsparkSupportSetting)
-      : [
-          join(ds4Dir, "gguf", DEFAULT_DSPARK_SUPPORT_FILE),
-          join(ds4Dir, DEFAULT_DSPARK_SUPPORT_FILE),
-          join(ds4Dir, "gguf", LEGACY_DSPARK_SUPPORT_FILE),
-          join(ds4Dir, LEGACY_DSPARK_SUPPORT_FILE),
-        ].find((candidate) => existsSync(candidate)) ??
-        join(ds4Dir, "gguf", DEFAULT_DSPARK_SUPPORT_FILE)
+      : dsparkSupportCandidates.find((candidate) => existsSync(candidate)) ??
+        dsparkSupportCandidates[0] ??
+        dwarfStarGgufFileCandidates(ds4Dir, DEFAULT_DSPARK_SUPPORT_FILE)[0]
     : null;
 
   const args: string[] = [];
@@ -345,13 +460,13 @@ function extraArgFlag(arg: string): string {
   return equals > 0 ? arg.slice(0, equals) : arg;
 }
 
-/** DS4's GLM 5.3 vision path requires a GPU backend. */
+/** DwarfStar's vision paths require a GPU backend. */
 export function dwarfStarVisionBackendError(
   backend: BackendChoice,
   visionPath: string | null,
 ): string | null {
   return visionPath && backend === "cpu"
-    ? "GLM 5.3 vision is not supported with the CPU backend. Choose auto, metal, cuda, or rocm, or disable vision."
+    ? "DwarfStar vision is not supported with the CPU backend. Choose auto, metal, cuda, or rocm, or disable vision."
     : null;
 }
 

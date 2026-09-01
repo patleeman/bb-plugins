@@ -17,7 +17,7 @@
     "host": "./host.ts"
   },
   "scripts": {
-    "test": "for test_file in src/model-selection.test.ts src/lifecycle-notifications.test.ts src/process-recovery.test.ts src/run-config.test.ts src/agent-configs.test.ts src/request-payload.test.ts src/provider-bridge.test.ts; do node --import ./test-setup.mjs --test \"$test_file\" || exit $?; done",
+    "test": "for test_file in src/model-selection.test.ts src/lifecycle-notifications.test.ts src/process-recovery.test.ts src/run-config.test.ts src/agent-configs.test.ts src/request-payload.test.ts src/model-download.test.ts src/supervisor-policy.test.ts src/provider-bridge.test.ts; do node --import ./test-setup.mjs --test \"$test_file\" || exit $?; done",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

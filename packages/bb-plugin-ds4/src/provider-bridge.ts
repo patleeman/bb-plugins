@@ -71,6 +71,7 @@ import {
   resolveConfig,
   resolvedDwarfStarModelId,
   validateDsparkModelPath,
+  validateDsparkSupportPath,
   type ResolvedRunConfig,
   type RunSettings,
 } from "./run-config.ts";
@@ -81,8 +82,10 @@ import {
   inferDwarfStarModelId,
   isDwarfStarModel,
   isDwarfStarVisionModel,
+  wireDwarfStarModelId,
   type CanonicalDwarfStarModelId,
 } from "./model-selection.ts";
+import { isUsableModelFile } from "./model-download.ts";
 
 const BRIDGE_PLUGIN_ID = "ds4";
 // The server worker has its own legacy supervisor and uses the `ds4` process
@@ -135,6 +138,7 @@ type DwarfStarOptions = {
   instructions?: string;
   ds4Dir: string;
   modelPath: string;
+  modelPreset: string;
   visionPath: string;
   backend: RunSettings["backend"];
   host: string;
@@ -159,6 +163,7 @@ const dwarfStarOptionsSchema = z
     instructions: z.string().optional(),
     ds4Dir: z.string().default(""),
     modelPath: z.string().default(""),
+    modelPreset: z.string().default("auto"),
     visionPath: z.string().default("auto"),
     backend: z.enum(["auto", "metal", "cuda", "rocm", "cpu"]).default("auto"),
     host: z.string().default("127.0.0.1"),
@@ -402,7 +407,20 @@ function sendDeltas(threadId: string, deltas: readonly ThreadDelta[]): void {
 }
 
 function startupModelLabel(model: string | undefined): string {
-  return canonicalModelId(model ?? "") ?? model?.trim() ?? "configured model";
+  switch (canonicalModelId(model ?? "")) {
+    case "deepseek-v4-flash":
+      return "DeepSeek V4 Flash";
+    case "deepseek-v4-flash-vision-exp":
+      return "DeepSeek V4 Flash Vision Experimental";
+    case "deepseek-v4-pro":
+      return "DeepSeek V4 Pro";
+    case "glm-5.2":
+      return "GLM 5.2";
+    case "glm-5.3-flash":
+      return "GLM 5.3 Flash";
+    default:
+      return model?.trim() ?? "configured model";
+  }
 }
 
 export function dwarfStarStartupNoticeDeltas(
@@ -500,6 +518,7 @@ function parseOptions(value: unknown, model: string | undefined): DwarfStarOptio
   const defaults: DwarfStarOptions = {
     ds4Dir: "",
     modelPath: "",
+    modelPreset: "auto",
     visionPath: "auto",
     backend: "auto",
     host: "127.0.0.1",
@@ -539,12 +558,13 @@ function parseExecutionOptions(value: unknown): DwarfStarOptions {
 
 function settingsForOptions(options: DwarfStarOptions, model: string | undefined): RunSettings {
   // DwarfStar loads exactly one GGUF per process. The provider model picker
-  // is only the name of the configured model; it must never override the
-  // modelPath setting or select another downloaded file.
+  // is only a display identity; the settings-selected preset/path determines
+  // which downloaded file is loaded.
   void model;
   return {
     ds4Dir: options.ds4Dir,
     modelPath: options.modelPath,
+    modelPreset: options.modelPreset,
     visionPath: options.visionPath,
     backend: options.backend,
     host: options.host,
@@ -576,12 +596,12 @@ function configError(
   }
   if (!existsSync(cfg.bin)) return `ds4-server was not found at ${cfg.bin}.`;
   if (!cfg.modelPath) return "No DwarfStar model GGUF was found. Set modelPath or download a supported model.";
-  if (!existsSync(cfg.modelPath)) return `Model not found: ${cfg.modelPath}.`;
+  if (!isUsableModelFile(cfg.modelPath)) return `Model not found: ${cfg.modelPath}.`;
   // The settings-selected GGUF is authoritative. Ignore a stale model id
   // from a picker or restored session rather than trying to switch files.
   void requestedModel;
   if (visionRequested && !cfg.visionPath) {
-    return "Image input requires the GLM 5.3 vision encoder. Set visionPath or install the standard encoder beside DS4.";
+    return "Image input requires a vision encoder for the selected model. Set visionPath or install the standard encoder beside DS4.";
   }
   if (cfg.visionPath) {
     const extraArgsError = dwarfStarVisionExtraArgsError(cfg.extraArgs, cfg.visionPath);
@@ -591,10 +611,10 @@ function configError(
     const backendError = dwarfStarVisionBackendError(cfg.backend, cfg.visionPath);
     if (backendError) return backendError;
     const modelId = resolvedDwarfStarModelId(cfg.modelPath);
-    if (modelId !== "glm-5.3-flash") {
-      return "GLM 5.3 vision requires a GLM-5.3-Flash model GGUF.";
+    if (!modelId || !isDwarfStarVisionModel(modelId)) {
+      return "Vision requires a DeepSeek V4 Flash Vision Experimental or GLM 5.3 Flash model GGUF.";
     }
-    if (!existsSync(cfg.visionPath)) return `Vision encoder not found: ${cfg.visionPath}.`;
+    if (!isUsableModelFile(cfg.visionPath)) return `Vision encoder not found: ${cfg.visionPath}.`;
   }
   if (cfg.dspark) {
     const dsparkModelError = validateDsparkModelPath(cfg.modelPath);
@@ -603,8 +623,15 @@ function configError(
   if (cfg.dspark && !cfg.dsparkSupportPath) {
     return "DSpark is enabled but its support GGUF could not be resolved.";
   }
-  if (cfg.dspark && cfg.dsparkSupportPath && !existsSync(cfg.dsparkSupportPath)) {
+  if (cfg.dspark && cfg.dsparkSupportPath && !isUsableModelFile(cfg.dsparkSupportPath)) {
     return `DSpark support GGUF not found: ${cfg.dsparkSupportPath}.`;
+  }
+  if (cfg.dspark) {
+    const supportError = validateDsparkSupportPath(
+      cfg.modelPath,
+      cfg.dsparkSupportPath,
+    );
+    if (supportError) return supportError;
   }
   return null;
 }
@@ -725,6 +752,13 @@ function looksLikeDwarfStar(models: readonly DwarfStarModelInfo[]): boolean {
 
 function modelFamilyFromName(name: string | undefined): CanonicalDwarfStarModelId | null {
   const normalized = name?.trim().toLowerCase() ?? "";
+  if (
+    /deepseek[\s_-]*v4[\s_-]*flash[\s_-]*vision[\s_-]*(?:exp|experimental)/u.test(
+      normalized,
+    )
+  ) {
+    return "deepseek-v4-flash-vision-exp";
+  }
   if (/deepseek[\s_-]*v4[\s_-]*pro/u.test(normalized)) return "deepseek-v4-pro";
   if (/deepseek[\s_-]*v4[\s_-]*flash/u.test(normalized)) return "deepseek-v4-flash";
   if (/glm[\s_-]*5\.3(?:[\s_-]*flash)?/u.test(normalized)) return "glm-5.3-flash";
@@ -746,17 +780,31 @@ export function modelsMatchRequest(
   models: readonly DwarfStarModelInfo[],
   requestedModel: CanonicalDwarfStarModelId | null,
   allowUnknownModel = false,
+  allowVisionExperimentalFlashAlias = false,
 ): boolean {
   if (models.length === 0) return false;
   if (!looksLikeDwarfStar(models)) return false;
   if (requestedModel === null) return allowUnknownModel;
+  const modelIds = models.map((model) => canonicalModelId(model.id));
   const describedFamilies = new Set(
     models
       .map((model) => modelFamilyFromName(model.name))
       .filter((model): model is CanonicalDwarfStarModelId => model !== null),
   );
+  // Older DS4 builds expose the Vision-Exp checkpoint with the generic Flash
+  // name and aliases. When the configured process has a vision sidecar, the
+  // configured model path is authoritative and this is a safe compatibility
+  // shim for those servers.
+  if (
+    allowVisionExperimentalFlashAlias &&
+    requestedModel === "deepseek-v4-flash-vision-exp" &&
+    !describedFamilies.has("deepseek-v4-flash-vision-exp") &&
+    !describedFamilies.has("deepseek-v4-pro") &&
+    modelIds.includes("deepseek-v4-flash")
+  ) {
+    return true;
+  }
   if (describedFamilies.size > 0) return describedFamilies.has(requestedModel);
-  const modelIds = models.map((model) => canonicalModelId(model.id));
   // DS4 advertises both DeepSeek aliases regardless of the loaded GGUF. If
   // metadata is unavailable, an ambiguous list must not make a Pro request
   // look ready when Flash is actually loaded (or vice versa).
@@ -876,7 +924,14 @@ async function waitForReady(
     }
     try {
       const models = await requestModels(endpoint, signal);
-      if (modelsMatchRequest(models, requestedModel, processBacked)) return;
+      if (
+        modelsMatchRequest(
+          models,
+          requestedModel,
+          processBacked,
+          cfg.visionPath !== null,
+        )
+      ) return;
       if (models.length > 0) lastError = `unexpected model list: ${models.map((model) => model.id).join(", ")}`;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
@@ -1132,7 +1187,14 @@ async function startReady(
         await waitForReady(cfg, endpoint, signal, requestedModel, false);
         return readyState(cfg, endpoint, false);
       }
-      if (modelsMatchRequest(models, requestedModel)) {
+      if (
+        modelsMatchRequest(
+          models,
+          requestedModel,
+          false,
+          cfg.visionPath !== null,
+        )
+      ) {
         activeEndpoint = endpoint;
         activeConfigFingerprint = cfg.fingerprint;
         return readyState(cfg, endpoint, false);
@@ -1212,7 +1274,14 @@ async function ensureReady(
         // Confirm the endpoint still serves the requested model before using
         // the cached readiness result for another turn.
         const models = await requestModels(ready.endpoint, signal);
-        if (modelsMatchRequest(models, requestedModel, ready.processBacked)) {
+        if (
+          modelsMatchRequest(
+            models,
+            requestedModel,
+            ready.processBacked,
+            cfg.visionPath !== null,
+          )
+        ) {
           return acquireReadyLease(ready);
         }
         report("DwarfStar is restarting for the configured model.");
@@ -1548,7 +1617,7 @@ async function streamCompletion(
   );
   if (hasImages) {
     if (!isDwarfStarVisionModel(model) || !cfg.visionPath) {
-      throw new Error("Image input requires a GLM 5.3 model with a configured vision encoder.");
+      throw new Error("Image input requires a DeepSeek V4 Flash Vision Experimental or GLM 5.3 Flash model with a configured vision encoder.");
     }
   }
   const tools = openAiTools(session, options);
@@ -1562,7 +1631,7 @@ async function streamCompletion(
     ...session.messages,
   ];
   const request: Record<string, unknown> = {
-    model,
+    model: wireDwarfStarModelId(model),
     messages,
     max_tokens: cfg.maxTokens > 0 ? cfg.maxTokens : 16_384,
     stream: true,
@@ -2292,6 +2361,7 @@ function modelReasoningEfforts(): AvailableModel["supportedReasoningEfforts"] {
 function modelDisplayName(id: string): string {
   switch (id) {
     case "deepseek-v4-flash": return "DeepSeek V4 Flash";
+    case "deepseek-v4-flash-vision-exp": return "DeepSeek V4 Flash Vision Experimental";
     case "deepseek-v4-pro": return "DeepSeek V4 Pro";
     case "glm-5.2": return "GLM 5.2";
     case "glm-5.3-flash": return "GLM 5.3 Flash";

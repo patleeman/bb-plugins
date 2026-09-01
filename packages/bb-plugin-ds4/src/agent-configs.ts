@@ -39,7 +39,9 @@ export interface AgentConfigOpts {
    * is written (previous single-model behavior).
    */
   modelIds?: string[];
-  /** Advertise image input when a GLM 5.3 vision encoder is configured. */
+  /** Optional internal identity used for display/modality metadata. */
+  modelDisplayId?: string;
+  /** Advertise image input when the selected vision encoder is configured. */
   vision?: boolean;
 }
 
@@ -127,6 +129,8 @@ function modelLabel(modelId: string): string {
   switch (modelId) {
     case "deepseek-v4-flash":
       return "DeepSeek V4 Flash";
+    case "deepseek-v4-flash-vision-exp":
+      return "DeepSeek V4 Flash Vision Experimental";
     case "deepseek-v4-pro":
       return "DeepSeek V4 PRO";
     case "glm-5.2":
@@ -168,19 +172,20 @@ function piModelEntry(
   ctx: number,
   maxTokens: number,
   visionEnabled: boolean,
+  displayModelId = modelId,
 ) {
   return {
     id: modelId,
-    name: `${modelLabel(modelId)} (ds4.c local)`,
+    name: `${modelLabel(displayModelId)} (ds4.c local)`,
     api: "openai-completions",
     provider: "ds4",
     baseUrl: `http://127.0.0.1:${port}/v1`,
     reasoning: true,
-    input: inputModalitiesForModel(modelId, visionEnabled),
+    input: inputModalitiesForModel(displayModelId, visionEnabled),
     contextWindow: ctx,
     maxTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    compat: piCompatibilityForModel(modelId),
+    compat: piCompatibilityForModel(displayModelId),
     thinkingLevelMap: {
       off: null,
       minimal: "low",
@@ -201,14 +206,22 @@ function writePi(opts: AgentConfigOpts): ApplyResult {
     : {};
   const providers = ((data.providers as Record<string, unknown>) ?? {});
   const ids = opts.modelIds?.length ? opts.modelIds : [opts.modelId];
+  const displayModelId = opts.modelDisplayId ?? opts.modelId;
   providers["ds4"] = {
     name: "ds4.c local",
     baseUrl: `http://127.0.0.1:${opts.port}/v1`,
     api: "openai-completions",
     apiKey: "dsv4-local",
-    compat: piCompatibilityForModel(opts.modelId),
+    compat: piCompatibilityForModel(displayModelId),
     models: ids.map((id) =>
-      piModelEntry(id, opts.port, opts.ctx, opts.maxTokens, opts.vision === true),
+      piModelEntry(
+        id,
+        opts.port,
+        opts.ctx,
+        opts.maxTokens,
+        opts.vision === true,
+        displayModelId,
+      ),
     ),
   };
   data["providers"] = providers;
@@ -272,12 +285,13 @@ function writeOpencode(opts: AgentConfigOpts): ApplyResult {
     : { $schema: "https://opencode.ai/config.json" };
   const providers = ((data["provider"] as Record<string, unknown>) ?? {});
   const ids = opts.modelIds?.length ? opts.modelIds : [opts.modelId];
+  const displayModelId = opts.modelDisplayId ?? opts.modelId;
   const models: Record<string, unknown> = {};
   for (const id of ids) {
     models[id] = {
-      name: `${modelLabel(id)} (ds4.c local)`,
+      name: `${modelLabel(displayModelId)} (ds4.c local)`,
       limit: { context: opts.ctx, output: opts.maxTokens },
-      ...(opts.vision && isDwarfStarVisionModel(id)
+      ...(opts.vision && isDwarfStarVisionModel(displayModelId)
         ? { modalities: { input: ["text", "image"], output: ["text"] } }
         : {}),
     };
@@ -294,7 +308,7 @@ function writeOpencode(opts: AgentConfigOpts): ApplyResult {
   data["provider"] = providers;
   const agents = ((data["agent"] as Record<string, unknown>) ?? {});
   agents["ds4"] = {
-    description: `${modelLabel(opts.modelId)} served by local ds4-server`,
+    description: `${modelLabel(displayModelId)} served by local ds4-server`,
     model: `ds4/${opts.modelId}`,
     temperature: 0,
   };

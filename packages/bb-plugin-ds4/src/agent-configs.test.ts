@@ -17,13 +17,17 @@ test("keeps DeepSeek reasoning replay compatibility for Flash", () => {
   assert.equal(flash.requiresReasoningContentOnAssistantMessages, true);
 });
 
-test("advertises image input only for configured GLM 5.3 vision", () => {
+test("advertises image input only for configured vision models", () => {
   assert.deepEqual(
     inputModalitiesForModel("glm-5.3-flash", true),
     ["text", "image"],
   );
   assert.deepEqual(
     inputModalitiesForModel("zai/glm-5.3-flash-reasoner", true),
+    ["text", "image"],
+  );
+  assert.deepEqual(
+    inputModalitiesForModel("deepseek-v4-flash-vision-exp", true),
     ["text", "image"],
   );
   assert.deepEqual(inputModalitiesForModel("glm-5.3-flash", false), ["text"]);

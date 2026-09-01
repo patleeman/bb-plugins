@@ -576,9 +576,16 @@ const captures = [
     setup: async (client) => {
       await client.navigate("/settings/plugins/ds4");
       await client.waitForText("Automatic startup");
+      await client.waitForText("Model files");
+      await client.waitForText("Selected model files");
+      await client.waitForText("Download selected model files");
+      await client.waitForText("Language model GGUF");
       await client.waitForText("DS4 checkout directory");
       await client.waitForText("Model GGUF path");
-      await client.waitForText("GLM 5.3 vision encoder path");
+      await client.waitForText("Model");
+      await client.waitForText("SELECTED MODEL");
+      await client.waitForText("MODEL PATH");
+      await client.waitForText("VISION ENCODER");
       await client.waitForText("Context tokens (-c)");
       await client.waitForText("Stop after idle (seconds)");
       await client.waitForText("ds4flash.gguf");
@@ -600,6 +607,13 @@ const captures = [
           throw new Error(`DwarfStar settings still show removed legacy toggle: ${removedLabel}`);
         }
       }
+      await client.evaluate(`(() => {
+        const heading = Array.from(document.querySelectorAll("*"))
+          .find((candidate) => candidate.textContent?.trim() === "Selected model files");
+        if (!heading) throw new Error("DwarfStar model files section not found");
+        heading.scrollIntoView({ block: "center", inline: "nearest" });
+        return true;
+      })()`);
     },
   },
   {

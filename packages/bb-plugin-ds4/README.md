@@ -5,8 +5,9 @@ server for BB. Once the setup is complete, choose **DwarfStar** as a provider
 in BB's model picker. Its provider bridge keeps the first turn open while
 `ds4-server` starts and waits for the configured GGUF before sending the
 request, so the first message does not race server startup. Current DwarfStar
-builds support DeepSeek V4 Flash/PRO, GLM 5.2, and GLM 5.3 Flash GGUFs. GLM
-5.3 Flash vision is supported when its encoder sidecar is available.
+builds support DeepSeek V4 Flash, DeepSeek V4 Flash Vision Experimental,
+DeepSeek V4 PRO, GLM 5.2, and GLM 5.3 Flash GGUFs. DeepSeek Vision Experimental
+and GLM 5.3 Flash vision are supported when their encoder sidecars are available.
 
 ## Staged preview
 
@@ -22,6 +23,10 @@ git clone https://github.com/antirez/ds4 ~/workingdir/ds4
 cd ~/workingdir/ds4 && make
 ./download_model.sh ds4f-q2      # or another target for your hardware
 ./download_model.sh ds4f-dspark  # optional, for Flash DSpark acceleration
+# For DeepSeek V4 Flash Vision Experimental:
+./download_model.sh ds4f-vision-q2
+./download_model.sh ds4f-vision-encoder
+./download_model.sh ds4f-vision-dspark  # optional, matching DSpark support
 # For GLM 5.3 Flash vision:
 ./download_model.sh glm53-q2
 ./download_model.sh glm53-vision
@@ -39,16 +44,28 @@ bb plugin build      # optional: precompile the frontend
 
 - **First-class DwarfStar provider**: choose the `ds4` provider directly. The
   bridge owns the turn lifecycle, waits through model loading, streams text and
-  reasoning deltas, forwards tool calls through BB, and supports GLM 5.3 image
-  input when the vision encoder is configured. It exposes exactly one model:
-  the GGUF configured by `modelPath` (or the default `ds4flash.gguf`).
+  reasoning deltas, forwards tool calls through BB, and supports image input
+  for the selected vision model when its encoder is configured. It exposes
+  exactly one model because DwarfStar loads one GGUF per process.
 - **DwarfStar setup** (Settings → Plugins → DwarfStar): one configured
-  checkout/model, GLM 5.3 vision encoder path, context window, and idle grace
-  period. Advanced runtime tuning remains available below the core setup.
-- **GLM 5.3 Flash vision**: `visionPath=auto` finds the standard
-  `gguf/GLM-5.3-Flash-Vision-Encoder.gguf` sidecar when the configured model is
-  GLM 5.3 Flash. Set an absolute or DS4-relative path to override it, or clear
-  the setting to keep vision disabled.
+  checkout, model selection, vision encoder path, context window, and idle
+  grace period. Advanced runtime tuning remains available below the core setup.
+- **Model downloads**: the Settings → Plugins → DwarfStar page checks the
+  selected language GGUF, vision encoder, and optional DSpark support file and
+  shows whether each is ready, missing, partial, or a custom/manual path. For
+  named model selections, **Download selected model files** runs the matching
+  target from DS4's current `download_model.sh` in the configured checkout.
+  Downloads are explicit and asynchronous; selecting a model never starts an
+  81 GiB download by itself. `Auto` and custom paths remain manual.
+- **Model selection**: choose `DeepSeek V4 Flash`, `DeepSeek V4 Flash Vision
+  Experimental`, or `GLM 5.3 Flash` in the Model setting. `Auto` keeps the
+  advanced `modelPath` behavior for custom GGUFs. A named selection resolves
+  the matching standard GGUF in the DS4 checkout, so selecting it changes the
+  model that DwarfStar loads.
+- **Vision**: `visionPath=auto` finds the standard encoder for the selected
+  vision model (`DeepSeek-V4-Flash-Vision-Encoder.gguf` or
+  `GLM-5.3-Flash-Vision-Encoder.gguf`). Set an absolute or DS4-relative path to
+  override it, or clear the setting to keep vision disabled.
 - **Demand-driven supervision**: the local server starts when a first-class
   `ds4` provider turn begins or `bb ds4 start` is invoked. It stays warm through
   active native completions and stops after the configured idle grace period.
@@ -92,8 +109,8 @@ bb plugin build      # optional: precompile the frontend
     wire API)
   Existing files are merged (never clobbered) and a timestamped
   `.ds4bak-<ts>` copy is kept before each write.
-  When vision is enabled, the generated GLM 5.3 Pi and opencode models
-  advertise both text and image input. DwarfStar's OpenAI Chat, Responses, and
+  When vision is enabled, the generated DeepSeek Vision Experimental and GLM
+  5.3 Pi and opencode models advertise both text and image input. DwarfStar's OpenAI Chat, Responses, and
   Anthropic endpoints accept inline PNG/JPEG image data; remote image URLs and
   file paths are not accepted.
 
@@ -137,8 +154,9 @@ advanced runtime and compatibility controls.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `ds4Dir` | `""` | DS4 checkout dir. Empty = auto-detect (`DS4_DIR`, `~/workingdir/ds4`, `~/ds4`, …) |
-| `modelPath` | `""` | GGUF path; absolute or relative to `ds4Dir`. Empty = `ds4flash.gguf` |
-| `visionPath` | `auto` | GLM 5.3 vision encoder path; auto-detects the standard sidecar, absolute/DS4-relative paths override it, and empty disables vision |
+| `modelPreset` | `auto` | Single model to load: `auto`, `DeepSeek V4 Flash`, `DeepSeek V4 Flash Vision Experimental`, or `GLM 5.3 Flash` |
+| `modelPath` | `""` | Advanced GGUF path override; absolute or relative to `ds4Dir`, used when `modelPreset=auto`. Empty = `ds4flash.gguf` |
+| `visionPath` | `auto` | Selected-model vision encoder path; auto-detects the standard sidecar, absolute/DS4-relative paths override it, and empty disables vision |
 | `ctx` | `250000` | Context tokens (`-c`); tuned for the 2-bit model on a 128 GB Apple Silicon host |
 | `idleTimeoutSeconds` | `300` | How long to keep the server warm after the last matching turn |
 | `backend` | `auto` | `metal` \| `cuda` \| `rocm` \| `cpu` |
@@ -150,7 +168,7 @@ advanced runtime and compatibility controls.
 | `power` | `""` | GPU duty cycle (`--power 1..100`) |
 | `extraArgs` | `""` | Extra flags appended to the command line |
 | `dspark` | `false` | Enable the Flash-only DSpark optimization; requires the matching 0731 support GGUF |
-| `dsparkSupportPath` | `""` | Absolute or DS4-relative support GGUF path; empty auto-detects `gguf/DeepSeek-V4-Flash-DSpark-support-0731.gguf` |
+| `dsparkSupportPath` | `""` | Absolute or DS4-relative support GGUF path; empty auto-detects the matching standard support GGUF |
 | `dsparkConfidence` | `""` | DSpark threshold (`0..1`); empty uses DwarfStar's backend default (Metal `0.6`, CUDA/ROCm `0.7`) |
 | `restartOnCrash` | `true` | Restart after a crash (backoff) |
 
@@ -166,27 +184,30 @@ advanced runtime and compatibility controls.
   `~/.ds4/kvcache` via `/save`.
 - DSpark is opt-in for `ds4-server` and `ds4-agent`, using
   `--mtp-model <support.gguf> --dspark`. For the current Flash checkpoint, download
-  it with `./download_model.sh ds4f-dspark`; the plugin refuses to start while
-  the configured support file is missing or the model path is not recognizable
-  as Flash, so it cannot silently run an incompatible DSpark combination.
-  Leave `dspark=false` for GLM 5.2, DeepSeek V4 PRO, or a baseline run. Older
-  checkouts using the pre-0731 support filename are still detected as a
-  compatibility fallback.
-- GLM 5.3 Flash vision uses a separate encoder GGUF. The plugin passes
-  `--vision <encoder.gguf>` to both `ds4-server` and `ds4-agent`; the latter
-  exposes the native `view_image` tool. The native `ds4_complete` input accepts
+  it with `./download_model.sh ds4f-dspark`; for Vision Experimental use
+  `./download_model.sh ds4f-vision-dspark`. The plugin refuses to start while
+  the configured support file is missing or mismatched, so it cannot silently
+  run an incompatible DSpark combination. Leave `dspark=false` for GLM 5.2,
+  DeepSeek V4 PRO, or a baseline run. Older checkouts using the pre-0731
+  support filename are still detected as a compatibility fallback.
+- DeepSeek V4 Flash Vision Experimental and GLM 5.3 Flash vision use separate
+  encoder GGUFs. The plugin passes `--vision <encoder.gguf>` to both
+  `ds4-server` and `ds4-agent`; the latter exposes the native `view_image` tool.
+  The native `ds4_complete` input accepts
   up to 16 inline PNG/JPEG data-URI images, capped at 16 MiB per image and
   32 MiB combined by the plugin, with prompt and system text capped at 8 MiB
   and all completion content capped at 40 MiB. Serialized completion request
   bodies are capped at 60 MiB, below the upstream 64 MiB HTTP limit. Download
   the sidecar with
-  `./download_model.sh glm53-vision`; `visionPath=auto` then enables it for a
-  GLM 5.3 model in the same checkout. Run `bb ds4 agents apply <target>` only
+  `./download_model.sh glm53-vision` or `./download_model.sh ds4f-vision-encoder`;
+  `visionPath=auto` then enables it for the matching vision model in the same
+  checkout. Run `bb ds4 agents apply <target>` only
   when you explicitly want to refresh an external agent config.
 - The native `ds4_complete` tool also accepts an optional `imageUrls` array of
   inline PNG/JPEG data URIs when the encoder is configured.
-- Vision startup requires a recognizable GLM 5.3 model path (a symlink may
-  carry the recognizable name) and a GPU backend; CPU vision is rejected.
+- Vision startup requires a recognizable DeepSeek Vision Experimental or GLM
+  5.3 model path (a symlink may carry the recognizable name) and a GPU backend;
+  CPU vision is rejected.
   While vision is enabled, model/backend/vision overrides are rejected in
   `extraArgs`, and `--chdir` is rejected so process recovery remains cwd-safe.
   Vision also rejects explicit multi-GPU placement flags because the current
@@ -196,3 +217,9 @@ advanced runtime and compatibility controls.
   host.
 - Start is refused with an actionable error when the model file is missing
   (e.g. while `download_model.sh` is still running).
+- The Settings → Plugins → DwarfStar **Model files** section checks the exact
+  resolved paths before startup. Its download button invokes only fixed
+  upstream targets (`ds4f-q2`, `ds4f-vision-q2`, `ds4f-vision-dspark`,
+  `glm53-q2`, or `glm53-vision`) and reports failures without hiding partial
+  downloads. If `DS4_GGUF_DIR` is set, the plugin follows the downloader's
+  configured output directory for both status checks and startup resolution.

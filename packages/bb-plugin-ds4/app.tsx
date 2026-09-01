@@ -24,6 +24,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function modelPresetLabel(value: unknown): string {
+  switch (value) {
+    case "deepseek-v4-flash":
+    case "DeepSeek V4 Flash":
+      return "DeepSeek V4 Flash";
+    case "deepseek-v4-flash-vision-exp":
+    case "DeepSeek V4 Flash Vision Experimental":
+      return "DeepSeek V4 Flash Vision Experimental";
+    case "glm-5.3-flash":
+    case "GLM 5.3 Flash":
+      return "GLM 5.3 Flash";
+    default:
+      return "Auto (model path)";
+  }
+}
+
 function parseStatus(value: unknown): {
   phase: Ds4LifecyclePhase;
   error: string | null;
@@ -197,10 +213,17 @@ function SetupSection() {
     typeof values?.ds4Dir === "string" && values.ds4Dir
       ? values.ds4Dir
       : "Auto-detected DS4 checkout";
+  const rawModelPreset =
+    typeof values?.modelPreset === "string" ? values.modelPreset : "auto";
+  const rawModelPath =
+    typeof values?.modelPath === "string" ? values.modelPath : "";
   const modelPath =
-    typeof values?.modelPath === "string" && values.modelPath
-      ? values.modelPath
-      : "ds4flash.gguf (default)";
+    rawModelPreset !== "auto"
+      ? rawModelPath
+        ? `${rawModelPath} (ignored while Model is selected)`
+        : "standard GGUF for selected model"
+      : rawModelPath || "ds4flash.gguf (default)";
+  const modelPreset = modelPresetLabel(rawModelPreset);
   const contextWindow =
     typeof values?.ctx === "string" ? values.ctx : "250000";
   const idleTimeout =
@@ -220,7 +243,7 @@ function SetupSection() {
           after the idle grace period.
         </p>
       </div>
-      <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-6">
         <div className="min-w-0">
           <span className="block uppercase tracking-wide">DS4 checkout</span>
           <code className="block truncate font-mono text-foreground" title={ds4Dir}>
@@ -228,7 +251,13 @@ function SetupSection() {
           </code>
         </div>
         <div>
-          <span className="block uppercase tracking-wide">Configured model</span>
+          <span className="block uppercase tracking-wide">Selected model</span>
+          <code className="block truncate font-mono text-foreground" title={modelPreset}>
+            {isLoading ? "…" : modelPreset}
+          </code>
+        </div>
+        <div className="min-w-0">
+          <span className="block uppercase tracking-wide">Model path</span>
           <code className="block truncate font-mono text-foreground" title={modelPath}>
             {isLoading ? "…" : modelPath}
           </code>
@@ -253,10 +282,209 @@ function SetupSection() {
         </div>
       </div>
       <p className="text-xs text-muted-foreground">
-        The model path defaults to <code className="font-mono">ds4flash.gguf</code>.
-        The vision encoder defaults to <code className="font-mono">auto</code> and
-        is picked up after downloading the GLM 5.3 sidecar. Leave it empty to
-        disable vision. Advanced runtime controls remain below.
+        Choose the model in the <code className="font-mono">Model</code> setting.
+        <code className="font-mono">Auto</code> uses the advanced model path;
+        named selections find their standard GGUF in the DS4 checkout. The
+        vision encoder defaults to <code className="font-mono">auto</code> and
+        is picked up when the selected vision model's sidecar is present.
+        Leave it empty to disable vision. Advanced runtime controls remain below.
+      </p>
+    </div>
+  );
+}
+
+type ModelFileState = "present" | "missing" | "partial" | "unavailable";
+
+type ModelFileStatus = {
+  kind: "model" | "vision" | "dspark";
+  label: string;
+  path: string | null;
+  required: boolean;
+  state: ModelFileState;
+  downloadTarget: string | null;
+};
+
+type ModelFilesStatus = {
+  modelDisplayName: string;
+  files: ModelFileStatus[];
+  complete: boolean;
+  downloadable: boolean;
+  downloading: boolean;
+  currentTarget: string | null;
+  error: string | null;
+  message: string;
+};
+
+function modelFileStateLabel(state: ModelFileState): string {
+  switch (state) {
+    case "present":
+      return "Ready";
+    case "partial":
+      return "Partial download";
+    case "missing":
+      return "Missing";
+    case "unavailable":
+      return "Manual path";
+  }
+}
+
+function modelFileStateClass(state: ModelFileState): string {
+  switch (state) {
+    case "present":
+      return "text-emerald-500";
+    case "partial":
+      return "text-amber-500";
+    case "missing":
+      return "text-destructive";
+    case "unavailable":
+      return "text-muted-foreground";
+  }
+}
+
+function modelFileName(path: string | null): string {
+  if (!path) return "No path configured";
+  return path.split(/[\\/]/).pop() || path;
+}
+
+function ModelFilesSection() {
+  const rpc = useRpc<typeof rpcContract>();
+  const realtimeConnection = useRealtimeConnectionState();
+  const { values, isLoading: settingsLoading } = useSettings();
+  const [status, setStatus] = useState<ModelFilesStatus | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const settingsKey = JSON.stringify({
+    ds4Dir: values?.ds4Dir,
+    modelPreset: values?.modelPreset,
+    modelPath: values?.modelPath,
+    visionPath: values?.visionPath,
+    dspark: values?.dspark,
+    dsparkSupportPath: values?.dsparkSupportPath,
+  });
+
+  useEffect(() => {
+    if (realtimeConnection !== "connected" || settingsLoading) return;
+    let cancelled = false;
+    let retryTimer: number | null = null;
+
+    const poll = async () => {
+      try {
+        const next = await rpc.call("modelFiles", null);
+        if (cancelled) return;
+        setStatus(next);
+        setActionError(null);
+        setStatusLoading(false);
+        if (next.downloading) {
+          retryTimer = window.setTimeout(poll, 1_500);
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setStatusLoading(false);
+        setActionError(error instanceof Error ? error.message : String(error));
+        retryTimer = window.setTimeout(poll, 3_000);
+      }
+    };
+
+    setStatusLoading(true);
+    void poll();
+    return () => {
+      cancelled = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
+  }, [realtimeConnection, rpc, settingsKey, settingsLoading, status?.downloading]);
+
+  const download = useCallback(async () => {
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      const next = await rpc.call("downloadModels", null);
+      setStatus(next);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setActionBusy(false);
+    }
+  }, [rpc]);
+
+  const message = actionError
+    ? actionError
+    : status?.message ??
+      (settingsLoading
+        ? "Loading model settings…"
+        : realtimeConnection === "connected"
+          ? "Checking selected model files…"
+          : "Waiting for the BB server connection…");
+
+  return (
+    <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4 text-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="font-medium">Selected model files</p>
+          <p className="mt-1 text-muted-foreground">
+            Check the configured model, vision encoder, and optional DSpark file.
+            Downloads run in the DS4 checkout and do not start automatically.
+          </p>
+        </div>
+        {status ? (
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {status.modelDisplayName}
+          </span>
+        ) : null}
+      </div>
+
+      <div className="space-y-2">
+        {status?.files.map((file) => (
+          <div
+            key={`${file.kind}:${file.path ?? file.label}`}
+            className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border/70 bg-background/30 px-3 py-2 text-xs"
+          >
+            <span className="w-32 shrink-0 font-medium">{file.label}</span>
+            <code
+              className="min-w-0 flex-1 truncate font-mono text-muted-foreground"
+              title={file.path ?? undefined}
+            >
+              {modelFileName(file.path)}
+            </code>
+            <span className={`shrink-0 ${modelFileStateClass(file.state)}`}>
+              {modelFileStateLabel(file.state)}
+            </span>
+          </div>
+        )) ?? (
+          <div className="rounded-md border border-border/70 px-3 py-2 text-xs text-muted-foreground">
+            {statusLoading ? "Checking selected model files…" : "No model status available."}
+          </div>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p
+          className={`min-w-0 flex-1 text-xs ${actionError ? "text-destructive" : "text-muted-foreground"}`}
+          role="status"
+          aria-live={actionError ? "assertive" : "polite"}
+        >
+          {message}
+        </p>
+        <button
+          type="button"
+          className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-state-hover disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={() => void download()}
+          disabled={
+            actionBusy ||
+            status?.downloading === true ||
+            status?.downloadable !== true
+          }
+        >
+          {actionBusy || status?.downloading
+            ? `Downloading${status?.currentTarget ? ` ${status.currentTarget}` : ""}…`
+            : "Download selected model files"}
+        </button>
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        Automatic downloads are available for named model selections. Custom
+        paths and <code className="font-mono">Auto</code> require a manual
+        download; partial files are safe to resume through the upstream script.
       </p>
     </div>
   );
@@ -269,6 +497,13 @@ export default definePluginApp((app) => {
     description:
       "DwarfStar is managed on demand by the configured model.",
     component: SetupSection,
+  });
+  app.slots.settingsSection({
+    id: "model-files",
+    title: "Model files",
+    description:
+      "Check selected GGUF files and download missing standard files from DS4.",
+    component: ModelFilesSection,
   });
   app.slots.experimental_threadHeaderAction({
     id: "lifecycle-bridge",

@@ -27,7 +27,7 @@ export const MAX_COMPLETION_TEXT_BYTES = 8 * 1024 * 1024;
 export const MAX_COMPLETION_CONTENT_BYTES = 40 * 1024 * 1024;
 export const MAX_COMPLETION_REQUEST_BODY_BYTES = 60 * 1024 * 1024;
 
-const SCHEMA_MODEL_ID = "glm-5.3-flash";
+const SCHEMA_MODEL_ID = "deepseek-v4-flash";
 
 const inlineImageDataUriSchema = z
   .string()
@@ -55,7 +55,7 @@ export const completeInputSchema = z
       .array(inlineImageDataUriSchema)
       .max(16, "DwarfStar accepts at most 16 images per request.")
       .default([])
-      .describe("Inline PNG/JPEG data URIs; requires a configured GLM 5.3 vision encoder."),
+      .describe("Inline PNG/JPEG data URIs; requires a configured DwarfStar vision encoder."),
   })
   .superRefine((value, ctx) => {
     const contentSizeError = completionPayloadSizeError(

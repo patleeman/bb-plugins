@@ -34,7 +34,42 @@ test("normalizes DwarfStar SSE data lines", () => {
 test("recognizes the GLM 5.3 vision model family", () => {
   assert.equal(dwarfStarModelSupportsVision("glm-5.3-flash"), true);
   assert.equal(dwarfStarModelSupportsVision("zai/glm-5.3-flash-reasoner"), true);
+  assert.equal(dwarfStarModelSupportsVision("deepseek-v4-flash-vision-exp"), true);
   assert.equal(dwarfStarModelSupportsVision("deepseek-v4-flash"), false);
+});
+
+test("recognizes DeepSeek V4 Flash Vision Experimental by served model name", () => {
+  const models = [
+    {
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash Vision Experimental",
+    },
+  ];
+  assert.equal(
+    modelsMatchRequest(models, "deepseek-v4-flash-vision-exp"),
+    true,
+  );
+  assert.equal(modelsMatchRequest(models, "deepseek-v4-flash"), false);
+});
+
+test("accepts legacy generic Flash discovery for configured Vision Experimental", () => {
+  const legacyModels = [
+    { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+    { id: "deepseek-v4-pro", name: "DeepSeek V4 Flash" },
+  ];
+  assert.equal(
+    modelsMatchRequest(legacyModels, "deepseek-v4-flash-vision-exp"),
+    false,
+  );
+  assert.equal(
+    modelsMatchRequest(
+      legacyModels,
+      "deepseek-v4-flash-vision-exp",
+      false,
+      true,
+    ),
+    true,
+  );
 });
 
 test("shims DS4's legacy GLM 5.2 discovery aliases when named as GLM 5.3", () => {
