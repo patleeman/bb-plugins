@@ -109,6 +109,25 @@ class CdpClient {
     throw new Error(`Timed out waiting for ${JSON.stringify(text)}.\n${bodyText.slice(-1200)}`);
   }
 
+  async waitForInputValue(label, expected, timeoutMs = 15000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const value = await this.evaluate(`(() => {
+        const field = Array.from(document.querySelectorAll("input, textarea"))
+          .find((candidate) => candidate.getAttribute("aria-label") === ${JSON.stringify(label)});
+        return field?.value ?? null;
+      })()`);
+      if (value === expected) return;
+      await sleep(250);
+    }
+    const value = await this.evaluate(`(() => {
+      const field = Array.from(document.querySelectorAll("input, textarea"))
+        .find((candidate) => candidate.getAttribute("aria-label") === ${JSON.stringify(label)});
+      return field?.value ?? null;
+    })()`);
+    throw new Error(`Timed out waiting for ${JSON.stringify(label)} to equal ${JSON.stringify(expected)}; actual value was ${JSON.stringify(value)}`);
+  }
+
   async waitForAriaButton(label, timeoutMs = 15000) {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
@@ -557,11 +576,30 @@ const captures = [
     setup: async (client) => {
       await client.navigate("/settings/plugins/ds4");
       await client.waitForText("Automatic startup");
+      await client.waitForText("DS4 checkout directory");
+      await client.waitForText("Model GGUF path");
+      await client.waitForText("GLM 5.3 vision encoder path");
+      await client.waitForText("Context tokens (-c)");
+      await client.waitForText("Stop after idle (seconds)");
       await client.waitForText("ds4flash.gguf");
-      await client.waitForText("MODEL SELECTOR");
-      await client.waitForText("ds4/");
+      await client.waitForInputValue("Context tokens (-c)", "250000");
       await client.waitForText("metal/cuda/rocm/cpu");
       await client.waitForText("0731 support GGUF");
+      if (await client.hasText("BB model selector")) {
+        throw new Error("DwarfStar settings still show the removed model selector");
+      }
+      if (await client.hasText("BB provider filter")) {
+        throw new Error("DwarfStar settings still show the removed provider filter");
+      }
+      for (const removedLabel of [
+        "Manage Pi/BB provider config",
+        "Manage opencode provider config",
+        "Manage Codex CLI provider config",
+      ]) {
+        if (await client.hasText(removedLabel)) {
+          throw new Error(`DwarfStar settings still show removed legacy toggle: ${removedLabel}`);
+        }
+      }
     },
   },
   {

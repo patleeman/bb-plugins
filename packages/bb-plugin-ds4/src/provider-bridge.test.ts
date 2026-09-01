@@ -10,6 +10,7 @@ import {
 import { experimental_createBridgeJsonRpcTestHarness } from "@get-bb/plugin-sdk/provider-bridge/testing";
 import {
   dwarfStarModelSupportsVision,
+  dwarfStarProcessIdentityMatches,
   dwarfStarStartupNoticeDeltas,
   dwarfStarToolAllowed,
   effectiveDwarfStarEndpoint,
@@ -58,6 +59,48 @@ test("uses DS4 model names to reject the wrong DeepSeek engine", () => {
   ];
   assert.equal(modelsMatchRequest(flashModels, "deepseek-v4-flash"), true);
   assert.equal(modelsMatchRequest(flashModels, "deepseek-v4-pro"), false);
+});
+
+test("does not trust an unverified external server for a custom GGUF", () => {
+  const models = [{ id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" }];
+  assert.equal(modelsMatchRequest(models, null), false);
+  assert.equal(modelsMatchRequest(models, null, true), true);
+});
+
+test("revalidates the process behind cached bridge readiness", () => {
+  const identity = {
+    pid: 42,
+    bin: "/tmp/ds4-server",
+    args: ["-m", "/tmp/model.gguf"],
+    cwd: "/tmp/ds4",
+    processStartedAt: "Mon Sep 1 00:00:00 2026",
+  };
+  const matchesCommand = (pid: number, bin: string, args: string[], cwd?: string | null) =>
+    pid === identity.pid && bin === identity.bin && args.join("\0") === identity.args.join("\0") && cwd === identity.cwd;
+  assert.equal(
+    dwarfStarProcessIdentityMatches(identity, {
+      isAlive: () => true,
+      matchesCommand,
+      startTime: () => identity.processStartedAt,
+    }),
+    true,
+  );
+  assert.equal(
+    dwarfStarProcessIdentityMatches(identity, {
+      isAlive: () => true,
+      matchesCommand,
+      startTime: () => "Mon Sep 1 00:01:00 2026",
+    }),
+    false,
+  );
+  assert.equal(
+    dwarfStarProcessIdentityMatches(identity, {
+      isAlive: () => false,
+      matchesCommand,
+      startTime: () => identity.processStartedAt,
+    }),
+    false,
+  );
 });
 
 test("preserves text and image order in multimodal prompts", async () => {
@@ -121,7 +164,7 @@ test("shows cold DwarfStar startup as a separate transcript work item", () => {
     "ds4-turn-1",
     "glm-5.3-flash",
     "close",
-    "The selected model is ready.",
+    "The configured model is ready.",
   )[0];
 
   assert.equal(threadDeltaSchema.safeParse(open).success, true);
@@ -135,7 +178,7 @@ test("shows cold DwarfStar startup as a separate transcript work item", () => {
   assert.equal(progress?.flush, true);
   assert.equal(close?.kind, "item.close");
   assert.equal(close?.status, "completed");
-  assert.equal(close?.resultText, "The selected model is ready.");
+  assert.equal(close?.resultText, "The configured model is ready.");
   assert.deepEqual(open?.key, progress?.key);
   assert.deepEqual(progress?.key, close?.key);
 });
@@ -179,6 +222,20 @@ test("publishes a provider-bridge handshake and a restorable thread", async () =
     assert.equal(initialize.error, undefined);
     assert.equal((initialize.result as { protocolVersion: number }).protocolVersion, PROVIDER_BRIDGE_PROTOCOL_VERSION);
 
+    harness.sendRequest("models", "model/list", {
+      cwd: dataDir,
+      providerOptions: {
+        configuredModelId: "glm-5.3-flash",
+        configuredModelPath: "/tmp/ds4/GLM-5.3-Flash-Q2.gguf",
+      },
+    });
+    const models = await harness.waitForResponse("models");
+    assert.deepEqual(
+      (models.result as { models: Array<{ id: string }>; selectedOnlyModels: unknown[] }).models.map((model) => model.id),
+      ["glm-5.3-flash"],
+    );
+    assert.deepEqual((models.result as { selectedOnlyModels: unknown[] }).selectedOnlyModels, []);
+
     harness.sendRequest("start", "thread/start", {
       threadId,
       cwd: dataDir,
@@ -204,14 +261,22 @@ test("publishes a provider-bridge handshake and a restorable thread", async () =
   }
 });
 
-test("lists canonical downloaded-model metadata", () => {
-  const models = mapDwarfStarModels("/tmp/workspace");
-  assert.ok(models.length > 0);
-  assert.equal(models.filter((model) => model.isDefault).length, 1);
-  assert.ok(models.every((model) => [
-    "deepseek-v4-flash",
-    "deepseek-v4-pro",
-    "glm-5.2",
+test("lists only the model configured for the DwarfStar provider", () => {
+  const models = mapDwarfStarModels(
+    "/tmp/workspace",
     "glm-5.3-flash",
-  ].includes(model.id)));
+    "/tmp/ds4/GLM-5.3-Flash-Q2.gguf",
+  );
+  assert.deepEqual(models.map((model) => model.id), ["glm-5.3-flash"]);
+  assert.equal(models.filter((model) => model.isDefault).length, 1);
+});
+
+test("uses a stable configured-model entry for custom GGUF names", () => {
+  const models = mapDwarfStarModels(
+    "/tmp/workspace",
+    "dwarfstar-configured",
+    "/tmp/ds4/custom-model.gguf",
+  );
+  assert.deepEqual(models.map((model) => model.id), ["dwarfstar-configured"]);
+  assert.match(models[0]?.description ?? "", /custom-model\.gguf/);
 });

@@ -193,12 +193,16 @@ function DwarfStarLifecycleBanner() {
 
 function SetupSection() {
   const { values, isLoading } = useSettings();
-  const modelSelector =
-    typeof values?.modelSelector === "string" ? values.modelSelector : "ds4/";
-  const providerId =
-    typeof values?.providerId === "string" && values.providerId
-      ? values.providerId
-      : "any provider";
+  const ds4Dir =
+    typeof values?.ds4Dir === "string" && values.ds4Dir
+      ? values.ds4Dir
+      : "Auto-detected DS4 checkout";
+  const modelPath =
+    typeof values?.modelPath === "string" && values.modelPath
+      ? values.modelPath
+      : "ds4flash.gguf (default)";
+  const contextWindow =
+    typeof values?.ctx === "string" ? values.ctx : "250000";
   const idleTimeout =
     typeof values?.idleTimeoutSeconds === "string"
       ? values.idleTimeoutSeconds
@@ -211,22 +215,28 @@ function SetupSection() {
       <div>
         <p className="font-medium">Automatic local model lifecycle</p>
         <p className="mt-1 text-muted-foreground">
-          Configure the DS4 checkout and model above, then choose the matching
-          model in BB&apos;s model picker. DwarfStar starts when a turn uses that
-          model and stops after the last matching turn has been idle.
+          Configure the DS4 checkout and model above. The DwarfStar provider
+          exposes that one model, starts it when a turn begins, and stops it
+          after the idle grace period.
         </p>
       </div>
-      <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-4">
-        <div>
-          <span className="block uppercase tracking-wide">Model selector</span>
-          <code className="font-mono text-foreground">
-            {isLoading ? "…" : modelSelector}
+      <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-5">
+        <div className="min-w-0">
+          <span className="block uppercase tracking-wide">DS4 checkout</span>
+          <code className="block truncate font-mono text-foreground" title={ds4Dir}>
+            {isLoading ? "…" : ds4Dir}
           </code>
         </div>
         <div>
-          <span className="block uppercase tracking-wide">Provider filter</span>
+          <span className="block uppercase tracking-wide">Configured model</span>
+          <code className="block truncate font-mono text-foreground" title={modelPath}>
+            {isLoading ? "…" : modelPath}
+          </code>
+        </div>
+        <div>
+          <span className="block uppercase tracking-wide">Context window</span>
           <code className="font-mono text-foreground">
-            {isLoading ? "…" : providerId}
+            {isLoading ? "…" : `${contextWindow} tokens`}
           </code>
         </div>
         <div>
@@ -243,11 +253,10 @@ function SetupSection() {
         </div>
       </div>
       <p className="text-xs text-muted-foreground">
-        The selector defaults to <code className="font-mono">ds4/</code>, which
-        matches DwarfStar&apos;s DeepSeek V4, GLM 5.2, and GLM 5.3 Flash model ids.
-        The vision encoder defaults to <code className="font-mono">auto</code>:
-        after downloading the GLM 5.3 sidecar, it is picked up from the DS4
-        checkout automatically. Leave it empty to disable vision.
+        The model path defaults to <code className="font-mono">ds4flash.gguf</code>.
+        The vision encoder defaults to <code className="font-mono">auto</code> and
+        is picked up after downloading the GLM 5.3 sidecar. Leave it empty to
+        disable vision. Advanced runtime controls remain below.
       </p>
     </div>
   );
@@ -258,7 +267,7 @@ export default definePluginApp((app) => {
     id: "setup",
     title: "Automatic startup",
     description:
-      "DwarfStar is managed on demand by the model selected in BB.",
+      "DwarfStar is managed on demand by the configured model.",
     component: SetupSection,
   });
   app.slots.experimental_threadHeaderAction({

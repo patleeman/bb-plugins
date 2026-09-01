@@ -127,9 +127,6 @@ test("auto-detects the GLM 5.3 vision sidecar through the default model link", (
       dsparkSupportPath: "",
       dsparkConfidence: "",
       restartOnCrash: true,
-      configurePi: true,
-      configureOpencode: false,
-      configureCodex: false,
     });
 
     assert.equal(cfg.visionPath, visionPath);
@@ -169,9 +166,6 @@ test("keeps the GLM family when a recognizable symlink targets a custom filename
       dsparkSupportPath: "",
       dsparkConfidence: "",
       restartOnCrash: true,
-      configurePi: true,
-      configureOpencode: false,
-      configureCodex: false,
     });
     assert.equal(cfg.visionPath, visionPath);
   } finally {

@@ -11,7 +11,11 @@ import { test } from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Ds4Process } from "./ds4-process.ts";
-import { parseExistingDs4Pid, processMatchesCommand } from "./process-recovery.ts";
+import {
+  parseExistingDs4Pid,
+  processMatchesCommand,
+  providerTurnLeaseIsActive,
+} from "./process-recovery.ts";
 
 async function terminate(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
@@ -31,6 +35,19 @@ test("extracts a conflicting ds4-server PID from process output", () => {
     74058,
   );
   assert.equal(parseExistingDs4Pid("server is loading"), null);
+});
+
+test("expires provider turn leases and rejects PID reuse", () => {
+  const lease = {
+    leaseId: "lease-1",
+    pid: 123,
+    expiresAt: 2_000,
+    processStartedAt: "start-a",
+  };
+  assert.equal(providerTurnLeaseIsActive(lease, 1_000, "start-a"), true);
+  assert.equal(providerTurnLeaseIsActive(lease, 2_000, "start-a"), false);
+  assert.equal(providerTurnLeaseIsActive(lease, 1_000, "start-b"), false);
+  assert.equal(providerTurnLeaseIsActive(lease, 1_000, null), true);
 });
 
 test("does not terminate an externally-owned adopted server", async () => {
@@ -76,9 +93,8 @@ test("does not adopt a same-named server from another checkout", async () => {
     chmodSync(binary, 0o755);
   }
 
-  const child = spawn("ds4-server", ["60"], {
+  const child = spawn(join(firstCheckout, "ds4-server"), ["60"], {
     cwd: firstCheckout,
-    env: { ...process.env, PATH: `${firstCheckout}:${process.env.PATH ?? ""}` },
     stdio: "ignore",
   });
   try {

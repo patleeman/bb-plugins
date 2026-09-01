@@ -28,6 +28,8 @@ const PROCESS_PATH_FLAGS = new Set([
   "--chdir",
 ]);
 
+export const PROVIDER_TURN_LEASE_RELEASE_RETENTION_MS = 10_000;
+
 export interface Ds4ProcessRecord {
   pid: number;
   fingerprint: string;
@@ -41,8 +43,97 @@ export interface Ds4ProcessRecord {
   processStartedAt?: string;
 }
 
+export interface Ds4ProviderTurnLease {
+  leaseId: string;
+  pid: number;
+  expiresAt: number;
+  processStartedAt?: string;
+  releasedAt?: number;
+}
+
+export function providerTurnLeaseIsActive(
+  lease: Ds4ProviderTurnLease,
+  now = Date.now(),
+  observedProcessStartedAt: string | null = null,
+): boolean {
+  return (
+    lease.expiresAt > now &&
+    (!lease.processStartedAt ||
+      !observedProcessStartedAt ||
+      lease.processStartedAt === observedProcessStartedAt)
+  );
+}
+
 export function processRecordPath(pluginId: string): string {
   return join(homedir(), ".bb", "plugins", pluginId, "server.json");
+}
+
+export function providerTurnLeasePath(pluginId: string): string {
+  return join(homedir(), ".bb", "plugins", pluginId, "provider-lease.json");
+}
+
+export function readProviderTurnLease(pluginId: string): Ds4ProviderTurnLease | null {
+  try {
+    const path = providerTurnLeasePath(pluginId);
+    if (!existsSync(path)) return null;
+    const value = JSON.parse(readFileSync(path, "utf8")) as Partial<Ds4ProviderTurnLease>;
+    if (
+      typeof value.leaseId !== "string" ||
+      value.leaseId.length === 0 ||
+      typeof value.pid !== "number" ||
+      !Number.isInteger(value.pid) ||
+      value.pid <= 0 ||
+      typeof value.expiresAt !== "number" ||
+      !Number.isFinite(value.expiresAt)
+    ) {
+      return null;
+    }
+    return {
+      leaseId: value.leaseId,
+      pid: value.pid,
+      expiresAt: value.expiresAt,
+      ...(typeof value.processStartedAt === "string"
+        ? { processStartedAt: value.processStartedAt }
+        : {}),
+      ...(typeof value.releasedAt === "number" && Number.isFinite(value.releasedAt)
+        ? { releasedAt: value.releasedAt }
+        : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function writeProviderTurnLease(
+  pluginId: string,
+  lease: Ds4ProviderTurnLease,
+): void {
+  try {
+    const path = providerTurnLeasePath(pluginId);
+    const directory = join(homedir(), ".bb", "plugins", pluginId);
+    mkdirSync(directory, { recursive: true });
+    const temporaryPath = join(directory, `provider-lease.json.tmp-${process.pid}`);
+    writeFileSync(temporaryPath, `${JSON.stringify(lease)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    renameSync(temporaryPath, path);
+  } catch {
+    // The lease is defensive coordination metadata and must never block a turn.
+  }
+}
+
+export function clearProviderTurnLease(pluginId: string, leaseId?: string): void {
+  const path = providerTurnLeasePath(pluginId);
+  try {
+    if (leaseId !== undefined) {
+      const lease = readProviderTurnLease(pluginId);
+      if (lease && lease.leaseId !== leaseId) return;
+    }
+    unlinkSync(path);
+  } catch {
+    // The lease may already be gone or expired.
+  }
 }
 
 export function readProcessRecord(pluginId: string): Ds4ProcessRecord | null {

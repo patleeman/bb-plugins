@@ -10,6 +10,9 @@ import { inferDwarfStarModelId } from "./model-selection.ts";
 
 export type BackendChoice = "auto" | "metal" | "cuda" | "rocm" | "cpu";
 
+/** Practical default for the 2-bit models on a 128 GB Apple Silicon host. */
+export const DEFAULT_DWARFSTAR_CONTEXT_TOKENS = 250_000;
+
 /** Current support checkpoint shipped by DwarfStar's ds4f-dspark target. */
 export const DEFAULT_DSPARK_SUPPORT_FILE =
   "DeepSeek-V4-Flash-DSpark-support-0731.gguf";
@@ -36,10 +39,8 @@ export interface RunSettings {
   dspark: boolean;
   dsparkSupportPath: string;
   dsparkConfidence: string;
+  /** Supervisor-only setting; it does not affect the ds4-server command line. */
   restartOnCrash: boolean;
-  configurePi: boolean;
-  configureOpencode: boolean;
-  configureCodex: boolean;
 }
 
 export interface ResolvedRunConfig {
@@ -140,7 +141,7 @@ export function resolvedDwarfStarModelId(modelPath: string | null) {
 export function resolveConfig(s: RunSettings): ResolvedRunConfig {
   const ds4Dir = detectDs4Dir(s.ds4Dir);
   const port = parseInt(s.port, 10) || 8000;
-  const ctx = parseInt(s.ctx, 10) || 100000;
+  const ctx = parseInt(s.ctx, 10) || DEFAULT_DWARFSTAR_CONTEXT_TOKENS;
   const maxTokens = parseInt(s.maxTokens, 10) || 0;
   const backend: BackendChoice =
     s.backend === "metal" ||

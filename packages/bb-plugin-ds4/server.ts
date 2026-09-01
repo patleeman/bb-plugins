@@ -22,10 +22,14 @@ import {
   processMatchesCommand,
   processStartTime,
   processWorkingDirectory,
+  PROVIDER_TURN_LEASE_RELEASE_RETENTION_MS,
+  providerTurnLeaseIsActive,
+  readProviderTurnLease,
   readProcessRecord,
   writeProcessRecord,
 } from "./src/process-recovery";
 import {
+  DEFAULT_DWARFSTAR_CONTEXT_TOKENS,
   resolveConfig,
   detectDs4Dir,
   dwarfStarVisionBackendError,
@@ -41,12 +45,6 @@ import {
   type RunSettings,
 } from "./src/run-config";
 import {
-  scanModelCatalog,
-  catalogPathFor,
-  advertisedModelIds,
-  type CatalogEntry,
-} from "./src/model-catalog";
-import {
   allStatuses,
   applyTargets,
   statusFor,
@@ -57,13 +55,9 @@ import {
   persistentLogPath,
 } from "./src/persistent-log";
 import {
-  inferDwarfStarModelId,
-  canonicalModelId,
-  CANONICAL_MODEL_ORDER,
+  CONFIGURED_DWARFSTAR_MODEL_ID,
   isDwarfStarModel,
-  matchesModelSelection,
   parseIdleTimeoutMs,
-  type CanonicalDwarfStarModelId,
 } from "./src/model-selection";
 import {
   buildDwarfStarChatRequest,
@@ -85,6 +79,7 @@ const healthSchema = z.object({
   models: z.array(z.string()),
   at: z.number(),
 });
+const DS4_PROVIDER_BRIDGE_PROCESS_RECORD_ID = "ds4-provider-bridge";
 const configSchema = z.object({
   ds4Dir: z.string().nullable(),
   bin: z.string().nullable(),
@@ -115,13 +110,8 @@ const statusSchema = z.object({
   activeEndpoint: z.object({ host: z.string(), port: z.number() }).nullable(),
   config: configSchema,
   settings: z.object({
-    providerId: z.string(),
-    modelSelector: z.string(),
     idleTimeoutSeconds: z.string(),
     restartOnCrash: z.boolean(),
-    configurePi: z.boolean(),
-    configureOpencode: z.boolean(),
-    configureCodex: z.boolean(),
     maxTokens: z.string(),
   }),
   lastError: z.string().nullable(),
@@ -203,13 +193,6 @@ const ADOPTED_HEALTH_GRACE_MS = 120_000;
 
 type ServerEndpoint = { host: string; port: number };
 
-const CANONICAL_DWARFSTAR_MODEL_IDS = [
-  "deepseek-v4-flash",
-  "deepseek-v4-pro",
-  "glm-5.2",
-  "glm-5.3-flash",
-] as const;
-
 const DS4_PROVIDER_ID = "ds4";
 const DS4_PROVIDER_TOOLS = ["read", "edit", "bash"] as const;
 const MAX_DS4_READ_BYTES = 2 * 1024 * 1024;
@@ -221,18 +204,31 @@ const DEFAULT_DS4_BASH_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_DS4_BASH_TIMEOUT_MS = 10 * 60 * 1000;
 const DS4_BASH_POLL_MS = 100;
 
-function preferredDwarfStarModel(
-  models: readonly string[],
-  modelPath: string | null = null,
-): string {
-  const configuredModel = inferDwarfStarModelId(modelPath);
-  if (configuredModel) return configuredModel;
-  const normalized = new Set(models.map((model) => model.trim().toLowerCase()));
-  return (
-    CANONICAL_DWARFSTAR_MODEL_IDS.find((model) => normalized.has(model)) ??
-    models.find(isDwarfStarModel) ??
-    "deepseek-v4-flash"
-  );
+function dwarfStarModelDisplayName(modelId: string): string {
+  switch (modelId) {
+    case "deepseek-v4-flash": return "DeepSeek V4 Flash";
+    case "deepseek-v4-pro": return "DeepSeek V4 Pro";
+    case "glm-5.2": return "GLM 5.2";
+    case "glm-5.3-flash": return "GLM 5.3 Flash";
+    default: return "DwarfStar (configured model)";
+  }
+}
+
+function dwarfStarProviderModel(modelId: string) {
+  return {
+    id: modelId,
+    displayName: dwarfStarModelDisplayName(modelId),
+    description: "The GGUF configured in DwarfStar settings.",
+    supportedReasoningEfforts: [
+      { reasoningEffort: "none" as const, description: "None" },
+      { reasoningEffort: "low" as const, description: "Low" },
+      { reasoningEffort: "medium" as const, description: "Medium" },
+      { reasoningEffort: "high" as const, description: "High" },
+      { reasoningEffort: "max" as const, description: "Maximum" },
+    ],
+    defaultReasoningEffort: modelId.startsWith("glm-") ? "high" as const : "none" as const,
+    isDefault: true,
+  };
 }
 
 export default async function plugin(bb: BbPluginApi) {
@@ -259,19 +255,11 @@ export default async function plugin(bb: BbPluginApi) {
         "Use auto to detect gguf/GLM-5.3-Flash-Vision-Encoder.gguf for a GLM 5.3 Flash model; set an absolute or DS4-relative path to override, or leave empty to disable vision.",
       default: "auto",
     },
-    modelSelector: {
+    ctx: {
       type: "string",
-      label: "BB model selector",
-      description:
-        "Exact model id or namespace used in BB's model picker. The default `ds4/` matches DwarfStar's DeepSeek V4 and GLM model ids.",
-      default: "ds4/",
-    },
-    providerId: {
-      type: "string",
-      label: "BB provider filter (optional)",
-      description:
-        "Leave empty to match the model across providers; set this only when the same model id is used elsewhere.",
-      default: "",
+      label: "Context tokens (-c)",
+      description: "Server context window AND the client-side contextWindow written to agent configs. Defaults to 250000 for the 2-bit model on a 128 GB Apple Silicon host. Restarts the server on change.",
+      default: String(DEFAULT_DWARFSTAR_CONTEXT_TOKENS),
     },
     idleTimeoutSeconds: {
       type: "string",
@@ -289,12 +277,6 @@ export default async function plugin(bb: BbPluginApi) {
     },
     host: { type: "string", label: "Bind host", default: "127.0.0.1" },
     port: { type: "string", label: "Port", default: "8000" },
-    ctx: {
-      type: "string",
-      label: "Context tokens (-c)",
-      description: "Server context window AND the client-side contextWindow written to agent configs. Restarts the server on change.",
-      default: "100000",
-    },
     maxTokens: {
       type: "string",
       label: "Default max output tokens (-n)",
@@ -350,22 +332,6 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Restart automatically after a crash",
       default: true,
     },
-    configurePi: {
-      type: "boolean",
-      label: "Manage Pi/BB provider config",
-      description: "Included when applying agent configs (pi/bb agents).",
-      default: true,
-    },
-    configureOpencode: {
-      type: "boolean",
-      label: "Manage opencode provider config",
-      default: false,
-    },
-    configureCodex: {
-      type: "boolean",
-      label: "Manage Codex CLI provider config",
-      default: false,
-    },
   });
 
   const proc = new Ds4Process(LOG_RING_LIMIT);
@@ -373,113 +339,15 @@ export default async function plugin(bb: BbPluginApi) {
   let lastError: string | null = null;
   type StoredSettings = Awaited<ReturnType<typeof settings.get>>;
   let latestSettings: StoredSettings = await settings.get();
-  const demandThreads = new Set<string>();
   let inFlightCompletions = 0;
   let lastDemandAt: number | null = null;
 
-  // --- model catalog + picker-driven model switching -----------------------
-  // The model picker lists every downloaded DwarfStar model. Selecting one
-  // stores a persisted override (the plugin cannot write its own settings)
-  // and restarts the server with that model's GGUF. An explicit modelPath
-  // setting always wins over the override.
-  const kv = bb.storage.kv;
-  const MODEL_OVERRIDE_KEY = "modelOverride";
-  let modelOverride: CanonicalDwarfStarModelId | null = null;
-  try {
-    const storedOverride = await kv.get<string>(MODEL_OVERRIDE_KEY);
-    modelOverride =
-      storedOverride &&
-      (CANONICAL_MODEL_ORDER as string[]).includes(storedOverride)
-        ? (storedOverride as CanonicalDwarfStarModelId)
-        : null;
-  } catch {
-    modelOverride = null;
-  }
-  let catalogCache: { at: number; entries: CatalogEntry[] } | null = null;
-
-  function catalogNow(): CatalogEntry[] {
-    const now = Date.now();
-    if (catalogCache && now - catalogCache.at < 10_000) {
-      return catalogCache.entries;
-    }
-    const entries = scanModelCatalog(detectDs4Dir(latestSettings.ds4Dir ?? ""));
-    catalogCache = { at: now, entries };
-    return entries;
-  }
-
-  function effectiveSettings(s: RunSettings): RunSettings {
-    if (!modelOverride || s.modelPath) return s;
-    const path = catalogPathFor(catalogNow(), modelOverride);
-    return path ? { ...s, modelPath: path } : s;
-  }
-
   function primaryModelId(cfg: ResolvedRunConfig): string {
-    return (
-      resolvedDwarfStarModelId(cfg.modelPath) ??
-      preferredDwarfStarModel(lastHealth?.models ?? [], cfg.modelPath)
-    );
+    return resolvedDwarfStarModelId(cfg.modelPath) ?? CONFIGURED_DWARFSTAR_MODEL_ID;
   }
 
   function advertisedIds(cfg: ResolvedRunConfig): string[] {
-    return advertisedModelIds(
-      catalogNow(),
-      cfg.modelPath,
-      resolvedDwarfStarModelId(cfg.modelPath),
-    );
-  }
-
-  async function refreshConfiguredAgentConfigs(
-    cfg: ResolvedRunConfig,
-    logPrefix = "agent config",
-  ): Promise<void> {
-    const s = await currentSettings();
-    const targets = (["pi", "opencode", "codex"] as AgentTargetId[]).filter(
-      (t) =>
-        t === "pi"
-          ? s.configurePi
-          : t === "opencode"
-            ? s.configureOpencode
-            : s.configureCodex,
-    );
-    if (!targets.length) return;
-    const results = applyTargets(targets, {
-      port: cfg.port,
-      ctx: cfg.ctx,
-      maxTokens: cfg.maxTokens,
-      modelId: primaryModelId(cfg),
-      modelIds: advertisedIds(cfg),
-      vision: visionEnabled(cfg),
-    });
-    for (const r of results) {
-      if (r.ok) bb.log.info(`${logPrefix}: ${r.message}`);
-      else bb.log.error(`${logPrefix} failed: ${r.message}`);
-    }
-  }
-
-  let modelSwitch: Promise<void> = Promise.resolve();
-
-  function syncSelectedModel(selectedModel: string): Promise<void> {
-    const run = async () => {
-      const desired = canonicalModelId(selectedModel);
-      if (!desired) return;
-      const cfg = await currentConfig();
-      if (resolvedDwarfStarModelId(cfg.modelPath) === desired) return;
-      const path = catalogPathFor(catalogNow(), desired);
-      if (!path) return;
-      modelOverride = desired;
-      await kv.set(MODEL_OVERRIDE_KEY, desired);
-      bb.log.info(`switching model to ${desired} (${path})`);
-      await stopProc({ terminateExternal: true });
-      await ensureStarted();
-      await refreshConfiguredAgentConfigs(
-        await currentConfig(),
-        "model-switch agent config",
-      );
-      void publishState();
-    };
-    const next = modelSwitch.then(run, run);
-    modelSwitch = next.catch(() => undefined);
-    return next;
+    return [primaryModelId(cfg)];
   }
 
   let startPromise: Promise<void> | null = null;
@@ -523,7 +391,7 @@ export default async function plugin(bb: BbPluginApi) {
       backend: (s.backend ?? "auto") as BackendChoice,
       host: s.host ?? "127.0.0.1",
       port: s.port ?? "8000",
-      ctx: s.ctx ?? "100000",
+      ctx: s.ctx ?? String(DEFAULT_DWARFSTAR_CONTEXT_TOKENS),
       maxTokens: s.maxTokens ?? "384000",
       kvDiskDir: s.kvDiskDir ?? "",
       kvDiskSpaceMb: s.kvDiskSpaceMb ?? "8192",
@@ -533,9 +401,6 @@ export default async function plugin(bb: BbPluginApi) {
       dsparkSupportPath: s.dsparkSupportPath ?? "",
       dsparkConfidence: s.dsparkConfidence ?? "",
       restartOnCrash: s.restartOnCrash ?? true,
-      configurePi: s.configurePi ?? true,
-      configureOpencode: s.configureOpencode ?? false,
-      configureCodex: s.configureCodex ?? false,
     };
   }
 
@@ -543,39 +408,49 @@ export default async function plugin(bb: BbPluginApi) {
     return toRunSettings(await settings.get());
   }
 
-  function selectedModelIsDs4(providerId: string, model: string): boolean {
-    return matchesModelSelection(
-      { providerId, model },
-      latestSettings.providerId ?? "",
-      latestSettings.modelSelector ?? "ds4/",
-    );
-  }
-
   function idleTimeoutMs(): number {
     return parseIdleTimeoutMs(latestSettings.idleTimeoutSeconds ?? "300");
   }
 
-  function acquireDemand(threadId: string): void {
-    demandThreads.add(threadId);
-    lastDemandAt = Date.now();
+  function providerTurnLeaseSnapshot(): {
+    active: boolean;
+    releasedAt: number | null;
+  } {
+    const lease = readProviderTurnLease(bb.pluginId);
+    if (!lease) {
+      return { active: false, releasedAt: null };
+    }
+    const now = Date.now();
+    const releasedAt =
+      typeof lease.releasedAt === "number" &&
+      lease.releasedAt <= now &&
+      now - lease.releasedAt <= PROVIDER_TURN_LEASE_RELEASE_RETENTION_MS
+        ? lease.releasedAt
+        : null;
+    if (!isProcessAlive(lease.pid)) {
+      return { active: false, releasedAt };
+    }
+    const observedStart = processStartTime(lease.pid);
+    return {
+      active: providerTurnLeaseIsActive(lease, now, observedStart),
+      releasedAt,
+    };
   }
 
-  function releaseAllDemandFor(threadId: string): void {
-    if (!demandThreads.delete(threadId)) return;
-    if (demandThreads.size === 0) lastDemandAt = Date.now();
+  function hasActiveProviderTurnLease(): boolean {
+    return providerTurnLeaseSnapshot().active;
   }
 
-  function releaseAllDemand(): void {
-    demandThreads.clear();
-    lastDemandAt = proc.isRunning ? Date.now() : null;
+  function hasCompletionDemand(): boolean {
+    return inFlightCompletions > 0;
   }
 
-  function hasActiveDemand(): boolean {
-    return demandThreads.size > 0 || inFlightCompletions > 0;
+  function hasStopVeto(): boolean {
+    return hasCompletionDemand() || hasActiveProviderTurnLease();
   }
 
   async function currentConfig(): Promise<ResolvedRunConfig> {
-    return resolveConfig(effectiveSettings(await currentSettings()));
+    return resolveConfig(await currentSettings());
   }
 
   type WorkspaceToolContext = {
@@ -786,84 +661,83 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
-  bb.providers.register({
-    id: DS4_PROVIDER_ID,
-    displayName: "DwarfStar",
-    icon: "./assets/icon.svg",
-    strings: {
-      signInHint: "DwarfStar runs locally on this host; configure the DS4 checkout and model in Settings.",
-      expiredHint: "DwarfStar is local. Check the DS4 checkout, model path, and server logs.",
-      installUrl: "https://github.com/antirez/ds4",
-      planModeCopy: "DwarfStar plan mode",
-      iconTint: { light: "#475569", dark: "#cbd5e1" },
-    },
-    maintenance: { health: true, usage: false, installation: false },
-    capabilities: {
-      supportsServiceTier: false,
-      supportsNativeUserQuestion: false,
-      fork: "none",
-      supportsManualCompaction: false,
-      supportsThreadArchive: false,
-      supportsThreadRename: false,
-      // The bridge does not have an approval interaction channel. Claim only
-      // the mode whose policy it can actually enforce.
-      permissionModes: ["full"],
-      reasoningLevels: ["none", "low", "medium", "high", "max"],
-    },
-    reasoningLevels: [
-      { id: "none", label: "None" },
-      { id: "low", label: "Low" },
-      { id: "medium", label: "Medium" },
-      { id: "high", label: "High" },
-      { id: "max", label: "Maximum" },
-    ],
-    models: {
-      scope: "workspace",
-      fallback: CANONICAL_DWARFSTAR_MODEL_IDS.map((id, index) => ({
-        id,
-        displayName: id === "deepseek-v4-flash"
-          ? "DeepSeek V4 Flash"
-          : id === "deepseek-v4-pro"
-            ? "DeepSeek V4 Pro"
-            : id === "glm-5.2"
-              ? "GLM 5.2"
-              : "GLM 5.3 Flash",
-        description: "Local DwarfStar model",
-        supportedReasoningEfforts: [
-          { reasoningEffort: "none" as const, description: "None" },
-          { reasoningEffort: "low" as const, description: "Low" },
-          { reasoningEffort: "medium" as const, description: "Medium" },
-          { reasoningEffort: "high" as const, description: "High" },
-          { reasoningEffort: "max" as const, description: "Maximum" },
-        ],
-        defaultReasoningEffort: id.startsWith("glm-") ? "high" : "none",
-        isDefault: index === 0,
-      })),
-    },
-    composerActions: ["plan"],
-    experimental_visibility: "always",
-    deriveProviderOptions(context) {
-      const s = context.settings;
-      return {
-        ds4Dir: String(s.ds4Dir ?? ""),
-        modelPath: String(s.modelPath ?? ""),
-        visionPath: String(s.visionPath ?? "auto"),
-        backend: String(s.backend ?? "auto"),
-        host: String(s.host ?? "127.0.0.1"),
-        port: String(s.port ?? "8000"),
-        ctx: String(s.ctx ?? "100000"),
-        maxTokens: String(s.maxTokens ?? "384000"),
-        kvDiskDir: String(s.kvDiskDir ?? "/tmp/ds4-kv"),
-        kvDiskSpaceMb: String(s.kvDiskSpaceMb ?? "8192"),
-        power: String(s.power ?? ""),
-        extraArgs: String(s.extraArgs ?? ""),
-        dspark: s.dspark === true,
-        dsparkSupportPath: String(s.dsparkSupportPath ?? ""),
-        dsparkConfidence: String(s.dsparkConfidence ?? ""),
-        idleTimeoutSeconds: String(s.idleTimeoutSeconds ?? "300"),
-      };
-    },
-  });
+  function configuredProviderModel(): { id: string } {
+    // Provider declarations are shared with remote workspace hosts. The
+    // server worker must not publish a host-local GGUF path or a family
+    // inferred from a symlink that may resolve differently on the target
+    // host. The bridge resolves the real settings for turns on that host.
+    return { id: CONFIGURED_DWARFSTAR_MODEL_ID };
+  }
+
+  function providerDeclaration(model = configuredProviderModel()) {
+    return {
+      id: DS4_PROVIDER_ID,
+      displayName: "DwarfStar",
+      icon: "./assets/icon.svg",
+      strings: {
+        signInHint: "DwarfStar runs locally on this host; configure the DS4 checkout and model in Settings.",
+        expiredHint: "DwarfStar is local. Check the DS4 checkout, model path, and server logs.",
+        installUrl: "https://github.com/antirez/ds4",
+        planModeCopy: "DwarfStar plan mode",
+        iconTint: { light: "#475569", dark: "#cbd5e1" },
+      },
+      maintenance: { health: true, usage: false, installation: false },
+      capabilities: {
+        supportsServiceTier: false,
+        supportsNativeUserQuestion: false,
+        fork: "none" as const,
+        supportsManualCompaction: false,
+        supportsThreadArchive: false,
+        supportsThreadRename: false,
+        // The bridge does not have an approval interaction channel. Claim only
+        // the mode whose policy it can actually enforce.
+        permissionModes: ["full" as const],
+        reasoningLevels: ["none", "low", "medium", "high", "max"] as const,
+      },
+      reasoningLevels: [
+        { id: "none", label: "None" },
+        { id: "low", label: "Low" },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+        { id: "max", label: "Maximum" },
+      ],
+      models: {
+        scope: "workspace" as const,
+        // DwarfStar loads one GGUF per process. The provider model is the
+        // modelPath setting; changing the picker must not silently switch the
+        // server to another downloaded file.
+        fallback: [dwarfStarProviderModel(model.id)],
+      },
+      composerActions: ["plan" as const],
+      experimental_bridgeOptions: {
+        configuredModelId: model.id,
+      },
+      experimental_visibility: "always" as const,
+      deriveProviderOptions(context: { settings: Readonly<Record<string, unknown>> }) {
+        const s = context.settings;
+        return {
+          ds4Dir: String(s.ds4Dir ?? ""),
+          modelPath: String(s.modelPath ?? ""),
+          visionPath: String(s.visionPath ?? "auto"),
+          backend: String(s.backend ?? "auto"),
+          host: String(s.host ?? "127.0.0.1"),
+          port: String(s.port ?? "8000"),
+          ctx: String(s.ctx ?? DEFAULT_DWARFSTAR_CONTEXT_TOKENS),
+          maxTokens: String(s.maxTokens ?? "384000"),
+          kvDiskDir: String(s.kvDiskDir ?? "/tmp/ds4-kv"),
+          kvDiskSpaceMb: String(s.kvDiskSpaceMb ?? "8192"),
+          power: String(s.power ?? ""),
+          extraArgs: String(s.extraArgs ?? ""),
+          dspark: s.dspark === true,
+          dsparkSupportPath: String(s.dsparkSupportPath ?? ""),
+          dsparkConfidence: String(s.dsparkConfidence ?? ""),
+          idleTimeoutSeconds: String(s.idleTimeoutSeconds ?? "300"),
+        };
+      },
+    };
+  }
+
+  let providerRegistration = bb.providers.register(providerDeclaration());
 
   function formatWorkspaceFileRange(
     text: string,
@@ -967,13 +841,8 @@ export default async function plugin(bb: BbPluginApi) {
       activeEndpoint,
       config: cfg,
       settings: {
-        providerId: latestSettings.providerId ?? "",
-        modelSelector: latestSettings.modelSelector ?? "ds4/",
         idleTimeoutSeconds: latestSettings.idleTimeoutSeconds ?? "300",
         restartOnCrash: s.restartOnCrash,
-        configurePi: s.configurePi,
-        configureOpencode: s.configureOpencode,
-        configureCodex: s.configureCodex,
         maxTokens: s.maxTokens,
       },
       lastError,
@@ -1172,12 +1041,6 @@ export default async function plugin(bb: BbPluginApi) {
       record?.fingerprint !== cfg.fingerprint;
     if (externalSettingsChanged) {
       bb.log.info("leaving agent configs unchanged for an external server using previous settings");
-    } else {
-      try {
-        await refreshConfiguredAgentConfigs(cfg, "recovered agent config");
-      } catch (err) {
-        bb.log.warn(`recovered agent config refresh failed: ${String(err)}`);
-      }
     }
     await publishState();
     return true;
@@ -1211,6 +1074,46 @@ export default async function plugin(bb: BbPluginApi) {
     adoptedHealthFailureAt = null;
     adoptedHealthTimedOut = false;
     return proc.isAdopted && proc.pid === record.pid;
+  }
+
+  /** Stop a bridge-owned server even when its settings fingerprint is stale. */
+  async function stopBridgeProcessRecord(): Promise<boolean> {
+    const record = readProcessRecord(DS4_PROVIDER_BRIDGE_PROCESS_RECORD_ID);
+    if (!record || record.ownership === "external") return false;
+    const pid = record.pid;
+    if (!isProcessAlive(pid)) {
+      clearProcessRecord(DS4_PROVIDER_BRIDGE_PROCESS_RECORD_ID, pid);
+      return false;
+    }
+    const observedStart = processStartTime(pid);
+    if (
+      (record.processStartedAt && observedStart && observedStart !== record.processStartedAt) ||
+      !processMatchesCommand(pid, record.bin, record.args, record.cwd)
+    ) {
+      bb.log.warn("the recorded DwarfStar provider process is no longer the expected process; not terminating it");
+      return false;
+    }
+    const bridgeProc = new Ds4Process();
+    bridgeProc.adopt(pid, {
+      ownership: "managed",
+      cmdline: [record.bin, ...record.args],
+      cwd: record.cwd,
+      startedAt: record.startedAt,
+    });
+    const verifyPid = (candidate: number): boolean => {
+      if (!processMatchesCommand(candidate, record.bin, record.args, record.cwd)) return false;
+      if (!record.processStartedAt) return true;
+      const currentStart = processStartTime(candidate);
+      return !currentStart || currentStart === record.processStartedAt;
+    };
+    await bridgeProc.stop(12_000, { verifyPid });
+    if (isProcessAlive(pid)) {
+      bb.log.warn("the recorded DwarfStar provider process changed while stopping; leaving it running");
+      return false;
+    }
+    clearProcessRecord(DS4_PROVIDER_BRIDGE_PROCESS_RECORD_ID, pid);
+    bb.log.info(`stopped bridge-owned ds4-server (pid ${pid})`);
+    return true;
   }
 
   async function startProc(cfg: ResolvedRunConfig): Promise<void> {
@@ -1296,11 +1199,6 @@ export default async function plugin(bb: BbPluginApi) {
         processStartedAt: activeProcessStartedAt ?? undefined,
       });
     }
-    try {
-      await refreshConfiguredAgentConfigs(cfg, "agent config");
-    } catch (err) {
-      bb.log.warn(`agent config refresh failed: ${String(err)}`);
-    }
     await publishState();
   }
 
@@ -1370,7 +1268,7 @@ export default async function plugin(bb: BbPluginApi) {
       bb.log.info("leaving the existing external ds4-server running");
       return false;
     }
-    if (options.onlyIfNoDemand && hasActiveDemand()) {
+    if (options.onlyIfNoDemand && hasStopVeto()) {
       return false;
     }
     if (stopWaitPromise) {
@@ -1430,7 +1328,7 @@ export default async function plugin(bb: BbPluginApi) {
         return false;
       }
       expectedAdoptedCommand = [expectedBin, ...expectedArgs];
-      if (options.onlyIfNoDemand && hasActiveDemand()) {
+      if (options.onlyIfNoDemand && hasStopVeto()) {
         finishStopWait();
         return false;
       }
@@ -1438,7 +1336,7 @@ export default async function plugin(bb: BbPluginApi) {
     // Recheck after the adopted-process identity work above and immediately
     // before stopping. A completion can begin while that asynchronous check
     // is in progress, so the first guard alone is not sufficient.
-    if (options.onlyIfNoDemand && hasActiveDemand()) {
+    if (options.onlyIfNoDemand && hasStopVeto()) {
       finishStopWait();
       return false;
     }
@@ -1490,6 +1388,7 @@ export default async function plugin(bb: BbPluginApi) {
 
   /** Make an explicit stop/restart able to find a server after plugin reload. */
   async function recoverForExplicitStop(): Promise<void> {
+    await stopBridgeProcessRecord();
     if (proc.isRunning) return;
     const cfg = await currentConfig();
     if (await recoverExistingServer(cfg)) return;
@@ -1540,18 +1439,37 @@ export default async function plugin(bb: BbPluginApi) {
       let lastFingerprint: string | null = null;
       let crashBackoffMs = 2000;
       let orphanCleanupDone = false;
+      let providerLeaseWasActive = false;
+      let lastProviderLeaseReleaseAt: number | null = null;
 
       try {
         while (!signal.aborted) {
           const cfg = await currentConfig();
           const s = await currentSettings();
-          const hasDemand = hasActiveDemand();
+          const providerLease = providerTurnLeaseSnapshot();
+          const providerLeaseActive = providerLease.active;
+          const hasDemand = hasCompletionDemand();
+          if (
+            (providerLeaseWasActive && !providerLeaseActive) ||
+            (providerLease.releasedAt !== null &&
+              providerLease.releasedAt !== lastProviderLeaseReleaseAt)
+          ) {
+            // A provider turn may have outlived the legacy supervisor's last
+            // native completion. Start the idle grace period after that turn
+            // ends, rather than measuring from the old server start time.
+            lastDemandAt = Date.now();
+          }
+          if (providerLease.releasedAt !== null) {
+            lastProviderLeaseReleaseAt = providerLease.releasedAt;
+          }
+          providerLeaseWasActive = providerLeaseActive;
+          const hasStopDemand = hasDemand || providerLeaseActive;
 
           // A managed orphan may be all that remains after an abrupt host
           // daemon disconnect. Reclaim it only when there is no active demand,
           // then stop it so a fresh turn owns the next process cleanly. Do not
           // scan for or interfere with unmarked, user-owned servers here.
-          if (!orphanCleanupDone && !hasDemand && proc.state === "stopped") {
+          if (!orphanCleanupDone && !hasStopDemand && proc.state === "stopped") {
             orphanCleanupDone = true;
             const recovered =
               (await recoverExistingServer(cfg, {
@@ -1559,7 +1477,7 @@ export default async function plugin(bb: BbPluginApi) {
                 isCurrent: () => !disposed && !shuttingDown && !signal.aborted,
               })) ||
               reclaimRecordedProcess();
-            if (recovered && !hasActiveDemand()) {
+            if (recovered && !hasStopVeto()) {
               const stopped = await stopProc({ onlyIfNoDemand: true });
               if (stopped) {
                 lastDemandAt = null;
@@ -1582,16 +1500,31 @@ export default async function plugin(bb: BbPluginApi) {
               bb.log.warn(lastError);
             } else {
               bb.log.info("config changed — restarting ds4-server");
-              restartAfterDrift = true;
-              await stopProc();
+              const stopped = await stopProc({ onlyIfNoDemand: true });
+              if (stopped || !proc.isRunning) {
+                restartAfterDrift = true;
+                lastHealth = null;
+              } else {
+                bb.log.info("deferring the config restart until active demand ends");
+              }
             }
-            lastHealth = null;
+            if (proc.isExternal || restartAfterDrift) lastHealth = null;
           }
-          lastFingerprint = cfg.fingerprint;
+          if (
+            !proc.isRunning ||
+            !lastFingerprint ||
+            lastFingerprint === cfg.fingerprint ||
+            restartAfterDrift ||
+            proc.isExternal
+          ) {
+            lastFingerprint = cfg.fingerprint;
+          }
 
           if (
             cfg.bin &&
             hasDemand &&
+            !providerLeaseActive &&
+            !hasActiveProviderTurnLease() &&
             (restartAfterDrift || proc.state === "stopped" || proc.state === "exited")
           ) {
             await ensureStarted(cfg);
@@ -1600,6 +1533,8 @@ export default async function plugin(bb: BbPluginApi) {
           if (
             s.restartOnCrash &&
             hasDemand &&
+            !providerLeaseActive &&
+            !hasActiveProviderTurnLease() &&
             proc.state === "crashed" &&
             cfg.bin
           ) {
@@ -1617,7 +1552,7 @@ export default async function plugin(bb: BbPluginApi) {
           }
 
           if (
-            !hasDemand &&
+            !hasStopDemand &&
             proc.isRunning &&
             lastDemandAt !== null &&
             Date.now() - lastDemandAt >= idleTimeoutMs()
@@ -1630,7 +1565,7 @@ export default async function plugin(bb: BbPluginApi) {
               bb.log.info("stopping ds4-server after the configured idle period");
               stopped = await stopProc({ onlyIfNoDemand: true });
             }
-            if (stopped || (!proc.isRunning && !hasActiveDemand())) {
+            if (stopped || (!proc.isRunning && !hasStopVeto())) {
               lastDemandAt = null;
             }
             if (stopped && !proc.isExternal) {
@@ -1743,7 +1678,6 @@ export default async function plugin(bb: BbPluginApi) {
       return buildStatus();
     },
     async stop() {
-      releaseAllDemand();
       lastError = null;
       bb.log.info("manual stop requested");
       await recoverForExplicitStop();
@@ -1909,7 +1843,7 @@ export default async function plugin(bb: BbPluginApi) {
       return await performDs4Complete(cfg, params);
     } finally {
       inFlightCompletions = Math.max(0, inFlightCompletions - 1);
-      if (inFlightCompletions === 0 && demandThreads.size === 0) {
+      if (inFlightCompletions === 0) {
         lastDemandAt = Date.now();
       }
     }
@@ -1966,7 +1900,6 @@ export default async function plugin(bb: BbPluginApi) {
           return { exitCode: 0, stdout: renderStatus(await buildStatus()) };
         }
         case "stop": {
-          releaseAllDemand();
           await recoverForExplicitStop();
           await stopProc({ terminateExternal: true });
           lastDemandAt = null;
@@ -2003,21 +1936,10 @@ export default async function plugin(bb: BbPluginApi) {
           const sub = rest[0] ?? "status";
           if (sub === "apply") {
             const cfg = await currentConfig();
-            const runSettings = await currentSettings();
             const wanted = rest.slice(1);
-            const targets: AgentTargetId[] =
-              wanted.length === 0
-                ? (["pi", "opencode", "codex"] as AgentTargetId[]).filter(
-                    (t) =>
-                      t === "pi"
-                        ? runSettings.configurePi
-                        : t === "opencode"
-                          ? runSettings.configureOpencode
-                          : runSettings.configureCodex,
-                  )
-                : (wanted as AgentTargetId[]);
+            const targets = wanted as AgentTargetId[];
             if (!targets.length) {
-              return { exitCode: 1, stdout: "No targets selected. Pass ids or enable them in settings." };
+              return { exitCode: 1, stdout: "Pass at least one target: pi, opencode, or codex." };
             }
             const results = applyTargets(targets, {
               port: cfg.port,
@@ -2213,10 +2135,8 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
-  // The model picker resolves this callback immediately before a thread turn
-  // starts. That makes it the earliest plugin hook that knows which model the
-  // user actually selected, so use it to acquire a short-lived DS4 demand
-  // lease and kick the process supervisor without requiring a manual start.
+  // The first-class provider owns startup. This callback contributes only the
+  // native tools available when a DS4 session is created.
   bb.agents.configure((context) => {
     if (context.provider.id === DS4_PROVIDER_ID) {
       return {
@@ -2226,62 +2146,41 @@ export default async function plugin(bb: BbPluginApi) {
           "DwarfStar provides read and edit for workspace files and bash for unrestricted host-shell commands.",
       };
     }
-    if (selectedModelIsDs4(context.provider.id, context.provider.model)) {
-      acquireDemand(context.thread.id);
-      // Resolve from the cached settings so proc.start() is reached before
-      // the synchronous model-resolution callback returns to BB.
-      void ensureStarted(
-        resolveConfig(effectiveSettings(toRunSettings(latestSettings))),
-      ).catch((err) => {
-        lastError = `automatic ds4-server start failed: ${String(err)}`;
-        bb.log.error(lastError);
-        void publishState();
-      });
-      // Spin the server up with the selected model when the picker choice
-      // maps to a different downloaded DwarfStar model than the loaded one.
-      void syncSelectedModel(context.provider.model).catch((err) => {
-        bb.log.error(`model switch failed: ${String(err)}`);
-      });
-    }
     return {
-      tools: ["ds4_status", "ds4_complete"],
+      tools: [],
       skills: [],
     };
   });
-
-  // A demand lease ends when the selected model's turn settles. Keep the
-  // process warm for the configured grace period so quick follow-up turns do
-  // not pay the model-load cost again; the supervisor performs the eventual
-  // stop. The archive/delete cases prevent a stale thread from holding the
-  // server open forever if its normal terminal event is not delivered.
-  bb.events.on("thread.idle", ({ thread }) => releaseAllDemandFor(thread.id));
-  bb.events.on("thread.failed", ({ thread }) => releaseAllDemandFor(thread.id));
-  bb.events.on("thread.archived", ({ thread }) => releaseAllDemandFor(thread.id));
-  bb.events.on("thread.deleted", ({ thread }) => releaseAllDemandFor(thread.id));
 
   // -------------------------------------------------------------------------
   // Settings change logging + dispose
   // -------------------------------------------------------------------------
   settings.onChange((next, prev) => {
     latestSettings = next;
-    // An explicit modelPath setting replaces any picker-driven override.
-    if ((next.modelPath ?? "") !== (prev.modelPath ?? "")) {
-      modelOverride = null;
-      void kv.delete(MODEL_OVERRIDE_KEY).catch(() => undefined);
-    }
     const n = next as Record<string, unknown>;
     const p = prev as Record<string, unknown>;
     const changed = Object.keys(n).filter(
       (k) => JSON.stringify(n[k]) !== JSON.stringify(p[k]),
     );
     if (changed.length) bb.log.info(`settings changed: ${changed.join(", ")}`);
+    if (
+      (next.modelPath ?? "") !== (prev.modelPath ?? "") ||
+      (next.ds4Dir ?? "") !== (prev.ds4Dir ?? "")
+    ) {
+      try {
+        providerRegistration.dispose();
+        providerRegistration = bb.providers.register(providerDeclaration());
+      } catch (error) {
+        bb.log.error(`could not refresh DwarfStar provider model: ${String(error)}`);
+      }
+    }
   });
 
   bb.onDispose(() => {
     disposed = true;
     shuttingDown = true;
     lifecycleEpoch += 1;
-    releaseAllDemand();
+    providerRegistration.dispose();
     if (logFlushTimer) {
       clearTimeout(logFlushTimer);
       logFlushTimer = null;
@@ -2337,10 +2236,7 @@ function renderStatus(st: StatusDto): string {
   if (st.config.bin) lines.push(`bin:       ${st.config.bin}`);
   if (st.lastError) lines.push(`error:     ${st.lastError}`);
   lines.push(
-    `agents:    pi=${st.settings.configurePi ? "on" : "off"} opencode=${st.settings.configureOpencode ? "on" : "off"} codex=${st.settings.configureCodex ? "on" : "off"}`,
-  );
-  lines.push(
-    `settings:  selector=${st.settings.modelSelector || "(none)"} idle=${st.settings.idleTimeoutSeconds}s restartOnCrash=${st.settings.restartOnCrash ? "on" : "off"} maxTokens=${st.settings.maxTokens}`,
+    `settings:  idle=${st.settings.idleTimeoutSeconds}s restartOnCrash=${st.settings.restartOnCrash ? "on" : "off"} maxTokens=${st.settings.maxTokens}`,
   );
   return lines.join("\n");
 }

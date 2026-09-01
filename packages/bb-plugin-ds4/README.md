@@ -3,10 +3,10 @@
 Configure a local **DwarfStar** (`antirez/ds4`, a.k.a. ds4.c) inference
 server for BB. Once the setup is complete, choose **DwarfStar** as a provider
 in BB's model picker. Its provider bridge keeps the first turn open while
-`ds4-server` starts and waits for the selected model before sending the request,
-so the first message does not race server startup. Current DwarfStar builds support DeepSeek V4
-Flash/PRO, GLM 5.2, and GLM 5.3 Flash GGUFs. GLM 5.3 Flash vision is supported
-when its encoder sidecar is available.
+`ds4-server` starts and waits for the configured GGUF before sending the
+request, so the first message does not race server startup. Current DwarfStar
+builds support DeepSeek V4 Flash/PRO, GLM 5.2, and GLM 5.3 Flash GGUFs. GLM
+5.3 Flash vision is supported when its encoder sidecar is available.
 
 ## Staged preview
 
@@ -40,21 +40,23 @@ bb plugin build      # optional: precompile the frontend
 - **First-class DwarfStar provider**: choose the `ds4` provider directly. The
   bridge owns the turn lifecycle, waits through model loading, streams text and
   reasoning deltas, forwards tool calls through BB, and supports GLM 5.3 image
-  input when the vision encoder is configured.
-- **DwarfStar setup** (Settings → Plugins → DwarfStar): checkout/model paths,
-  GLM 5.3 vision encoder path, BB model selector, optional provider filter, idle
-  grace period, runtime tuning, and optional external-agent configuration.
+  input when the vision encoder is configured. It exposes exactly one model:
+  the GGUF configured by `modelPath` (or the default `ds4flash.gguf`).
+- **DwarfStar setup** (Settings → Plugins → DwarfStar): one configured
+  checkout/model, GLM 5.3 vision encoder path, context window, and idle grace
+  period. Advanced runtime tuning remains available below the core setup.
 - **GLM 5.3 Flash vision**: `visionPath=auto` finds the standard
-  `gguf/GLM-5.3-Flash-Vision-Encoder.gguf` sidecar when the selected model is
+  `gguf/GLM-5.3-Flash-Vision-Encoder.gguf` sidecar when the configured model is
   GLM 5.3 Flash. Set an absolute or DS4-relative path to override it, or clear
   the setting to keep vision disabled.
-- **Demand-driven supervision**: the local server starts when BB resolves a
-  matching model for a turn, stays warm while matching turns are active, and
-  stops after the last one is idle. Plugin-owned processes also stop as part of
-  plugin reload/disable and BB shutdown.
+- **Demand-driven supervision**: the local server starts when a first-class
+  `ds4` provider turn begins or `bb ds4 start` is invoked. It stays warm through
+  active native completions and stops after the configured idle grace period.
+  Plugin-owned processes also stop as part of plugin reload/disable and BB
+  shutdown.
 - **Disconnect recovery**: if the BB host daemon disconnects after starting
   DwarfStar, the plugin records the managed PID and can reclaim that exact
-  server on the next matching turn instead of starting a second copy. It also
+  server on the next provider turn instead of starting a second copy. It also
   recognizes a compatible DS4 server already listening on the configured port,
   including one that is still loading its model. Unmarked existing servers are
   used but treated as external and are left running at idle; an explicit
@@ -78,10 +80,12 @@ bb plugin build      # optional: precompile the frontend
 - **Harness tools for DwarfStar turns**: the `ds4` provider receives `read`,
   `edit`, and `bash`. `read` and `edit` use BB's host file API inside the
   current workspace; `bash` intentionally runs an unrestricted shell on the
-  current host, starting in the workspace by default. The legacy `ds4_status`
-  and `ds4_complete` tools remain available to non-DS4 agents.
-- **Agent connections**: write/merge provider configs so external agents can
-  reach the server:
+  current host, starting in the workspace by default. These tools are supplied
+  to DwarfStar turns; the legacy `ds4_status` and `ds4_complete` tools are not
+  automatically injected into other providers.
+- **Agent connections**: optionally write/merge provider configs so external
+  agents can reach the server. This is explicit; use
+  `bb ds4 agents apply <target>` when you want one:
   - Pi/BB → `~/.pi/agent/models.json` (provider `ds4`, selected DwarfStar model)
   - opencode → `~/.config/opencode/opencode.json` (provider `ds4`, agent `ds4`)
   - Codex CLI → `~/.codex/config.toml` (`[model_providers.ds4]`, Responses
@@ -97,9 +101,9 @@ bb plugin build      # optional: precompile the frontend
 
 A background `supervisor` service:
 
-- starts the server when BB resolves a selected model matching
-  **`modelSelector`** for a turn,
-- restarts after a crash while a matching turn still needs it when
+- manages the server for native `bb ds4` operations, including process
+  recovery, health polling, and idle shutdown,
+- restarts after a crash while a native completion still needs it when
   **`restartOnCrash`** is on (exponential backoff
   2 s → 30 s, reset after a healthy run),
 - restarts automatically when settings that affect the command line change
@@ -108,7 +112,7 @@ A background `supervisor` service:
 - polls `/v1/models` every 2 s and flips the status to **ready** (green) once
   the HTTP API answers, showing "loading model…" while a big GGUF is still
   being read,
-- stops after `idleTimeoutSeconds` with no active matching turn,
+- stops after `idleTimeoutSeconds` with no active native completion,
 - stops the server cleanly (SIGTERM → SIGKILL after 12 s) on plugin
   reload/disable and BB shutdown,
 - persists process metadata in `~/.bb/plugins/ds4/server.json` so an orphan can
@@ -119,26 +123,27 @@ A background `supervisor` service:
   failures while its process identity is still valid, then retries/restarts
   only after the recovery grace period expires.
 
-The legacy model-selector integration starts the process asynchronously and is
-kept for external-agent compatibility. First-class `ds4` provider turns keep
-the turn open while the bridge starts or waits for `ds4-server`; the completion
-request is sent only after `/v1/models` contains the requested DwarfStar model.
-BB still surfaces the loading window with a host toast and composer banner.
+First-class `ds4` provider turns keep the turn open while the bridge starts or
+waits for `ds4-server`; the completion request is sent only after `/v1/models`
+contains the configured DwarfStar model. BB surfaces the loading window with a
+host toast, composer banner, and separate transcript work item. External-agent
+configs are generated only by an explicit `bb ds4 agents apply` command.
 
 ## Settings (`bb plugin config ds4`)
+
+The first five settings are the normal setup. The remaining settings are
+advanced runtime and compatibility controls.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `ds4Dir` | `""` | DS4 checkout dir. Empty = auto-detect (`DS4_DIR`, `~/workingdir/ds4`, `~/ds4`, …) |
 | `modelPath` | `""` | GGUF path; absolute or relative to `ds4Dir`. Empty = `ds4flash.gguf` |
 | `visionPath` | `auto` | GLM 5.3 vision encoder path; auto-detects the standard sidecar, absolute/DS4-relative paths override it, and empty disables vision |
-| `modelSelector` | `ds4/` | Exact model id or namespace from BB's model picker; matches DwarfStar's DeepSeek V4, GLM 5.2, and GLM 5.3 Flash ids by default |
-| `providerId` | `""` | Optional exact BB provider id filter; empty matches the model across providers |
+| `ctx` | `250000` | Context tokens (`-c`); tuned for the 2-bit model on a 128 GB Apple Silicon host |
 | `idleTimeoutSeconds` | `300` | How long to keep the server warm after the last matching turn |
 | `backend` | `auto` | `metal` \| `cuda` \| `rocm` \| `cpu` |
 | `host` | `127.0.0.1` | Bind address |
 | `port` | `8000` | Bind port |
-| `ctx` | `100000` | Context tokens (`-c`) |
 | `maxTokens` | `384000` | Default maximum output tokens (`-n`) |
 | `kvDiskDir` | `/tmp/ds4-kv` | Disk KV cache dir; empty disables it |
 | `kvDiskSpaceMb` | `8192` | KV cache disk budget |
@@ -148,7 +153,6 @@ BB still surfaces the loading window with a host toast and composer banner.
 | `dsparkSupportPath` | `""` | Absolute or DS4-relative support GGUF path; empty auto-detects `gguf/DeepSeek-V4-Flash-DSpark-support-0731.gguf` |
 | `dsparkConfidence` | `""` | DSpark threshold (`0..1`); empty uses DwarfStar's backend default (Metal `0.6`, CUDA/ROCm `0.7`) |
 | `restartOnCrash` | `true` | Restart after a crash (backoff) |
-| `configurePi` / `configureOpencode` / `configureCodex` | `true`/`false`/`false` | Which agent configs `bb ds4 agents apply` writes by default |
 
 ## Notes
 
@@ -177,8 +181,8 @@ BB still surfaces the loading window with a host toast and composer banner.
   bodies are capped at 60 MiB, below the upstream 64 MiB HTTP limit. Download
   the sidecar with
   `./download_model.sh glm53-vision`; `visionPath=auto` then enables it for a
-  GLM 5.3 model in the same checkout. Run `bb ds4 agents apply` afterward to
-  refresh managed agent configs in an existing BB session.
+  GLM 5.3 model in the same checkout. Run `bb ds4 agents apply <target>` only
+  when you explicitly want to refresh an external agent config.
 - The native `ds4_complete` tool also accepts an optional `imageUrls` array of
   inline PNG/JPEG data URIs when the encoder is configured.
 - Vision startup requires a recognizable GLM 5.3 model path (a symlink may

@@ -1,9 +1,4 @@
-/** Matching and parsing helpers for demand-driven DS4 lifecycle settings. */
-
-export interface ModelSelection {
-  providerId: string;
-  model: string;
-}
+/** DwarfStar model identity and runtime helpers. */
 
 const DWARFSTAR_MODEL_IDS = new Set([
   "deepseek-v4-flash",
@@ -32,13 +27,8 @@ export type CanonicalDwarfStarModelId =
   | "glm-5.2"
   | "glm-5.3-flash";
 
-/** Stable display order for canonical ids in pickers and catalogs. */
-export const CANONICAL_MODEL_ORDER: CanonicalDwarfStarModelId[] = [
-  "deepseek-v4-flash",
-  "deepseek-v4-pro",
-  "glm-5.2",
-  "glm-5.3-flash",
-];
+/** Wire id used when settings point at a custom, unrecognizable GGUF name. */
+export const CONFIGURED_DWARFSTAR_MODEL_ID = "dwarfstar-configured";
 
 /** Return true for model ids advertised by the current DwarfStar server. */
 export function isDwarfStarModel(model: string): boolean {
@@ -89,32 +79,6 @@ export function canonicalModelId(
   if (tail.startsWith("glm-5.2")) return "glm-5.2";
   if (tail.startsWith("deepseek-v4-flash")) return "deepseek-v4-flash";
   return null;
-}
-
-/**
- * Return true when a model-picker selection belongs to this DS4 installation.
- *
- * BB commonly exposes the local model as `ds4/deepseek-v4-flash`, while some
- * provider integrations expose only the model tail. Treat a configured value
- * as either an exact model id or a namespace/prefix, so both forms can be
- * configured without coupling this plugin to one provider.
- */
-export function matchesModelSelection(
-  selection: ModelSelection,
-  configuredProviderId: string,
-  configuredModelSelector: string,
-): boolean {
-  const providerId = configuredProviderId.trim();
-  if (providerId && selection.providerId.trim() !== providerId) return false;
-
-  const model = selection.model.trim();
-  const selector = configuredModelSelector.trim();
-  if (!model || !selector) return false;
-
-  return (
-    model === selector ||
-    model.startsWith(selector.endsWith("/") ? selector : `${selector}/`)
-  );
 }
 
 /** Parse a user-facing idle timeout in seconds, with a safe bounded default. */

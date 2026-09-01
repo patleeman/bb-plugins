@@ -47,25 +47,24 @@ import {
   type ThreadDelta,
 } from "@get-bb/plugin-sdk/provider-bridge";
 import {
-  catalogPathFor,
-  scanModelCatalog,
-} from "./model-catalog.ts";
-import {
   completionPayloadSizeError,
   completionRequestBodySizeError,
 } from "./request-payload.ts";
 import {
+  clearProviderTurnLease,
   clearProcessRecord,
   isProcessAlive,
   processMatchesCommand,
   processStartTime,
   processWorkingDirectory,
+  PROVIDER_TURN_LEASE_RELEASE_RETENTION_MS,
   readProcessRecord,
+  readProviderTurnLease,
+  writeProviderTurnLease,
   writeProcessRecord,
 } from "./process-recovery.ts";
 import {
-  DEFAULT_GLM53_VISION_FILE,
-  detectDs4Dir,
+  DEFAULT_DWARFSTAR_CONTEXT_TOKENS,
   dwarfStarVisionArgsError,
   dwarfStarVisionBackendError,
   dwarfStarVisionExtraArgsError,
@@ -77,7 +76,7 @@ import {
 } from "./run-config.ts";
 import { Ds4Process } from "./ds4-process.ts";
 import {
-  CANONICAL_MODEL_ORDER,
+  CONFIGURED_DWARFSTAR_MODEL_ID,
   canonicalModelId,
   inferDwarfStarModelId,
   isDwarfStarModel,
@@ -95,6 +94,8 @@ const STARTUP_POLL_MS = 500;
 const COMPLETION_TIMEOUT_MS = 30 * 60 * 1000;
 const TOOL_CALL_TIMEOUT_MS = 10 * 60 * 1000;
 const STOP_WAIT_TIMEOUT_MS = 5_000;
+const PROVIDER_TURN_LEASE_TTL_MS = 15_000;
+const PROVIDER_TURN_LEASE_HEARTBEAT_MS = 5_000;
 const MAX_TOOL_RESULT_BYTES = 256 * 1024;
 const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 const MAX_IMAGE_COUNT = 16;
@@ -162,7 +163,7 @@ const dwarfStarOptionsSchema = z
     backend: z.enum(["auto", "metal", "cuda", "rocm", "cpu"]).default("auto"),
     host: z.string().default("127.0.0.1"),
     port: z.string().default("8000"),
-    ctx: z.string().default("100000"),
+    ctx: z.string().default(String(DEFAULT_DWARFSTAR_CONTEXT_TOKENS)),
     maxTokens: z.string().default("384000"),
     kvDiskDir: z.string().default("/tmp/ds4-kv"),
     kvDiskSpaceMb: z.string().default("8192"),
@@ -261,6 +262,16 @@ interface ReadyState {
   cfg: ResolvedRunConfig;
   endpoint: { host: string; port: number };
   fingerprint: string;
+  processBacked: boolean;
+  processIdentity?: DwarfStarProcessIdentity;
+}
+
+export interface DwarfStarProcessIdentity {
+  pid: number;
+  bin: string;
+  args: string[];
+  cwd: string;
+  processStartedAt?: string;
 }
 
 interface ReadyLease extends ReadyState {
@@ -280,6 +291,11 @@ let readinessController: AbortController | null = null;
 let activeReadyLeases = 0;
 const leaseWaiters = new Set<() => void>();
 let idleTimer: NodeJS.Timeout | null = null;
+let providerTurnLeaseCount = 0;
+let providerTurnLeaseTimer: NodeJS.Timeout | null = null;
+let providerTurnLeaseReleaseTimer: NodeJS.Timeout | null = null;
+const providerTurnLeaseId = `${process.pid}-${randomUUID()}`;
+const providerTurnLeaseProcessStartedAt = processStartTime(process.pid) ?? undefined;
 let requestCounter = 0;
 let threadCounter = 0;
 let disposed = false;
@@ -386,7 +402,7 @@ function sendDeltas(threadId: string, deltas: readonly ThreadDelta[]): void {
 }
 
 function startupModelLabel(model: string | undefined): string {
-  return canonicalModelId(model ?? "") ?? model?.trim() ?? "selected model";
+  return canonicalModelId(model ?? "") ?? model?.trim() ?? "configured model";
 }
 
 export function dwarfStarStartupNoticeDeltas(
@@ -488,7 +504,7 @@ function parseOptions(value: unknown, model: string | undefined): DwarfStarOptio
     backend: "auto",
     host: "127.0.0.1",
     port: "8000",
-    ctx: "100000",
+    ctx: String(DEFAULT_DWARFSTAR_CONTEXT_TOKENS),
     maxTokens: "384000",
     kvDiskDir: "/tmp/ds4-kv",
     kvDiskSpaceMb: "8192",
@@ -522,32 +538,14 @@ function parseExecutionOptions(value: unknown): DwarfStarOptions {
 }
 
 function settingsForOptions(options: DwarfStarOptions, model: string | undefined): RunSettings {
-  const selected = canonicalModelId(model ?? options.model ?? "");
-  const ds4Dir = detectDs4Dir(options.ds4Dir);
-  let modelPath = "";
-  if (selected) {
-    const catalog = scanModelCatalog(ds4Dir);
-    // A provider model picker is authoritative. A configured modelPath is a
-    // fallback for custom/unlisted models, not a reason to launch a different
-    // GGUF than the model the runtime selected.
-    modelPath = catalogPathFor(catalog, selected) ?? options.modelPath;
-  } else {
-    modelPath = options.modelPath;
-  }
-  let visionPath = options.visionPath;
-  // `resolveConfig` can infer vision from a recognizable filename. A provider
-  // model selection also carries the family, so preserve auto vision for a
-  // custom-named GLM 5.3 GGUF when the standard sidecar is present.
-  if (visionPath.trim().toLowerCase() === "auto" && selected === "glm-5.3-flash" && ds4Dir) {
-    visionPath = [
-      join(ds4Dir, "gguf", DEFAULT_GLM53_VISION_FILE),
-      join(ds4Dir, DEFAULT_GLM53_VISION_FILE),
-    ].find((candidate) => existsSync(candidate)) ?? visionPath;
-  }
+  // DwarfStar loads exactly one GGUF per process. The provider model picker
+  // is only the name of the configured model; it must never override the
+  // modelPath setting or select another downloaded file.
+  void model;
   return {
     ds4Dir: options.ds4Dir,
-    modelPath,
-    visionPath,
+    modelPath: options.modelPath,
+    visionPath: options.visionPath,
     backend: options.backend,
     host: options.host,
     port: options.port,
@@ -561,9 +559,6 @@ function settingsForOptions(options: DwarfStarOptions, model: string | undefined
     dsparkSupportPath: options.dsparkSupportPath,
     dsparkConfidence: options.dsparkConfidence,
     restartOnCrash: true,
-    configurePi: false,
-    configureOpencode: false,
-    configureCodex: false,
   };
 }
 
@@ -582,12 +577,9 @@ function configError(
   if (!existsSync(cfg.bin)) return `ds4-server was not found at ${cfg.bin}.`;
   if (!cfg.modelPath) return "No DwarfStar model GGUF was found. Set modelPath or download a supported model.";
   if (!existsSync(cfg.modelPath)) return `Model not found: ${cfg.modelPath}.`;
-  const requestedModelId =
-    canonicalModelId(requestedModel ?? "") ?? resolvedDwarfStarModelId(cfg.modelPath);
-  const configuredModelId = resolvedDwarfStarModelId(cfg.modelPath);
-  if (requestedModelId && configuredModelId && requestedModelId !== configuredModelId) {
-    return `The selected DwarfStar model (${requestedModelId}) does not match the configured GGUF (${configuredModelId}). Select that model's downloaded GGUF or clear modelPath.`;
-  }
+  // The settings-selected GGUF is authoritative. Ignore a stale model id
+  // from a picker or restored session rather than trying to switch files.
+  void requestedModel;
   if (visionRequested && !cfg.visionPath) {
     return "Image input requires the GLM 5.3 vision encoder. Set visionPath or install the standard encoder beside DS4.";
   }
@@ -598,7 +590,7 @@ function configError(
     if (argsError) return argsError;
     const backendError = dwarfStarVisionBackendError(cfg.backend, cfg.visionPath);
     if (backendError) return backendError;
-    const modelId = resolvedDwarfStarModelId(cfg.modelPath) ?? requestedModelId;
+    const modelId = resolvedDwarfStarModelId(cfg.modelPath);
     if (modelId !== "glm-5.3-flash") {
       return "GLM 5.3 vision requires a GLM-5.3-Flash model GGUF.";
     }
@@ -709,8 +701,8 @@ async function requestModels(
 /**
  * DS4's GLM 5.3 runtime briefly shipped a discovery response with GLM 5.2
  * wire aliases (`glm-5.2*`) but a GLM 5.3 display name. Keep that known
- * server bug at the bridge boundary so readiness and model switching do not
- * wait forever. Remove this shim once upstream /v1/models emits the 5.3 ids.
+ * server bug at the bridge boundary so readiness does not wait forever.
+ * Remove this shim once upstream /v1/models emits the 5.3 ids.
  */
 export function normalizeDwarfStarModelIds(
   models: readonly { id: string; name?: string }[],
@@ -741,20 +733,23 @@ function modelFamilyFromName(name: string | undefined): CanonicalDwarfStarModelI
 }
 
 function modelIdForRequest(
-  options: DwarfStarOptions,
-  model: string | undefined,
+  _options: DwarfStarOptions,
+  _model: string | undefined,
   cfg: ResolvedRunConfig,
 ): CanonicalDwarfStarModelId | null {
-  return canonicalModelId(model ?? options.model ?? "") ?? resolvedDwarfStarModelId(cfg.modelPath);
+  // Readiness must identify the GGUF selected in settings, never the model
+  // picker value. DwarfStar exposes aliases for the one engine it loaded.
+  return resolvedDwarfStarModelId(cfg.modelPath);
 }
 
 export function modelsMatchRequest(
   models: readonly DwarfStarModelInfo[],
   requestedModel: CanonicalDwarfStarModelId | null,
+  allowUnknownModel = false,
 ): boolean {
   if (models.length === 0) return false;
   if (!looksLikeDwarfStar(models)) return false;
-  if (requestedModel === null) return true;
+  if (requestedModel === null) return allowUnknownModel;
   const describedFamilies = new Set(
     models
       .map((model) => modelFamilyFromName(model.name))
@@ -769,6 +764,75 @@ export function modelsMatchRequest(
   const hasDeepSeekPro = modelIds.includes("deepseek-v4-pro");
   if (hasDeepSeekFlash && hasDeepSeekPro) return false;
   return modelIds.includes(requestedModel);
+}
+
+export function dwarfStarProcessIdentityMatches(
+  identity: DwarfStarProcessIdentity,
+  observers: {
+    isAlive?: typeof isProcessAlive;
+    matchesCommand?: typeof processMatchesCommand;
+    startTime?: typeof processStartTime;
+  } = {},
+): boolean {
+  const isAlive = observers.isAlive ?? isProcessAlive;
+  const matchesCommand = observers.matchesCommand ?? processMatchesCommand;
+  const startTime = observers.startTime ?? processStartTime;
+  if (!isAlive(identity.pid)) return false;
+  if (!matchesCommand(identity.pid, identity.bin, identity.args, identity.cwd)) return false;
+  const observedStart = startTime(identity.pid);
+  return !identity.processStartedAt || !observedStart || observedStart === identity.processStartedAt;
+}
+
+function currentDwarfStarProcessIdentity(): DwarfStarProcessIdentity | undefined {
+  const pid = ds4Process.pid;
+  const cmdline = ds4Process.cmdline;
+  const cwd = ds4Process.cwd;
+  if (pid === null || !cmdline?.[0] || !cwd) return undefined;
+  return {
+    pid,
+    bin: cmdline[0],
+    args: cmdline.slice(1),
+    cwd,
+    processStartedAt: processStartTime(pid) ?? undefined,
+  };
+}
+
+function readyProcessIsCurrent(ready: ReadyState): boolean {
+  return !ready.processBacked ||
+    (ready.processIdentity !== undefined &&
+      dwarfStarProcessIdentityMatches(ready.processIdentity));
+}
+
+function readyState(
+  cfg: ResolvedRunConfig,
+  endpoint: { host: string; port: number },
+  processBacked: boolean,
+): ReadyState {
+  const processIdentity = processBacked ? currentDwarfStarProcessIdentity() : undefined;
+  return {
+    cfg,
+    endpoint,
+    fingerprint: cfg.fingerprint,
+    processBacked,
+    ...(processIdentity ? { processIdentity } : {}),
+  };
+}
+
+function invalidateReadyState(ready: ReadyState): void {
+  if (activeReady === ready) activeReady = null;
+  if (activeConfigFingerprint === ready.fingerprint) {
+    activeConfigFingerprint = null;
+    activeEndpoint = null;
+  }
+  if (
+    ready.processIdentity &&
+    ds4Process.isAdopted &&
+    ds4Process.pid === ready.processIdentity.pid
+  ) {
+    // The adopted handle has no exit event. Forget it before probing the
+    // endpoint again so a replaced PID cannot retain bridge ownership.
+    ds4Process.detachAdopted("exited");
+  }
 }
 
 async function adoptRecordedProcess(cfg: ResolvedRunConfig): Promise<boolean> {
@@ -812,7 +876,7 @@ async function waitForReady(
     }
     try {
       const models = await requestModels(endpoint, signal);
-      if (modelsMatchRequest(models, requestedModel)) return;
+      if (modelsMatchRequest(models, requestedModel, processBacked)) return;
       if (models.length > 0) lastError = `unexpected model list: ${models.map((model) => model.id).join(", ")}`;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
@@ -824,6 +888,65 @@ async function waitForReady(
 
 function abortError(): Error {
   return new Error("DwarfStar startup was cancelled.");
+}
+
+function refreshProviderTurnLease(): void {
+  if (providerTurnLeaseReleaseTimer) {
+    clearTimeout(providerTurnLeaseReleaseTimer);
+    providerTurnLeaseReleaseTimer = null;
+  }
+  writeProviderTurnLease(BRIDGE_PLUGIN_ID, {
+    leaseId: providerTurnLeaseId,
+    pid: process.pid,
+    expiresAt: Date.now() + PROVIDER_TURN_LEASE_TTL_MS,
+    ...(providerTurnLeaseProcessStartedAt
+      ? { processStartedAt: providerTurnLeaseProcessStartedAt }
+      : {}),
+  });
+}
+
+function acquireProviderTurnLease(): () => void {
+  providerTurnLeaseCount += 1;
+  if (providerTurnLeaseCount === 1) {
+    refreshProviderTurnLease();
+    providerTurnLeaseTimer = setInterval(
+      refreshProviderTurnLease,
+      PROVIDER_TURN_LEASE_HEARTBEAT_MS,
+    );
+    providerTurnLeaseTimer.unref?.();
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    providerTurnLeaseCount = Math.max(0, providerTurnLeaseCount - 1);
+    if (providerTurnLeaseCount > 0) return;
+    if (providerTurnLeaseTimer) {
+      clearInterval(providerTurnLeaseTimer);
+      providerTurnLeaseTimer = null;
+    }
+    const releasedAt = Date.now();
+    writeProviderTurnLease(BRIDGE_PLUGIN_ID, {
+      leaseId: providerTurnLeaseId,
+      pid: process.pid,
+      expiresAt: releasedAt,
+      releasedAt,
+      ...(providerTurnLeaseProcessStartedAt
+        ? { processStartedAt: providerTurnLeaseProcessStartedAt }
+        : {}),
+    });
+    providerTurnLeaseReleaseTimer = setTimeout(() => {
+      const lease = readProviderTurnLease(BRIDGE_PLUGIN_ID);
+      if (
+        lease?.leaseId === providerTurnLeaseId &&
+        lease.releasedAt === releasedAt
+      ) {
+        clearProviderTurnLease(BRIDGE_PLUGIN_ID, providerTurnLeaseId);
+      }
+      providerTurnLeaseReleaseTimer = null;
+    }, PROVIDER_TURN_LEASE_RELEASE_RETENTION_MS);
+    providerTurnLeaseReleaseTimer.unref?.();
+  };
 }
 
 async function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
@@ -988,7 +1111,7 @@ async function startReady(
     if (await adoptRecordedProcess(cfg)) {
       const endpoint = activeEndpoint ?? endpointFor(cfg);
       await waitForReady(cfg, endpoint, signal, requestedModel, true);
-      return { cfg, endpoint, fingerprint: cfg.fingerprint };
+      return readyState(cfg, endpoint, true);
     }
     const endpoint = endpointFor(cfg);
     let probeSucceeded = false;
@@ -996,18 +1119,28 @@ async function startReady(
       const models = await requestModels(endpoint, signal);
       probeSucceeded = true;
       if (models.length === 0) {
+        if (requestedModel === null) {
+          throw new Error(
+            `A server on ${endpoint.host}:${endpoint.port} is already reachable, but the configured GGUF identity cannot be verified. Stop it before using a custom DwarfStar model path.`,
+          );
+        }
         activeEndpoint = endpoint;
         activeConfigFingerprint = cfg.fingerprint;
         // A reachable endpoint with an empty model list is a loading state.
         // It has no child process handle, so keep polling it instead of
         // treating the bridge's stopped handle as a server exit.
         await waitForReady(cfg, endpoint, signal, requestedModel, false);
-        return { cfg, endpoint, fingerprint: cfg.fingerprint };
+        return readyState(cfg, endpoint, false);
       }
       if (modelsMatchRequest(models, requestedModel)) {
         activeEndpoint = endpoint;
         activeConfigFingerprint = cfg.fingerprint;
-        return { cfg, endpoint, fingerprint: cfg.fingerprint };
+        return readyState(cfg, endpoint, false);
+      }
+      if (requestedModel === null) {
+        throw new Error(
+          `A server on ${endpoint.host}:${endpoint.port} is already reachable, but the configured GGUF identity cannot be verified. Stop it before using a custom DwarfStar model path.`,
+        );
       }
       throw new Error(
         `A server on ${endpoint.host}:${endpoint.port} is not serving the requested DwarfStar model.`,
@@ -1051,7 +1184,7 @@ async function startReady(
   }
   const endpoint = activeEndpoint ?? endpointFor(cfg);
   await waitForReady(cfg, endpoint, signal, requestedModel, true);
-  return { cfg, endpoint, fingerprint: cfg.fingerprint };
+  return readyState(cfg, endpoint, true);
 }
 
 async function ensureReady(
@@ -1069,15 +1202,20 @@ async function ensureReady(
   for (;;) {
     const ready = activeReady;
     if (ready?.fingerprint === cfg.fingerprint) {
+      if (!readyProcessIsCurrent(ready)) {
+        report("DwarfStar's process changed; reconnecting to the configured server.");
+        invalidateReadyState(ready);
+        continue;
+      }
       try {
         // Adopted and endpoint-only servers have no child-process exit hook.
         // Confirm the endpoint still serves the requested model before using
         // the cached readiness result for another turn.
         const models = await requestModels(ready.endpoint, signal);
-        if (modelsMatchRequest(models, requestedModel)) {
+        if (modelsMatchRequest(models, requestedModel, ready.processBacked)) {
           return acquireReadyLease(ready);
         }
-        report(`DwarfStar is switching to ${startupModelLabel(model)}.`);
+        report("DwarfStar is restarting for the configured model.");
         if (activeReady === ready) activeReady = null;
         if (models.length > 0 && activeConfigFingerprint === cfg.fingerprint) {
           activeConfigFingerprint = null;
@@ -1100,7 +1238,7 @@ async function ensureReady(
           abortOrphanedReadiness(pending);
           continue;
         }
-        report("Waiting for the current DwarfStar startup before switching models.");
+        report("Waiting for the current DwarfStar startup before reconfiguring it.");
         try {
           await awaitWithSignal(pending.promise, signal);
         } catch {
@@ -1114,7 +1252,7 @@ async function ensureReady(
       continue;
     }
     if (activeReadyLeases > 0) {
-      report("Waiting for the current DwarfStar turn to finish before switching models.");
+      report("Waiting for the current DwarfStar turn to finish before reconfiguring it.");
       await waitForReadyLeasesToDrain(signal);
       continue;
     }
@@ -1404,7 +1542,7 @@ async function streamCompletion(
   providerTurnId: string,
   signal: AbortSignal,
 ): Promise<CompletionResult> {
-  const model = canonicalModelId(options.model ?? "") ?? resolvedDwarfStarModelId(cfg.modelPath) ?? "deepseek-v4-flash";
+  const model = resolvedDwarfStarModelId(cfg.modelPath) ?? CONFIGURED_DWARFSTAR_MODEL_ID;
   const hasImages = session.messages.some((message) =>
     Array.isArray(message.content) && message.content.some((part) => part.type === "image_url"),
   );
@@ -1941,6 +2079,7 @@ async function runInitialTurn(
   persistSessionAndUpdate(session);
   sendDeltas(session.threadId, [{ kind: "turn.open", providerTurnId: turn.id }]);
   let lease: ReadyLease | null = null;
+  const providerTurnLease = acquireProviderTurnLease();
   try {
     lease = await ensureReady(
       options,
@@ -1950,7 +2089,7 @@ async function runInitialTurn(
       (message) => emitDwarfStarStartupNotice(session, turn, model, message),
     );
     if (session.closed || session.turn !== turn) return;
-    closeDwarfStarStartupNotice(session, turn, "completed", "The selected model is ready.");
+    closeDwarfStarStartupNotice(session, turn, "completed", "The configured model is ready.");
     await runTurn(session, options, lease.cfg, lease.endpoint, undefined, turn, true);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -1966,6 +2105,7 @@ async function runInitialTurn(
       turn.boundarySent = true;
     }
   } finally {
+    providerTurnLease();
     lease?.release();
     if (!turn.settled) {
       turn.settled = true;
@@ -1991,6 +2131,7 @@ async function runTurnAfterReady(
     { kind: "turn.open", providerTurnId: turn.id },
   ]);
   let lease: ReadyLease | null = null;
+  const providerTurnLease = acquireProviderTurnLease();
   try {
     lease = await ensureReady(
       options,
@@ -2000,7 +2141,7 @@ async function runTurnAfterReady(
       (message) => emitDwarfStarStartupNotice(session, turn, model, message),
     );
     if (session.closed || session.turn !== turn) return;
-    closeDwarfStarStartupNotice(session, turn, "completed", "The selected model is ready.");
+    closeDwarfStarStartupNotice(session, turn, "completed", "The configured model is ready.");
     await runTurn(session, options, lease.cfg, lease.endpoint, clientRequestId, turn, true);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -2020,6 +2161,7 @@ async function runTurnAfterReady(
       }
     }
   } finally {
+    providerTurnLease();
     lease?.release();
     if (!turn.settled) {
       turn.settled = true;
@@ -2042,6 +2184,7 @@ async function startNextQueuedTurn(session: Session): Promise<void> {
   persistSessionAndUpdate(session);
   sendDeltas(session.threadId, [{ kind: "turn.open", providerTurnId: turn.id }]);
   let lease: ReadyLease | null = null;
+  const providerTurnLease = acquireProviderTurnLease();
   try {
     lease = await ensureReady(
       queued.options,
@@ -2051,7 +2194,7 @@ async function startNextQueuedTurn(session: Session): Promise<void> {
       (message) => emitDwarfStarStartupNotice(session, turn, queued.model, message),
     );
     if (session.closed || session.turn !== turn) return;
-    closeDwarfStarStartupNotice(session, turn, "completed", "The selected model is ready.");
+    closeDwarfStarStartupNotice(session, turn, "completed", "The configured model is ready.");
     await runTurn(
       session,
       queued.options,
@@ -2084,6 +2227,7 @@ async function startNextQueuedTurn(session: Session): Promise<void> {
       }
     }
   } finally {
+    providerTurnLease();
     lease?.release();
     if (!turn.settled) {
       turn.settled = true;
@@ -2145,36 +2289,39 @@ function modelReasoningEfforts(): AvailableModel["supportedReasoningEfforts"] {
   ];
 }
 
-function modelDisplayName(id: CanonicalDwarfStarModelId): string {
+function modelDisplayName(id: string): string {
   switch (id) {
     case "deepseek-v4-flash": return "DeepSeek V4 Flash";
     case "deepseek-v4-pro": return "DeepSeek V4 Pro";
     case "glm-5.2": return "GLM 5.2";
     case "glm-5.3-flash": return "GLM 5.3 Flash";
+    default: return "DwarfStar (configured model)";
   }
 }
 
-export function mapDwarfStarModels(cwd = globalThis.process.cwd()): AvailableModel[] {
-  const ds4Dir = detectDs4Dir("");
-  const catalog = scanModelCatalog(ds4Dir);
-  // Do not claim a fallback model is live when this bridge cannot verify a
-  // downloaded GGUF. The provider declaration may still render its static
-  // fallback, but execution will fail fast if that selection disagrees with
-  // the configured model path instead of waiting for a model that is not there.
-  const ids = catalog.length > 0
-    ? catalog.map((entry) => entry.id)
-    : CANONICAL_MODEL_ORDER;
-  const unique = [...new Set(ids)];
-  const defaultId = unique.includes("deepseek-v4-flash") ? "deepseek-v4-flash" : unique[0];
-  return unique.map((id) => ({
+export function mapDwarfStarModels(
+  cwd = globalThis.process.cwd(),
+  configuredModelId?: string,
+  configuredModelPath?: string,
+): AvailableModel[] {
+  // The provider registration passes the settings-derived identity through
+  // static bridge options. Resolve the path again so a DS4-style symlink such
+  // as ds4flash.gguf follows the model currently configured on disk.
+  const id =
+    (configuredModelPath && resolvedDwarfStarModelId(configuredModelPath)) ??
+    canonicalModelId(configuredModelId ?? "") ??
+    (configuredModelId?.trim() || CONFIGURED_DWARFSTAR_MODEL_ID);
+  const displayName = modelDisplayName(id);
+  const location = configuredModelPath ? ` (${basename(configuredModelPath)})` : "";
+  return [{
     id,
     model: id,
-    displayName: modelDisplayName(id),
-    description: `${modelDisplayName(id)} served by local DwarfStar${cwd ? ` (${basename(cwd)})` : ""}.`,
+    displayName,
+    description: `${displayName} configured in DwarfStar settings${location}${cwd ? `; served by local DwarfStar on ${basename(cwd)}` : ""}.`,
     supportedReasoningEfforts: modelReasoningEfforts(),
     defaultReasoningEffort: id.startsWith("glm-") ? "high" : "none",
-    isDefault: id === defaultId,
-  }));
+    isDefault: true,
+  }];
 }
 
 function healthResult(options: DwarfStarOptions | null = null): ProviderHealthResult {
@@ -2262,7 +2409,19 @@ async function handleRequest(id: JsonRpcId, method: string, params: unknown): Pr
     case BRIDGE_REQUEST_METHODS.modelList: {
       const parsed = modelListParamsSchema.safeParse(params ?? {});
       if (!parsed.success) return invalidParams(id, method, parsed.error.issues);
-      io.sendResult(id, { models: mapDwarfStarModels(parsed.data.cwd), selectedOnlyModels: [] });
+      const providerOptions = optionRecord(parsed.data.providerOptions);
+      io.sendResult(id, {
+        models: mapDwarfStarModels(
+          parsed.data.cwd,
+          typeof providerOptions.configuredModelId === "string"
+            ? providerOptions.configuredModelId
+            : undefined,
+          typeof providerOptions.configuredModelPath === "string"
+            ? providerOptions.configuredModelPath
+            : undefined,
+        ),
+        selectedOnlyModels: [],
+      });
       return;
     }
     case BRIDGE_REQUEST_METHODS.providerHealth: {
@@ -2520,6 +2679,16 @@ async function shutdown(): Promise<void> {
   }
   await Promise.all(activeTurns.map((turn) => waitForTurnStop(turn)));
   sessions.clear();
+  if (providerTurnLeaseTimer) {
+    clearInterval(providerTurnLeaseTimer);
+    providerTurnLeaseTimer = null;
+  }
+  if (providerTurnLeaseReleaseTimer) {
+    clearTimeout(providerTurnLeaseReleaseTimer);
+    providerTurnLeaseReleaseTimer = null;
+  }
+  providerTurnLeaseCount = 0;
+  clearProviderTurnLease(BRIDGE_PLUGIN_ID, providerTurnLeaseId);
   await stopProcess(true);
 }
 
