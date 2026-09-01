@@ -1,9 +1,10 @@
 # bb-plugin-ds4 — DwarfStar
 
 Configure a local **DwarfStar** (`antirez/ds4`, a.k.a. ds4.c) inference
-server for BB. Once the setup is complete, choose its model in BB's model
-picker: the plugin starts `ds4-server` for matching turns and stops it after
-the configured idle grace period. Current DwarfStar builds support DeepSeek V4
+server for BB. Once the setup is complete, choose **DwarfStar** as a provider
+in BB's model picker. Its provider bridge keeps the first turn open while
+`ds4-server` starts and waits for the selected model before sending the request,
+so the first message does not race server startup. Current DwarfStar builds support DeepSeek V4
 Flash/PRO, GLM 5.2, and GLM 5.3 Flash GGUFs. GLM 5.3 Flash vision is supported
 when its encoder sidecar is available.
 
@@ -36,6 +37,10 @@ bb plugin build      # optional: precompile the frontend
 
 ## What you get
 
+- **First-class DwarfStar provider**: choose the `ds4` provider directly. The
+  bridge owns the turn lifecycle, waits through model loading, streams text and
+  reasoning deltas, forwards tool calls through BB, and supports GLM 5.3 image
+  input when the vision encoder is configured.
 - **DwarfStar setup** (Settings → Plugins → DwarfStar): checkout/model paths,
   GLM 5.3 vision encoder path, BB model selector, optional provider filter, idle
   grace period, runtime tuning, and optional external-agent configuration.
@@ -58,8 +63,10 @@ bb plugin build      # optional: precompile the frontend
 - **Lifecycle feedback**: BB shows a host toast for lifecycle transitions and
   a host-framed status banner above the composer while DwarfStar is starting,
   stopping, or unavailable. It also confirms when the server becomes ready.
-  Startup feedback is especially useful because loading a large GGUF can take
-  several seconds.
+  During a first-class provider turn, the transcript also contains a separate
+  `Starting DwarfStar` work item that updates while the GGUF loads and closes
+  as `DwarfStar ready` (or shows the startup error). Startup feedback is
+  especially useful because loading a large GGUF can take several minutes.
 - **`bb ds4` diagnostics** (kept for troubleshooting):
   - `bb ds4 status` — state, pid, uptime, health, served models
   - `bb ds4 start | stop | restart`
@@ -68,9 +75,11 @@ bb plugin build      # optional: precompile the frontend
   - `bb ds4 agents [status|apply [pi|opencode|codex …]]`
   - `bb ds4 agent` — launch the interactive `ds4-agent` TUI in a BB terminal
   - `bb ds4 complete <prompt>` — one-shot completion against the local server
-- **Agent tools** (available to every BB agent): `ds4_status` and
-  `ds4_complete` — BB agents can check the server and run prompts on the local
-  DwarfStar model directly.
+- **Harness tools for DwarfStar turns**: the `ds4` provider receives `read`,
+  `edit`, and `bash`. `read` and `edit` use BB's host file API inside the
+  current workspace; `bash` intentionally runs an unrestricted shell on the
+  current host, starting in the workspace by default. The legacy `ds4_status`
+  and `ds4_complete` tools remain available to non-DS4 agents.
 - **Agent connections**: write/merge provider configs so external agents can
   reach the server:
   - Pi/BB → `~/.pi/agent/models.json` (provider `ds4`, selected DwarfStar model)
@@ -110,12 +119,11 @@ A background `supervisor` service:
   failures while its process identity is still valid, then retries/restarts
   only after the recovery grace period expires.
 
-The first matching turn starts the process asynchronously; subsequent turns
-reuse it while it is warm. BB surfaces the model-loading window with a host
-toast and composer banner so it is clear that the local server is working. The
-BB model configuration callback is synchronous, so a provider/client that does
-not retry while a local server warms up can still report a first-request
-connection error; retrying that turn uses the now-warm server.
+The legacy model-selector integration starts the process asynchronously and is
+kept for external-agent compatibility. First-class `ds4` provider turns keep
+the turn open while the bridge starts or waits for `ds4-server`; the completion
+request is sent only after `/v1/models` contains the requested DwarfStar model.
+BB still surfaces the loading window with a host toast and composer banner.
 
 ## Settings (`bb plugin config ds4`)
 
@@ -144,6 +152,10 @@ connection error; retrying that turn uses the now-warm server.
 
 ## Notes
 
+- Provider-bridge turns forward BB-injected dynamic tools over the bridge's
+  runtime tool-call channel. This plugin supplies read/edit and unrestricted
+  host bash; web search/fetch tools are not invented here and appear when BB or
+  another enabled plugin injects them for the session.
 - The plugin manages **`ds4-server`** (the OpenAI/Anthropic/Responses HTTP
   server). The interactive **`ds4-agent`** TUI is launched into a BB terminal
   (`bb ds4 agent`) where you drive it directly — sessions save under

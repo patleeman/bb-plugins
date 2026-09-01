@@ -8,15 +8,16 @@
   },
   "bb": {
     "name": "DwarfStar",
-    "description": "Configure a local DwarfStar (antirez/ds4) inference server that starts when its BB model is used and stops after idle.",
+    "description": "Configure a local DwarfStar (antirez/ds4) provider and inference server that waits for model readiness and stops after idle.",
     "branding": {
       "icon": "./assets/icon.svg"
     },
     "server": "./server.ts",
-    "app": "./app.tsx"
+    "app": "./app.tsx",
+    "host": "./host.ts"
   },
   "scripts": {
-    "test": "node --test src/model-selection.test.ts src/model-catalog.test.ts src/lifecycle-notifications.test.ts src/process-recovery.test.ts src/run-config.test.ts src/agent-configs.test.ts src/request-payload.test.ts",
+    "test": "for test_file in src/model-selection.test.ts src/model-catalog.test.ts src/lifecycle-notifications.test.ts src/process-recovery.test.ts src/run-config.test.ts src/agent-configs.test.ts src/request-payload.test.ts src/provider-bridge.test.ts; do node --import ./test-setup.mjs --test \"$test_file\" || exit $?; done",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -26,7 +27,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@get-bb/plugin-sdk": "0.4.22",
+    "@get-bb/plugin-sdk": "0.4.29",
     "@pierre/diffs": "^1.2.9",
     "@radix-ui/react-alert-dialog": "^1.1.19",
     "@radix-ui/react-context-menu": "^2.3.3",

@@ -4,8 +4,9 @@
 // BB agents through native tools and a `bb ds4` CLI.
 
 import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
@@ -208,6 +209,17 @@ const CANONICAL_DWARFSTAR_MODEL_IDS = [
   "glm-5.2",
   "glm-5.3-flash",
 ] as const;
+
+const DS4_PROVIDER_ID = "ds4";
+const DS4_PROVIDER_TOOLS = ["read", "edit", "bash"] as const;
+const MAX_DS4_READ_BYTES = 2 * 1024 * 1024;
+const MAX_DS4_TOOL_RESULT_BYTES = 256 * 1024;
+const MAX_DS4_EDIT_BYTES = 1024 * 1024;
+const MAX_DS4_BASH_COMMAND_CHARS = 10_000;
+const MAX_DS4_BASH_CWD_CHARS = 4096;
+const DEFAULT_DS4_BASH_TIMEOUT_MS = 2 * 60 * 1000;
+const MAX_DS4_BASH_TIMEOUT_MS = 10 * 60 * 1000;
+const DS4_BASH_POLL_MS = 100;
 
 function preferredDwarfStarModel(
   models: readonly string[],
@@ -564,6 +576,311 @@ export default async function plugin(bb: BbPluginApi) {
 
   async function currentConfig(): Promise<ResolvedRunConfig> {
     return resolveConfig(effectiveSettings(await currentSettings()));
+  }
+
+  type WorkspaceToolContext = {
+    threadId: string;
+    signal: AbortSignal;
+  };
+
+  async function workspaceForTool(context: WorkspaceToolContext): Promise<{
+    hostId: string;
+    rootPath: string;
+  }> {
+    const thread = await bb.sdk.threads.get({ threadId: context.threadId, signal: context.signal });
+    if (!thread.environmentId) {
+      throw new Error("This thread has no workspace environment.");
+    }
+    const environment = await bb.sdk.environments.get({
+      environmentId: thread.environmentId,
+      signal: context.signal,
+    });
+    if (!environment.path) {
+      throw new Error("The thread workspace has no local path.");
+    }
+    return { hostId: environment.hostId, rootPath: environment.path };
+  }
+
+  function resolveWorkspaceToolPath(rootPath: string, requestedPath: string, allowRoot = false): string {
+    const candidate = resolve(rootPath, requestedPath);
+    const child = relative(rootPath, candidate);
+    const outside = child === ".." || child.startsWith("../") || isAbsolute(child);
+    if ((!allowRoot && child.length === 0) || outside) {
+      throw new Error("Path must stay inside the current workspace.");
+    }
+    return candidate;
+  }
+
+  function workspaceToolLabel(rootPath: string, targetPath: string): string {
+    return relative(rootPath, targetPath) || ".";
+  }
+
+  function limitDs4ToolResult(value: string): string {
+    if (Buffer.byteLength(value, "utf8") <= MAX_DS4_TOOL_RESULT_BYTES) return value;
+    return `${Buffer.from(value, "utf8").subarray(0, MAX_DS4_TOOL_RESULT_BYTES).toString("utf8")}\n[tool output truncated]`;
+  }
+
+  async function readWorkspaceToolFile(
+    context: WorkspaceToolContext,
+    requestedPath: string,
+  ): Promise<{
+    hostId: string;
+    rootPath: string;
+    path: string;
+    label: string;
+    text: string;
+    sha256: string;
+  }> {
+    const workspace = await workspaceForTool(context);
+    const path = resolveWorkspaceToolPath(workspace.rootPath, requestedPath);
+    const result = await bb.sdk.files.read({
+      hostId: workspace.hostId,
+      path,
+      rootPath: workspace.rootPath,
+      signal: context.signal,
+    });
+    if (result.sizeBytes > MAX_DS4_READ_BYTES) {
+      throw new Error(`File is too large to read through the DS4 tool (${result.sizeBytes} bytes).`);
+    }
+    if (result.contentEncoding === "base64") {
+      throw new Error("DS4 workspace tools only support UTF-8 text files.");
+    }
+    const text = result.content;
+    if (Buffer.byteLength(text, "utf8") > MAX_DS4_READ_BYTES) {
+      throw new Error("File is too large to read through the DS4 tool.");
+    }
+    return {
+      ...workspace,
+      path,
+      label: workspaceToolLabel(workspace.rootPath, path),
+      text,
+      sha256: result.sha256,
+    };
+  }
+
+  function hostShellQuote(value: string): string {
+    return `'${value.replace(/'/gu, "'\\''")}'`;
+  }
+
+  async function waitForDs4BashPoll(signal: AbortSignal): Promise<void> {
+    if (signal.aborted) throw new Error("DwarfStar bash was cancelled.");
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, DS4_BASH_POLL_MS);
+      const onAbort = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        reject(new Error("DwarfStar bash was cancelled."));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      timer.unref?.();
+    });
+  }
+
+  function appendDs4BashOutput(
+    current: string,
+    next: string,
+  ): { value: string; truncated: boolean } {
+    const bytes = Buffer.from(`${current}${next}`, "utf8");
+    if (bytes.byteLength <= MAX_DS4_TOOL_RESULT_BYTES) {
+      return { value: bytes.toString("utf8"), truncated: false };
+    }
+    return {
+      value: bytes.subarray(-MAX_DS4_TOOL_RESULT_BYTES).toString("utf8"),
+      truncated: true,
+    };
+  }
+
+  async function executeDs4Bash(
+    context: WorkspaceToolContext,
+    command: string,
+    requestedCwd: string | undefined,
+    requestedTimeoutMs: number | undefined,
+  ): Promise<string | { content: [{ type: "text"; text: string }]; isError: true }> {
+    const workspace = await workspaceForTool(context);
+    const cwd = requestedCwd
+      ? isAbsolute(requestedCwd)
+        ? resolve(requestedCwd)
+        : resolve(workspace.rootPath, requestedCwd)
+      : workspace.rootPath;
+    const timeoutMs = Math.min(
+      Math.max(requestedTimeoutMs ?? DEFAULT_DS4_BASH_TIMEOUT_MS, 1),
+      MAX_DS4_BASH_TIMEOUT_MS,
+    );
+    const marker = `__BB_DS4_BASH_${randomUUID().replaceAll("-", "")}`;
+    const wrappedCommand = [
+      "__bb_ds4_status=0",
+      `/bin/sh -c ${hostShellQuote(command)} || __bb_ds4_status=$?`,
+      `printf '\\n${marker}:%s\\n' \"$__bb_ds4_status\"`,
+      // Keep the PTY alive long enough for the bridge to read the marker. It
+      // is force-closed in finally, while detached children remain exactly as
+      // the user's shell command left them.
+      "sleep 30",
+    ].join("; ");
+    const terminal = await bb.sdk.terminals.create({
+      cols: 120,
+      rows: 40,
+      // This is intentionally host_path rather than a workspace-scoped
+      // target: DwarfStar's bash tool is an unrestricted host shell.
+      scope: { kind: "host_path", hostId: workspace.hostId, cwd },
+      start: { mode: "command", command: wrappedCommand },
+      title: "DwarfStar bash",
+    });
+    let nextSeq = 0;
+    let output = "";
+    let truncated = false;
+    const deadline = Date.now() + timeoutMs;
+    try {
+      for (;;) {
+        if (context.signal.aborted) throw new Error("DwarfStar bash was cancelled.");
+        const status = await bb.sdk.terminals.get({
+          terminalId: terminal.id,
+          signal: context.signal,
+        });
+        if (status.status === "running") {
+          const replay = await bb.sdk.terminals.output({
+            terminalId: terminal.id,
+            sinceSeq: nextSeq,
+            tailBytes: MAX_DS4_TOOL_RESULT_BYTES,
+            signal: context.signal,
+          });
+          nextSeq = replay.nextSeq;
+          truncated ||= replay.truncated;
+          for (const chunk of replay.chunks) {
+            const appended = appendDs4BashOutput(
+              output,
+              Buffer.from(chunk.dataBase64, "base64").toString("utf8"),
+            );
+            output = appended.value;
+            truncated ||= appended.truncated;
+          }
+          const markerStart = output.lastIndexOf(`${marker}:`);
+          if (markerStart >= 0) {
+            const statusStart = markerStart + marker.length + 1;
+            const statusEnd = output.indexOf("\n", statusStart);
+            if (statusEnd >= 0) {
+              const exitCode = Number.parseInt(output.slice(statusStart, statusEnd), 10);
+              if (Number.isInteger(exitCode)) {
+                const commandOutput = output.slice(0, markerStart).replace(/^\n/u, "");
+                const resultText = `${truncated ? "[output truncated]\n" : ""}${commandOutput || "(no output)"}\nexit code: ${exitCode}`;
+                if (exitCode === 0) return resultText;
+                return {
+                  content: [{ type: "text", text: resultText }],
+                  isError: true,
+                };
+              }
+            }
+          }
+        } else if (status.status === "exited" || status.status === "disconnected") {
+          throw new Error("DwarfStar bash terminal ended before reporting a result.");
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(`DwarfStar bash timed out after ${timeoutMs}ms.`);
+        }
+        await waitForDs4BashPoll(context.signal);
+      }
+    } finally {
+      await bb.sdk.terminals.close({ terminalId: terminal.id, mode: "force" }).catch(() => undefined);
+    }
+  }
+
+  bb.providers.register({
+    id: DS4_PROVIDER_ID,
+    displayName: "DwarfStar",
+    icon: "./assets/icon.svg",
+    strings: {
+      signInHint: "DwarfStar runs locally on this host; configure the DS4 checkout and model in Settings.",
+      expiredHint: "DwarfStar is local. Check the DS4 checkout, model path, and server logs.",
+      installUrl: "https://github.com/antirez/ds4",
+      planModeCopy: "DwarfStar plan mode",
+      iconTint: { light: "#475569", dark: "#cbd5e1" },
+    },
+    maintenance: { health: true, usage: false, installation: false },
+    capabilities: {
+      supportsServiceTier: false,
+      supportsNativeUserQuestion: false,
+      fork: "none",
+      supportsManualCompaction: false,
+      supportsThreadArchive: false,
+      supportsThreadRename: false,
+      // The bridge does not have an approval interaction channel. Claim only
+      // the mode whose policy it can actually enforce.
+      permissionModes: ["full"],
+      reasoningLevels: ["none", "low", "medium", "high", "max"],
+    },
+    reasoningLevels: [
+      { id: "none", label: "None" },
+      { id: "low", label: "Low" },
+      { id: "medium", label: "Medium" },
+      { id: "high", label: "High" },
+      { id: "max", label: "Maximum" },
+    ],
+    models: {
+      scope: "workspace",
+      fallback: CANONICAL_DWARFSTAR_MODEL_IDS.map((id, index) => ({
+        id,
+        displayName: id === "deepseek-v4-flash"
+          ? "DeepSeek V4 Flash"
+          : id === "deepseek-v4-pro"
+            ? "DeepSeek V4 Pro"
+            : id === "glm-5.2"
+              ? "GLM 5.2"
+              : "GLM 5.3 Flash",
+        description: "Local DwarfStar model",
+        supportedReasoningEfforts: [
+          { reasoningEffort: "none" as const, description: "None" },
+          { reasoningEffort: "low" as const, description: "Low" },
+          { reasoningEffort: "medium" as const, description: "Medium" },
+          { reasoningEffort: "high" as const, description: "High" },
+          { reasoningEffort: "max" as const, description: "Maximum" },
+        ],
+        defaultReasoningEffort: id.startsWith("glm-") ? "high" : "none",
+        isDefault: index === 0,
+      })),
+    },
+    composerActions: ["plan"],
+    experimental_visibility: "always",
+    deriveProviderOptions(context) {
+      const s = context.settings;
+      return {
+        ds4Dir: String(s.ds4Dir ?? ""),
+        modelPath: String(s.modelPath ?? ""),
+        visionPath: String(s.visionPath ?? "auto"),
+        backend: String(s.backend ?? "auto"),
+        host: String(s.host ?? "127.0.0.1"),
+        port: String(s.port ?? "8000"),
+        ctx: String(s.ctx ?? "100000"),
+        maxTokens: String(s.maxTokens ?? "384000"),
+        kvDiskDir: String(s.kvDiskDir ?? "/tmp/ds4-kv"),
+        kvDiskSpaceMb: String(s.kvDiskSpaceMb ?? "8192"),
+        power: String(s.power ?? ""),
+        extraArgs: String(s.extraArgs ?? ""),
+        dspark: s.dspark === true,
+        dsparkSupportPath: String(s.dsparkSupportPath ?? ""),
+        dsparkConfidence: String(s.dsparkConfidence ?? ""),
+        idleTimeoutSeconds: String(s.idleTimeoutSeconds ?? "300"),
+      };
+    },
+  });
+
+  function formatWorkspaceFileRange(
+    text: string,
+    startLine: number | undefined,
+    endLine: number | undefined,
+  ): { value: string; start: number; end: number; total: number } {
+    const lines = text.split(/\r?\n/u);
+    const start = startLine ?? 1;
+    const end = endLine ?? lines.length;
+    if (end < start) throw new Error("endLine must be greater than or equal to startLine.");
+    if (end - start > 2000) throw new Error("Read at most 2000 lines per tool call.");
+    return {
+      value: lines.slice(start - 1, end).map((line, index) => `${start + index}: ${line}`).join("\n"),
+      start,
+      end: Math.min(end, lines.length),
+      total: lines.length,
+    };
   }
 
   function endpointFromArgs(args: string[], fallback: ServerEndpoint): ServerEndpoint {
@@ -1819,11 +2136,96 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
+  bb.agents.registerTool({
+    name: "read",
+    description: "Read a UTF-8 text file from the current BB workspace. The path is confined to the workspace and output is line-numbered.",
+    instructions: "Use read for workspace files. Paths are relative to the workspace unless absolute and inside it.",
+    presentation: {
+      label: { pending: "Reading workspace file", completed: "Read workspace file" },
+    },
+    parameters: z.object({
+      path: z.string().min(1).max(4096),
+      startLine: z.number().int().min(1).optional(),
+      endLine: z.number().int().min(1).optional(),
+    }).strict(),
+    async execute({ path, startLine, endLine }, context) {
+      const file = await readWorkspaceToolFile(context, path);
+      const range = formatWorkspaceFileRange(file.text, startLine, endLine);
+      return limitDs4ToolResult(
+        `${file.label}:${range.start}-${range.end} of ${range.total}\n${range.value || "(empty file)"}`,
+      );
+    },
+  });
+
+  bb.agents.registerTool({
+    name: "edit",
+    description: "Replace one exact occurrence in a UTF-8 text file in the current BB workspace using an optimistic hash check.",
+    instructions: "Use edit for precise file changes. Include enough oldText to match exactly one occurrence; re-read after a conflict.",
+    presentation: {
+      label: { pending: "Editing workspace file", completed: "Edited workspace file" },
+    },
+    parameters: z.object({
+      path: z.string().min(1).max(4096),
+      oldText: z.string().min(1).max(MAX_DS4_EDIT_BYTES),
+      newText: z.string().max(MAX_DS4_EDIT_BYTES),
+    }).strict(),
+    async execute({ path, oldText, newText }, context) {
+      const file = await readWorkspaceToolFile(context, path);
+      const first = file.text.indexOf(oldText);
+      if (first < 0) throw new Error(`The requested text was not found in ${file.label}.`);
+      if (file.text.indexOf(oldText, first + 1) >= 0) {
+        throw new Error(`The requested text occurs more than once in ${file.label}; make oldText more specific.`);
+      }
+      const next = `${file.text.slice(0, first)}${newText}${file.text.slice(first + oldText.length)}`;
+      if (Buffer.byteLength(next, "utf8") > MAX_DS4_READ_BYTES) {
+        throw new Error("The edited file is too large for the DS4 tool.");
+      }
+      const result = await bb.sdk.files.write({
+        hostId: file.hostId,
+        path: file.path,
+        rootPath: file.rootPath,
+        content: next,
+        contentEncoding: "utf8",
+        createParents: false,
+        expectedSha256: file.sha256,
+      });
+      if (result.outcome === "conflict") {
+        throw new Error(`The file changed while editing ${file.label}; read it again and retry.`);
+      }
+      return `${file.label}: replaced one occurrence (${result.sizeBytes} bytes).`;
+    },
+  });
+
+  bb.agents.registerTool({
+    name: "bash",
+    description: "Run an unrestricted shell command on the current host. It starts in the current workspace by default and may access any host path.",
+    instructions: "Use bash for shell commands. This is an unrestricted host shell: absolute paths, network access, and commands outside the workspace are allowed by design.",
+    presentation: {
+      label: { pending: "Running shell command", completed: "Ran shell command" },
+    },
+    parameters: z.object({
+      command: z.string().min(1).max(MAX_DS4_BASH_COMMAND_CHARS),
+      cwd: z.string().min(1).max(MAX_DS4_BASH_CWD_CHARS).optional(),
+      timeout: z.number().int().min(1).max(MAX_DS4_BASH_TIMEOUT_MS).optional(),
+    }).strict(),
+    async execute({ command, cwd, timeout }, context) {
+      return executeDs4Bash(context, command, cwd, timeout);
+    },
+  });
+
   // The model picker resolves this callback immediately before a thread turn
   // starts. That makes it the earliest plugin hook that knows which model the
   // user actually selected, so use it to acquire a short-lived DS4 demand
   // lease and kick the process supervisor without requiring a manual start.
   bb.agents.configure((context) => {
+    if (context.provider.id === DS4_PROVIDER_ID) {
+      return {
+        tools: [...DS4_PROVIDER_TOOLS],
+        skills: [],
+        instructions:
+          "DwarfStar provides read and edit for workspace files and bash for unrestricted host-shell commands.",
+      };
+    }
     if (selectedModelIsDs4(context.provider.id, context.provider.model)) {
       acquireDemand(context.thread.id);
       // Resolve from the cached settings so proc.start() is reached before
