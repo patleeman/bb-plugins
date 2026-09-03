@@ -85,6 +85,62 @@ export interface RunSettings {
   restartOnCrash: boolean;
 }
 
+/** Keys that can vary per model. Everything else (checkout, host, idle) stays global. */
+export const PER_MODEL_OVERRIDE_KEYS = [
+  "visionPath",
+  "ctx",
+  "maxTokens",
+  "backend",
+  "kvDiskDir",
+  "kvDiskSpaceMb",
+  "power",
+  "extraArgs",
+  "dspark",
+  "dsparkSupportPath",
+  "dsparkConfidence",
+] as const;
+
+export type PerModelOverrideKey = (typeof PER_MODEL_OVERRIDE_KEYS)[number];
+export type PerModelOverrides = Partial<Pick<RunSettings, PerModelOverrideKey>>;
+
+/** Parse the perModelConfig JSON blob. Never throws — bad JSON means no overrides. */
+export function parsePerModelConfig(raw: string | undefined | null): Record<string, PerModelOverrides> {
+  if (!raw || typeof raw !== "string" || !raw.trim()) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, PerModelOverrides> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const overrides: PerModelOverrides = {};
+      for (const k of PER_MODEL_OVERRIDE_KEYS) {
+        const v = (value as Record<string, unknown>)[k];
+        if (k === "dspark") {
+          if (typeof v === "boolean") (overrides as Record<string, unknown>)[k] = v;
+        } else if (typeof v === "string") {
+          (overrides as Record<string, unknown>)[k] = v;
+        }
+      }
+      if (Object.keys(overrides).length > 0) out[key] = overrides;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Merge per-model overrides over the global base for the given preset key. */
+export function applyPerModelOverrides(
+  base: RunSettings,
+  perModel: Record<string, PerModelOverrides>,
+  presetKey: string | undefined | null,
+): RunSettings {
+  if (!presetKey) return base;
+  const overrides = perModel[presetKey];
+  if (!overrides) return base;
+  return { ...base, ...overrides };
+}
+
 export interface ResolvedRunConfig {
   ds4Dir: string | null;
   /** Absolute path to the ds4-server binary, or null when the dir is unknown. */
