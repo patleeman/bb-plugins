@@ -30,7 +30,9 @@ import {
   writeProcessRecord,
 } from "./src/process-recovery";
 import {
+  applyPerModelOverrides,
   DEFAULT_DWARFSTAR_CONTEXT_TOKENS,
+  parsePerModelConfig,
   resolveConfig,
   detectDs4Dir,
   dwarfStarVisionBackendError,
@@ -82,6 +84,7 @@ import {
   hasModelFilePartial,
   isUsableModelFile,
   type ModelDownloadPlan,
+  type ModelDownloadPlanInput,
   type ModelDownloadTarget,
 } from "./src/model-download";
 
@@ -181,8 +184,35 @@ const modelFilesStatusSchema = z.object({
   downloadable: z.boolean(),
   downloading: z.boolean(),
   currentTarget: z.string().nullable(),
+  completedTargets: z.array(z.string()),
+  startedAt: z.number().nullable(),
+  cancelled: z.boolean(),
   error: z.string().nullable(),
+  output: z.string(),
   message: z.string(),
+});
+const installedModelEntrySchema = z.object({
+  preset: z.string(),
+  displayName: z.string(),
+  modelId: z.string().nullable(),
+  isSelected: z.boolean(),
+  isInstalled: z.boolean(),
+  files: z.array(modelFileSchema),
+  targets: z.array(z.string()),
+  downloadable: z.boolean(),
+  downloading: z.boolean(),
+  currentTarget: z.string().nullable(),
+  completedTargets: z.array(z.string()),
+  startedAt: z.number().nullable(),
+  cancelled: z.boolean(),
+  error: z.string().nullable(),
+  output: z.string(),
+  message: z.string(),
+});
+const installedModelsSchema = z.object({
+  ds4Dir: z.string().nullable(),
+  selectedPreset: z.string(),
+  models: z.array(installedModelEntrySchema),
 });
 
 export const rpcContract = defineRpcContract({
@@ -212,6 +242,8 @@ export const rpcContract = defineRpcContract({
   },
   modelFiles: { input: z.null(), output: modelFilesStatusSchema },
   downloadModels: { input: z.null(), output: modelFilesStatusSchema },
+  cancelDownload: { input: z.null(), output: modelFilesStatusSchema },
+  installedModels: { input: z.null(), output: installedModelsSchema },
   launchAgent: {
     input: z.null(),
     output: z.object({ terminalId: z.string(), title: z.string() }),
@@ -235,7 +267,9 @@ const ADOPTED_HEALTH_GRACE_MS = 120_000;
 type ServerEndpoint = { host: string; port: number };
 
 const DS4_PROVIDER_ID = "ds4";
-const DS4_PROVIDER_TOOLS = ["read", "edit", "bash"] as const;
+// StockPi clone keeps lifecycle in this plugin but delegates turns to Pi.
+// No plugin-owned BB tools - Pi brings read/write/edit/bash + skills natively.
+const DS4_PROVIDER_TOOLS: readonly string[] = [] as const;
 const MAX_DS4_READ_BYTES = 2 * 1024 * 1024;
 const MAX_DS4_TOOL_RESULT_BYTES = 256 * 1024;
 const MAX_DS4_EDIT_BYTES = 1024 * 1024;
@@ -246,7 +280,8 @@ const MAX_DS4_BASH_TIMEOUT_MS = 10 * 60 * 1000;
 const DS4_BASH_POLL_MS = 100;
 
 function dwarfStarModelDisplayName(modelId: string): string {
-  switch (modelId) {
+  const bare = modelId.replace(/^dwarfstar\//, "").replace(/^ds4\//, "");
+  switch (bare) {
     case "deepseek-v4-flash": return "DeepSeek V4 Flash";
     case "deepseek-v4-flash-vision-exp": return "DeepSeek V4 Flash Vision Experimental";
     case "deepseek-v4-pro": return "DeepSeek V4 Pro";
@@ -257,19 +292,21 @@ function dwarfStarModelDisplayName(modelId: string): string {
 }
 
 function dwarfStarProviderModel(modelId: string) {
+  const bare = modelId.replace(/^dwarfstar\//, "").replace(/^ds4\//, "");
   return {
     id: modelId,
     displayName: dwarfStarModelDisplayName(modelId),
-    description: "The GGUF configured in DwarfStar settings.",
+    description: "DwarfStar via StockPi - local DS4 with Pi toolset.",
     supportedReasoningEfforts: [
       { reasoningEffort: "none" as const, description: "None" },
       { reasoningEffort: "low" as const, description: "Low" },
       { reasoningEffort: "medium" as const, description: "Medium" },
       { reasoningEffort: "high" as const, description: "High" },
+      { reasoningEffort: "xhigh" as const, description: "Extra High" },
       { reasoningEffort: "max" as const, description: "Maximum" },
     ],
-    defaultReasoningEffort: modelId.startsWith("glm-") ? "high" as const : "none" as const,
-    isDefault: true,
+    defaultReasoningEffort: bare.startsWith("glm-") ? "high" as const : "none" as const,
+    isDefault: bare === "deepseek-v4-flash",
   };
 }
 
@@ -383,6 +420,13 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Restart automatically after a crash",
       default: true,
     },
+    perModelConfig: {
+      type: "string",
+      label: "Per-model overrides (JSON)",
+      description:
+        "Managed by the DwarfStar settings UI. Maps a Model name to ctx, maxTokens, vision, backend, KV, DSpark overrides.",
+      default: "{}",
+    },
   });
 
   const proc = new Ds4Process(LOG_RING_LIMIT);
@@ -396,7 +440,9 @@ export default async function plugin(bb: BbPluginApi) {
     ds4Dir: string;
     preset: string;
     targets: ModelDownloadTarget[];
+    completedTargets: string[];
     currentTarget: ModelDownloadTarget | null;
+    startedAt: number;
     child: ChildProcess | null;
     processGroupIds: Set<number>;
     cancelPromise: Promise<void> | null;
@@ -405,6 +451,15 @@ export default async function plugin(bb: BbPluginApi) {
     error: string | null;
   };
   let modelDownloadJob: ModelDownloadJob | null = null;
+
+  /** Best-effort realtime push so open settings pages update without waiting for their poll. */
+  async function publishDownloads(): Promise<void> {
+    try {
+      bb.realtime.publish("model-downloads", installedModelsStatus(await currentConfig()));
+    } catch {
+      // best-effort
+    }
+  }
 
   function primaryModelId(cfg: ResolvedRunConfig): string {
     return resolvedDwarfStarModelId(cfg.modelPath) ?? CONFIGURED_DWARFSTAR_MODEL_ID;
@@ -448,7 +503,7 @@ export default async function plugin(bb: BbPluginApi) {
 
   function toRunSettings(s: StoredSettings): RunSettings {
     latestSettings = s;
-    return {
+    const base: RunSettings = {
       ds4Dir: s.ds4Dir ?? "",
       modelPath: s.modelPath ?? "",
       modelPreset: s.modelPreset ?? "auto",
@@ -467,6 +522,11 @@ export default async function plugin(bb: BbPluginApi) {
       dsparkConfidence: s.dsparkConfidence ?? "",
       restartOnCrash: s.restartOnCrash ?? true,
     };
+    // Per-model overrides live in perModelConfig JSON keyed by the raw Model name.
+    const rawPerModel = (s as Record<string, unknown>).perModelConfig;
+    const perModel = parsePerModelConfig(typeof rawPerModel === "string" ? rawPerModel : "");
+    const presetKey = base.modelPreset ?? "auto";
+    return applyPerModelOverrides(base, perModel, presetKey);
   }
 
   async function currentSettings(): Promise<RunSettings> {
@@ -554,6 +614,120 @@ export default async function plugin(bb: BbPluginApi) {
       : null;
   }
 
+  function installedModelsStatus(
+    cfg: ResolvedRunConfig,
+  ): z.infer<typeof installedModelsSchema> {
+    const selectedPresetRaw =
+      typeof latestSettings.modelPreset === "string" && latestSettings.modelPreset
+        ? latestSettings.modelPreset
+        : "auto";
+    const selectedPreset = (DWARFSTAR_MODEL_PRESET_OPTIONS as readonly string[]).includes(selectedPresetRaw)
+      ? selectedPresetRaw
+      : "auto";
+    if (modelDownloadJob) pruneModelDownloadProcessGroups(modelDownloadJob);
+    const anyDownloadActive =
+      modelDownloadJob !== null &&
+      (modelDownloadJob.currentTarget !== null || modelDownloadJob.processGroupIds.size > 0);
+    const scriptAvailable =
+      cfg.ds4Dir !== null && regularFileExists(join(cfg.ds4Dir, "download_model.sh"));
+    const models = DWARFSTAR_MODEL_PRESET_OPTIONS.map((presetValue) => {
+      const isSelected = presetValue === selectedPreset;
+      const planInput: ModelDownloadPlanInput = isSelected
+        ? {
+            ds4Dir: cfg.ds4Dir,
+            modelPreset: presetValue,
+            modelPath: cfg.modelPath,
+            visionSetting: latestSettings.visionPath ?? "auto",
+            visionPath: cfg.visionPath,
+            dspark: cfg.dspark,
+            dsparkSupportPath: cfg.dsparkSupportPath,
+          }
+        : {
+            ds4Dir: cfg.ds4Dir,
+            modelPreset: presetValue,
+            modelPath: null,
+            visionSetting: "auto",
+            visionPath: null,
+            dspark: Boolean(latestSettings.dspark),
+            dsparkSupportPath: null,
+          };
+      // For auto, reuse the selected config's plan so custom paths are reflected
+      const effectiveInput =
+        presetValue === "auto" && !isSelected
+          ? {
+              ds4Dir: cfg.ds4Dir,
+              modelPreset: "auto" as const,
+              modelPath: cfg.modelPath,
+              visionSetting: latestSettings.visionPath ?? "auto",
+              visionPath: cfg.visionPath,
+              dspark: cfg.dspark,
+              dsparkSupportPath: cfg.dsparkSupportPath,
+            }
+          : planInput;
+      const plan = createModelDownloadPlan(effectiveInput as ModelDownloadPlanInput);
+      const job = matchingModelDownloadJob(cfg, plan);
+      const files = plan.files.map((file) => ({
+        kind: file.kind,
+        label: file.label,
+        path: file.path,
+        required: file.required,
+        state: modelDownloadFileState(file.path),
+        downloadTarget: file.target,
+      }));
+      const isInstalled = files.length > 0 && files.every((f) => f.state === "present");
+      const missingTargets = plan.targets.filter((target) =>
+        files.some((file) => file.downloadTarget === target && file.state !== "present"),
+      );
+      const downloading = Boolean(anyDownloadActive && (job !== null || plan.preset === modelDownloadJob?.preset));
+      const downloadable =
+        scriptAvailable && plan.downloadable && missingTargets.length > 0 && !anyDownloadActive;
+      const activeJob = downloading ? (job ?? modelDownloadJob) : null;
+      let message: string;
+      if (downloading && activeJob) {
+        const done = activeJob.completedTargets.length;
+        const total = activeJob.targets.length;
+        message = total > 1
+          ? `Downloading ${activeJob.currentTarget ?? "model files"}… (${done + 1} of ${total})`
+          : `Downloading ${activeJob.currentTarget ?? "model files"}…`;
+      }
+      else if (downloading) message = "Another download is in progress.";
+      else if (job?.cancelled && !job?.error) message = "Download cancelled.";
+      else if (job?.error) message = `Download failed: ${job.error}`;
+      else if (plan.error) message = plan.error;
+      else if (!scriptAvailable) message = "download_model.sh not found.";
+      else if (isInstalled) message = "Ready";
+      else if (missingTargets.length === 0) message = "Manual download required.";
+      else message = "Missing files.";
+      return {
+        preset: presetValue,
+        displayName:
+          presetValue === "auto"
+            ? "Auto (custom path)"
+            : presetValue,
+        modelId: plan.modelId,
+        isSelected,
+        isInstalled,
+        files,
+        targets: [...plan.targets] as string[],
+        downloadable,
+        downloading,
+        currentTarget: activeJob?.currentTarget ?? null,
+        completedTargets: activeJob ? [...activeJob.completedTargets] : [],
+        startedAt: activeJob?.startedAt ?? null,
+        cancelled: job?.cancelled ?? false,
+        error: job?.error ?? null,
+        // Only the entry that owns the job carries the log tail.
+        output: job ? job.output : "",
+        message,
+      };
+    });
+    return {
+      ds4Dir: cfg.ds4Dir,
+      selectedPreset,
+      models,
+    };
+  }
+
   function modelFilesStatusForConfig(
     cfg: ResolvedRunConfig,
   ): ModelFilesStatusDto {
@@ -590,10 +764,17 @@ export default async function plugin(bb: BbPluginApi) {
       missingTargets.length > 0 &&
       !anyDownloadActive;
     let message: string;
-    if (downloading && job) {
-      message = `Downloading ${job.currentTarget ?? "model files"}…`;
+    const progressJob = downloading ? (job ?? activeDownloadJob) : null;
+    if (downloading && progressJob) {
+      const done = progressJob.completedTargets.length;
+      const total = progressJob.targets.length;
+      message = total > 1
+        ? `Downloading ${progressJob.currentTarget ?? "model files"}… (${done + 1} of ${total})`
+        : `Downloading ${progressJob.currentTarget ?? "model files"}…`;
     } else if (downloading) {
       message = "Another DwarfStar model download is already in progress.";
+    } else if (job?.cancelled && !job?.error) {
+      message = "Download cancelled.";
     } else if (job?.error) {
       message = `Download failed: ${job.error}`;
     } else if (anyDownloadActive && !job) {
@@ -617,8 +798,12 @@ export default async function plugin(bb: BbPluginApi) {
       complete,
       downloadable,
       downloading,
-      currentTarget: job?.currentTarget ?? null,
+      currentTarget: progressJob?.currentTarget ?? null,
+      completedTargets: progressJob ? [...progressJob.completedTargets] : [],
+      startedAt: progressJob?.startedAt ?? null,
+      cancelled: job?.cancelled ?? false,
       error: job?.error ?? null,
+      output: job?.output ?? "",
       message,
     };
   }
@@ -628,7 +813,9 @@ export default async function plugin(bb: BbPluginApi) {
     chunk: Buffer | string,
   ): void {
     const text = Buffer.from(chunk).toString("utf8");
-    job.output = `${job.output}${text}`.slice(-4000);
+    // Keep a tail large enough to diagnose hf/curl failures; the downloader
+    // runs detached in the background and this tail is the only visible log.
+    job.output = `${job.output}${text}`.slice(-12000);
   }
 
   function signalModelDownloadProcess(
@@ -783,7 +970,9 @@ export default async function plugin(bb: BbPluginApi) {
       ds4Dir: cfg.ds4Dir,
       preset: plan.preset,
       targets,
+      completedTargets: [],
       currentTarget: null,
+      startedAt: Date.now(),
       child: null,
       processGroupIds: new Set(),
       cancelPromise: null,
@@ -794,11 +983,15 @@ export default async function plugin(bb: BbPluginApi) {
     modelDownloadJob = job;
     void (async () => {
       try {
+        await publishDownloads();
         for (const target of targets) {
           if (job.cancelled) return;
           job.currentTarget = target;
           bb.log.info(`downloading DwarfStar model files: ${target}`);
+          await publishDownloads();
           await runModelDownloadTarget(job, target);
+          job.completedTargets.push(target);
+          await publishDownloads();
         }
       } catch (error) {
         job.error = error instanceof Error ? error.message : String(error);
@@ -806,6 +999,7 @@ export default async function plugin(bb: BbPluginApi) {
       } finally {
         job.currentTarget = null;
         job.child = null;
+        await publishDownloads();
       }
     })();
   }
@@ -1033,6 +1227,9 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   function providerDeclaration(model = configuredProviderModel()) {
+    // Stock Pi behavior with a DS4 lifecycle gate: turns run on BB's
+    // provider-pi bridge (pi --mode rpc + BB_PI_EXTENSION); this plugin only
+    // owns ds4-server start/stop/idle/health. Capabilities mirror provider-pi.
     return {
       id: DS4_PROVIDER_ID,
       displayName: "DwarfStar",
@@ -1042,36 +1239,40 @@ export default async function plugin(bb: BbPluginApi) {
         expiredHint: "DwarfStar is local. Check the DS4 checkout, model path, and server logs.",
         installUrl: "https://github.com/antirez/ds4",
         planModeCopy: "DwarfStar plan mode",
-        iconTint: { light: "#475569", dark: "#cbd5e1" },
+        iconTint: { light: "#6D5DFB", dark: "#6D5DFB" },
       },
-      maintenance: { health: true, usage: false, installation: false },
+      maintenance: { health: true, usage: false, installation: true },
       capabilities: {
         supportsServiceTier: false,
         supportsNativeUserQuestion: false,
-        fork: "none" as const,
-        supportsManualCompaction: false,
+        fork: "checkpoint" as const,
+        supportsManualCompaction: true,
         supportsThreadArchive: false,
         supportsThreadRename: false,
-        // The bridge does not have an approval interaction channel. Claim only
-        // the mode whose policy it can actually enforce.
         permissionModes: ["full" as const],
-        reasoningLevels: ["none", "low", "medium", "high", "max"] as const,
+        reasoningLevels: ["none", "low", "medium", "high", "xhigh", "max"] as const,
+      },
+      experimental_nativeSkillRoots: {
+        user: [".pi/agent/skills", ".agents/skills"],
+        project: [".pi/skills", ".agents/skills"],
       },
       reasoningLevels: [
         { id: "none", label: "None" },
         { id: "low", label: "Low" },
         { id: "medium", label: "Medium" },
         { id: "high", label: "High" },
+        { id: "xhigh", label: "Extra High" },
         { id: "max", label: "Maximum" },
       ],
       models: {
         scope: "workspace" as const,
-        // DwarfStar loads one GGUF per process. The provider model is the
-        // modelPath setting; changing the picker must not silently switch the
-        // server to another downloaded file.
-        fallback: [dwarfStarProviderModel(model.id)],
+        // StockPi clone: advertise DS4 models as dwarfstar/* so Pi can resolve via models.json ds4 provider.
+        fallback: [
+          dwarfStarProviderModel("dwarfstar/deepseek-v4-flash"),
+          dwarfStarProviderModel("dwarfstar/glm-5.3-flash"),
+        ],
       },
-      composerActions: ["plan" as const],
+      composerActions: [] as const,
       experimental_bridgeOptions: {
         configuredModelId: model.id,
       },
@@ -1101,7 +1302,10 @@ export default async function plugin(bb: BbPluginApi) {
     };
   }
 
-  let providerRegistration = bb.providers.register(providerDeclaration());
+  // Single Pi provider clone with DS4 lifecycle: Pi handles agent turns, this plugin owns ds4-server.
+  // Old custom Chat bridge (read/edit/bash only) is replaced by StockPi via host pi-bridge.
+  let providerRegistration: { dispose(): void } | null = null;
+  try { providerRegistration = bb.providers.register(providerDeclaration()); } catch (e) { bb.log.warn(`ds4 Pi clone register failed: ${String(e)}`); }
 
   function formatWorkspaceFileRange(
     text: string,
@@ -2140,6 +2344,9 @@ export default async function plugin(bb: BbPluginApi) {
     async modelFiles() {
       return modelFilesStatusForConfig(await currentConfig());
     },
+    async installedModels() {
+      return installedModelsStatus(await currentConfig());
+    },
     async downloadModels() {
       const cfg = await currentConfig();
       const before = modelFilesStatusForConfig(cfg);
@@ -2154,6 +2361,15 @@ export default async function plugin(bb: BbPluginApi) {
       const plan = modelDownloadPlanForConfig(cfg);
       startModelDownload(cfg, plan, targets);
       return modelFilesStatusForConfig(cfg);
+    },
+    async cancelDownload() {
+      const job = modelDownloadJob;
+      if (job) {
+        await cancelModelDownload(job);
+        bb.log.info("model download cancelled by user");
+        await publishDownloads();
+      }
+      return modelFilesStatusForConfig(await currentConfig());
     },
     async launchAgent() {
       const cfg = await currentConfig();
@@ -2301,6 +2517,9 @@ export default async function plugin(bb: BbPluginApi) {
       { name: "stop", summary: "Stop ds4-server", usage: "bb ds4 stop" },
       { name: "restart", summary: "Restart ds4-server", usage: "bb ds4 restart" },
       { name: "logs", summary: "Show recent process output", usage: "bb ds4 logs [-n N]" },
+      { name: "download", summary: "Download selected model files", usage: "bb ds4 download" },
+      { name: "download-cancel", summary: "Cancel a running model download", usage: "bb ds4 download-cancel" },
+      { name: "download-log", summary: "Show the model download log tail", usage: "bb ds4 download-log" },
       {
         name: "agents",
         summary: "Show or write agent provider configs",
@@ -2427,10 +2646,41 @@ export default async function plugin(bb: BbPluginApi) {
             return { exitCode: 1, stdout: `ds4 complete failed: ${String(err)}` };
           }
         }
+        case "download": {
+          const cfg = await currentConfig();
+          const before = modelFilesStatusForConfig(cfg);
+          if (!before.downloadable) {
+            return { exitCode: 1, stdout: before.message };
+          }
+          const targets = before.files
+            .filter((file) => file.downloadTarget !== null && file.state !== "present")
+            .map((file) => file.downloadTarget as ModelDownloadTarget)
+            .filter((target, index, all) => all.indexOf(target) === index);
+          const plan = modelDownloadPlanForConfig(cfg);
+          startModelDownload(cfg, plan, targets);
+          return { exitCode: 0, stdout: `Download started: ${targets.join(", ")}. Watch with \`bb ds4 download-log\`.` };
+        }
+        case "download-cancel": {
+          const job = modelDownloadJob;
+          if (!job) return { exitCode: 0, stdout: "No model download is running." };
+          await cancelModelDownload(job);
+          await publishDownloads();
+          return { exitCode: 0, stdout: "Download cancelled." };
+        }
+        case "download-log": {
+          const st = modelFilesStatusForConfig(await currentConfig());
+          const head = [
+            `preset:   ${st.preset}`,
+            `state:    ${st.downloading ? `downloading ${st.currentTarget ?? ""}` : st.cancelled ? "cancelled" : st.error ? "failed" : st.complete ? "complete" : "idle"}`,
+            ...(st.error ? [`error:     ${st.error}`] : []),
+          ].join("\n");
+          const tail = st.output ? `\n--- log tail ---\n${st.output}` : "\n(no download output yet)";
+          return { exitCode: 0, stdout: `${head}${tail}` };
+        }
         default:
           return {
             exitCode: 1,
-            stdout: "Usage: bb ds4 <status|start|stop|restart|logs|agents|agent|complete>",
+            stdout: "Usage: bb ds4 <status|start|stop|restart|logs|download|download-cancel|download-log|agents|agent|complete>",
           };
       }
     },
@@ -2597,12 +2847,7 @@ export default async function plugin(bb: BbPluginApi) {
       (next.modelPreset ?? "auto") !== (prev.modelPreset ?? "auto") ||
       (next.ds4Dir ?? "") !== (prev.ds4Dir ?? "")
     ) {
-      try {
-        providerRegistration.dispose();
-        providerRegistration = bb.providers.register(providerDeclaration());
-      } catch (error) {
-        bb.log.error(`could not refresh DwarfStar provider model: ${String(error)}`);
-      }
+      try { providerRegistration?.dispose(); providerRegistration = bb.providers.register(providerDeclaration()); } catch (e) { bb.log.error(`could not refresh ds4 Pi clone: ${String(e)}`); }
     }
   });
 
@@ -2610,7 +2855,7 @@ export default async function plugin(bb: BbPluginApi) {
     disposed = true;
     shuttingDown = true;
     lifecycleEpoch += 1;
-      providerRegistration.dispose();
+    providerRegistration?.dispose();
     const downloadJob = modelDownloadJob;
     modelDownloadJob = null;
     if (downloadJob) await cancelModelDownload(downloadJob);

@@ -2,9 +2,11 @@
 
 Configure a local **DwarfStar** (`antirez/ds4`, a.k.a. ds4.c) inference
 server for BB. Once the setup is complete, choose **DwarfStar** as a provider
-in BB's model picker. Its provider bridge keeps the first turn open while
-`ds4-server` starts and waits for the configured GGUF before sending the
-request, so the first message does not race server startup. Current DwarfStar
+in BB's model picker. The `ds4` provider is stock Pi: turns run on BB's own
+provider-pi bridge (pi --mode rpc + BB_PI_EXTENSION), so DwarfStar gets Pi's
+full toolset, MCP tools, and skills. The plugin only adds a lifecycle gate —
+it ensures `ds4-server` is up and serving the configured GGUF before a turn
+reaches Pi, so the first message does not race server startup. Current DwarfStar
 builds support DeepSeek V4 Flash, DeepSeek V4 Flash Vision Experimental,
 DeepSeek V4 PRO, GLM 5.2, and GLM 5.3 Flash GGUFs. DeepSeek Vision Experimental
 and GLM 5.3 Flash vision are supported when their encoder sidecars are available.
@@ -42,11 +44,12 @@ bb plugin build      # optional: precompile the frontend
 
 ## What you get
 
-- **First-class DwarfStar provider**: choose the `ds4` provider directly. The
-  bridge owns the turn lifecycle, waits through model loading, streams text and
-  reasoning deltas, forwards tool calls through BB, and supports image input
-  for the selected vision model when its encoder is configured. It exposes
-  exactly one model because DwarfStar loads one GGUF per process.
+- **First-class DwarfStar provider**: choose the `ds4` provider directly. Turns
+  run on BB's stock provider-pi bridge (same tools, MCP, skills, deltas as `pi`)
+  after a lifecycle gate ensures `ds4-server` is serving the configured GGUF.
+  Image input works for the selected vision model when its encoder is
+  configured. It exposes exactly one model because DwarfStar loads one GGUF
+  per process.
 - **DwarfStar setup** (Settings → Plugins → DwarfStar): one configured
   checkout, model selection, vision encoder path, context window, and idle
   grace period. Advanced runtime tuning remains available below the core setup.
@@ -94,12 +97,10 @@ bb plugin build      # optional: precompile the frontend
   - `bb ds4 agents [status|apply [pi|opencode|codex …]]`
   - `bb ds4 agent` — launch the interactive `ds4-agent` TUI in a BB terminal
   - `bb ds4 complete <prompt>` — one-shot completion against the local server
-- **Harness tools for DwarfStar turns**: the `ds4` provider receives `read`,
-  `edit`, and `bash`. `read` and `edit` use BB's host file API inside the
-  current workspace; `bash` intentionally runs an unrestricted shell on the
-  current host, starting in the workspace by default. These tools are supplied
-  to DwarfStar turns; the legacy `ds4_status` and `ds4_complete` tools are not
-  automatically injected into other providers.
+- **Stock Pi tools for DwarfStar turns**: the `ds4` provider is a transparent
+  proxy to BB's provider-pi bridge, so turns get exactly what `pi` turns get —
+  Pi's `read`/`write`/`edit`/`bash`, MCP tools from Agent Plugins, and skills.
+  Model ids are translated (`dwarfstar/*` in the picker, `ds4/*` for Pi).
 - **Agent connections**: optionally write/merge provider configs so external
   agents can reach the server. This is explicit; use
   `bb ds4 agents apply <target>` when you want one:
@@ -174,10 +175,10 @@ advanced runtime and compatibility controls.
 
 ## Notes
 
-- Provider-bridge turns forward BB-injected dynamic tools over the bridge's
-  runtime tool-call channel. This plugin supplies read/edit and unrestricted
-  host bash; web search/fetch tools are not invented here and appear when BB or
-  another enabled plugin injects them for the session.
+- BB-injected dynamic tools (including MCP) reach DwarfStar turns through the
+  stock provider-pi bridge this provider proxies to. Nothing tool-related is
+  invented here; web search/fetch tools appear when BB or another enabled
+  plugin injects them for the session.
 - The plugin manages **`ds4-server`** (the OpenAI/Anthropic/Responses HTTP
   server). The interactive **`ds4-agent`** TUI is launched into a BB terminal
   (`bb ds4 agent`) where you drive it directly — sessions save under
