@@ -65,7 +65,7 @@ for a in "$@"; do
 	fi
 done
 # shellcheck disable=SC2086
-exec prime-agent $out
+exec prime-agent --continue $out
 `;
 
 const LOGO = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
