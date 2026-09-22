@@ -914,6 +914,15 @@ const captures = [
         if (title.getBoundingClientRect().left > row.getBoundingClientRect().left + 24 || /Channels/.test(row.innerText)) {
           throw new Error("The channel title must replace Channels at the left of the header");
         }
+        const headerBounds = header.getBoundingClientRect();
+        const rowBounds = row.getBoundingClientRect();
+        if (rowBounds.right - headerBounds.right > 48 || headerBounds.right > rowBounds.right + 1) {
+          throw new Error("Channel controls must align at the right of the host header, beside the panel toggle");
+        }
+        const headerButtons = Array.from(header.querySelectorAll("button"), (button) => button.getBoundingClientRect());
+        if (headerButtons.some((bounds, index) => index > 0 && bounds.left < headerButtons[index - 1].right)) {
+          throw new Error("Channel title and header controls must not overlap");
+        }
         const firstMessage = messages[0];
         const composer = document.querySelector(".group-compose");
         if (header.getBoundingClientRect().height > 40 || firstMessage.getBoundingClientRect().height > 50) {

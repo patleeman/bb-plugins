@@ -958,6 +958,10 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
                 +{members.length - 4}
               </span>
             )}
+            <span className="channel-member-summary" aria-hidden>
+              <Icon name="Bot" />
+              {members.length}
+            </span>
           </Button>
         }
       >

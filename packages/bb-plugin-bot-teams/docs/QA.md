@@ -420,3 +420,10 @@ excluded from this fix's commit.
 - Regenerated `assets/staged-preview.png` through `scripts/capture-plugin-screenshots.mjs` using `BB_CAPTURE_ONLY=bot-teams`; the real UI was filtered to the staged Atlas bot. The capture restored Atlas's prior retired state.
 - Final verification: **210 tests pass**, package typecheck/build pass, and the independent migration review is clean.
 - Migration tests cover state preservation, metadata scope, existing workspace databases, active/pending/stopping refusals, destination conflicts, publisher mismatch, interrupted preparation, and repeated finalization. Marketplace validation uses BB's current schema and checks all 17 index entries against package identity, display metadata, source directories, and local icons.
+
+## Channel header spacing — 22 September 2026
+
+- Corrected two host-header selectors left on the old `bots` identity. In the live 1600 px BB window, the trailing gap after the channel controls fell from 905 px to the expected 36 px beside the panel toggle.
+- At widths of 480 px and below, the member button shows a bot icon and count. Desktop keeps the avatar stack; the accessible label and member list stay intact.
+- Verified the installed build at 1600 px, with the right panel open, and at 390 px and 320 px touch widths. Checked an eight-member channel and an empty archived channel, with no overlapping header buttons or horizontal overflow. Search, options, and the eight-member popover open correctly.
+- Added live capture assertions for right alignment and nonoverlapping controls. Package typecheck/build, capture-script syntax, marketplace schema/index checks, and the focused read-only review pass.

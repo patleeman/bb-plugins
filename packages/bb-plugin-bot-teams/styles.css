@@ -1236,8 +1236,8 @@
 [data-testid="app-page-header-content-row"] > div:has(.channel-header),
 [data-testid="app-page-header-content-row"]
   > div
-  > div:has(> [data-bb-plugin="bots"] > .channel-header),
-[data-bb-plugin="bots"]:has(> .channel-header) {
+  > div:has(> [data-bb-plugin="bot-teams"] > .channel-header),
+[data-bb-plugin="bot-teams"]:has(> .channel-header) {
   flex: 1;
   min-width: 0;
 }
@@ -1275,6 +1275,21 @@
 }
 .channel-overflow {
   font-size: var(--text-2xs, 10px);
+}
+.channel-member-summary {
+  display: none;
+}
+@media (max-width: 480px) {
+  .channel-avatar-stack > .channel-avatar,
+  .channel-avatar-stack > [data-icon-root] {
+    display: none;
+  }
+  .channel-member-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--text-xs);
+  }
 }
 .channel-popover {
   z-index: 50;
