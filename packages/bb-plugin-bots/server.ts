@@ -14,6 +14,7 @@ import {
   emojiSchema,
   responseBehavior,
   type Bot,
+  type BotCreateRequest,
   type Room,
   type Attachment,
 } from "./contract";
@@ -41,6 +42,28 @@ import {
   authorizeChannel,
 } from "./agent-channels";
 export { rpcContract } from "./contract";
+
+function botCreateRequestView(request: BotCreateRequest) {
+  const mission = request.input.mission.slice(0, 4000);
+  return {
+    id: request.id,
+    requesterBotId: request.requesterBotId,
+    requesterName: request.requesterName,
+    channelName: request.channelName,
+    name: request.input.name,
+    description: request.input.description,
+    avatar: request.input.avatar,
+    providerId: request.input.providerId,
+    model: request.input.model,
+    reasoningLevel: request.input.reasoningLevel,
+    permissionMode: request.input.permissionMode,
+    intervalMinutes: request.input.intervalMinutes,
+    mission,
+    missionTruncated: mission.length < request.input.mission.length,
+    createdAt: request.createdAt,
+    expiresAt: request.expiresAt,
+  };
+}
 
 export default async function plugin(bb: BbPluginApi) {
   const store = new Store(bb.storage.database());
@@ -229,6 +252,7 @@ export default async function plugin(bb: BbPluginApi) {
   }
   async function create(
     input: z.infer<typeof profileInput> & { mission: string; roomId?: string },
+    requestId?: string,
   ) {
     return runtime.locked("create", async () => {
       const config = await bb.sdk.system.config();
@@ -278,6 +302,11 @@ export default async function plugin(bb: BbPluginApi) {
             memberIds: [...room.memberIds, bot.id],
             updatedAt: now,
           });
+        if (requestId) {
+          const saved = store.markBotCreateRequestCreated(requestId, bot.id);
+          if (!saved || saved.status !== "created")
+            throw new Error("Bot creation finished without recording its request.");
+        }
       })();
       if (room)
         runtime.postSystemMessage(
@@ -288,6 +317,111 @@ export default async function plugin(bb: BbPluginApi) {
       runtime.changed();
       return bot;
     });
+  }
+  const materializingBotCreates = new Map<string, Promise<Bot | null>>();
+  async function materializeBotCreateRequest(
+    requestId: string,
+  ): Promise<Bot | null> {
+    const existing = materializingBotCreates.get(requestId);
+    if (existing) return existing;
+    const work = (async () => {
+      const current = store.botCreateRequest(requestId);
+      if (!current) return null;
+      if (current.status === "created")
+        return current.createdBotId ? store.get(current.createdBotId) : null;
+      const claimed = store.claimBotCreateRequest(requestId);
+      if (!claimed || claimed.status !== "creating") return null;
+      try {
+        const bot = await (claimed.input.roomId
+          ? runtime.locked(`room:${claimed.input.roomId}`, () =>
+              create(claimed.input, requestId),
+            )
+          : create(claimed.input, requestId));
+        runtime.changed();
+        return bot;
+      } catch (cause) {
+        store.resetBotCreateRequest(requestId);
+        runtime.changed();
+        throw cause;
+      }
+    })();
+    materializingBotCreates.set(requestId, work);
+    try {
+      return await work;
+    } finally {
+      if (materializingBotCreates.get(requestId) === work)
+        materializingBotCreates.delete(requestId);
+    }
+  }
+  async function recoverApprovedBotCreates(signal?: AbortSignal) {
+    for (const request of store.approvedBotCreateRequests()) {
+      if (signal?.aborted) return;
+      try {
+        await materializeBotCreateRequest(request.id);
+      } catch (cause) {
+        bb.log.warn(
+          `Approved bot creation recovery failed for ${request.id}: ${String(cause)}`,
+        );
+      }
+    }
+  }
+  async function approveBotCreate(
+    input: z.output<typeof rpcContract.create.input>,
+    threadId: string,
+    signal?: AbortSignal,
+  ): Promise<{ approved: boolean; bot: Bot | null }> {
+    const author = agentAuthor(store, threadId);
+    if (!author.botId) return { approved: true, bot: null };
+    const room = input.roomId ? store.room(input.roomId) : null;
+    const now = Date.now();
+    const request: BotCreateRequest = {
+      id: randomUUID(),
+      requesterBotId: author.botId,
+      requesterThreadId: threadId,
+      requesterName: author.speaker,
+      channelName: room?.name ?? null,
+      input,
+      status: "pending",
+      createdAt: now,
+      expiresAt: now + 300_000,
+      resolvedAt: null,
+      createdBotId: null,
+    };
+    store.putBotCreateRequest(request);
+    runtime.changed();
+    while (!signal?.aborted && Date.now() < request.expiresAt) {
+      const current = store.botCreateRequest(request.id);
+      if (!current) return { approved: false, bot: null };
+      if (current.status === "created")
+        return {
+          approved: true,
+          bot: current.createdBotId ? store.get(current.createdBotId) : null,
+        };
+      if (["denied", "expired", "cancelled"].includes(current.status))
+        return { approved: false, bot: null };
+      const waitMs = Math.min(1000, request.expiresAt - Date.now());
+      try {
+        if (signal) await delay(waitMs, undefined, { signal });
+        else await delay(waitMs);
+      } catch (cause) {
+        if (!signal?.aborted) throw cause;
+        break;
+      }
+    }
+    if (signal?.aborted) {
+      const current = store.botCreateRequest(request.id);
+      if (current?.status === "pending") {
+        store.resolveBotCreateRequest(request.id, "cancelled");
+        runtime.changed();
+      }
+      return { approved: false, bot: null };
+    }
+    const current = store.botCreateRequest(request.id);
+    if (current?.status === "pending") {
+      store.resolveBotCreateRequest(request.id, "expired");
+      runtime.changed();
+    }
+    return { approved: false, bot: null };
   }
   function validateRoom(name: string, memberIds: string[], id?: string) {
     if (new Set(memberIds).size !== memberIds.length)
@@ -466,11 +600,27 @@ export default async function plugin(bb: BbPluginApi) {
       bots: store.all(),
       rooms: store.rooms(),
       activeRoomIds: store.activeRoomIds(),
+      botCreateRequests: store.botCreateRequests().map(botCreateRequestView),
     }),
     create: (input) =>
       input.roomId
         ? runtime.locked(`room:${input.roomId}`, () => create(input))
         : create(input),
+    resolveBotCreateRequest: async ({ id, approved }) => {
+      const request = store.botCreateRequest(id);
+      if (!request) throw new Error("Bot creation request not found.");
+      if (request.status !== "pending")
+        throw new Error("This bot creation request has already been resolved.");
+      const resolved = store.resolveBotCreateRequest(
+        id,
+        approved ? "approved" : "denied",
+      );
+      if (!resolved || resolved.status === "pending")
+        throw new Error("This bot creation request changed before it was resolved.");
+      if (approved) await materializeBotCreateRequest(id);
+      runtime.changed();
+      return { ok: true as const };
+    },
     retire: ({ id, retired }) => runtime.retire(id, retired),
     retryJob: ({ id }) => runtime.retryJob(id),
     history: ({ id, before, query, limit }) =>
@@ -1210,7 +1360,9 @@ export default async function plugin(bb: BbPluginApi) {
     async start(signal) {
       await runtime.recoverRoomTitles();
       await recoverRoutingSessions(bb, store);
-      let cleanupAt = 0;
+      await recoverApprovedBotCreates(signal);
+      let cleanupAt = 0,
+        botCreateRecoveryAt = Date.now() + 30_000;
       while (!signal.aborted) {
         if (Date.now() >= cleanupAt) {
           cleanupAt = Date.now() + 60 * 60 * 1000;
@@ -1220,6 +1372,10 @@ export default async function plugin(bb: BbPluginApi) {
             await runtime.locked(`room:${a.roomId}`, async () =>
               store.discardAttachment(a.id),
             );
+        }
+        if (Date.now() >= botCreateRecoveryAt) {
+          botCreateRecoveryAt = Date.now() + 30_000;
+          await recoverApprovedBotCreates(signal);
         }
         await runtime.tick();
         try {
@@ -1250,6 +1406,7 @@ export default async function plugin(bb: BbPluginApi) {
     publishImage,
     automations,
     publishFile,
+    approveBotCreate,
   );
   bb.onDispose(() => runtime.dispose());
 }

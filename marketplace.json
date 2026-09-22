@@ -1,0 +1,373 @@
+{
+  "$schema": "https://getbb.app/schemas/marketplace.schema.json",
+  "schemaVersion": 1,
+  "name": "patleeman-bb-plugins",
+  "displayName": "Patrick's BB Plugins",
+  "description": "Agent tools, providers, and interface plugins for BB.",
+  "plugins": [
+    {
+      "id": "agent-checklists",
+      "displayName": "Checklists",
+      "description": "Persisted checklists with workbench progress and automatic continuation.",
+      "icon": "ListTodo",
+      "tags": [
+        "productivity",
+        "threads"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-agent-checklists",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "agent-plugins",
+      "displayName": "Agent Plugins",
+      "description": "Install Agent Plugins (skills + MCP) once; flow to every provider.",
+      "icon": "Puzzle",
+      "tags": [
+        "agents",
+        "integrations"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-agent-plugins",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "bots",
+      "displayName": "Bots",
+      "description": "Persistent bots with workspaces, mission, memory, and sidebar channels.",
+      "icon": "Bot",
+      "tags": [
+        "agents",
+        "collaboration"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-bots",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "cobalt2",
+      "displayName": "Cobalt2",
+      "description": "A Cobalt2-inspired color palette for bb.",
+      "icon": "Palette",
+      "tags": [
+        "themes"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-cobalt2",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "comprehension",
+      "displayName": "Comprehension",
+      "description": "Turns messages and threads into clear, skimmable explainers.",
+      "icon": "Zap",
+      "tags": [
+        "explainers",
+        "audio"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-comprehension",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "copy-session-id",
+      "displayName": "Copy Session ID",
+      "description": "Add Copy session ID to thread context menus in the left sidebar.",
+      "icon": "Copy",
+      "tags": [
+        "threads",
+        "utilities"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-copy-session-id",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "ds4",
+      "displayName": "DwarfStar",
+      "description": "Configure a local DwarfStar (antirez/ds4) provider and inference server that waits for model readiness and stops after idle.",
+      "icon": {
+        "url": "./packages/bb-plugin-ds4/assets/icon.svg"
+      },
+      "tags": [
+        "providers",
+        "local-models"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-ds4",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "emoji-react",
+      "displayName": "Emoji React",
+      "description": "Emoji reactions in the assistant-message text-selection menu and per-message action bar. Select text, pick a reaction from the menu (or use the action-bar buttons), and it drafts a reply — the reaction list is configurable in settings.",
+      "icon": {
+        "url": "./packages/bb-plugin-emoji-react/assets/icon.svg"
+      },
+      "tags": [
+        "interface",
+        "threads"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-emoji-react",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "excalidraw",
+      "displayName": "Excalidraw",
+      "description": "Create and edit Excalidraw drawings, then attach them to conversations.",
+      "icon": {
+        "url": "./packages/bb-plugin-excalidraw/assets/icon.svg"
+      },
+      "tags": [
+        "drawing",
+        "collaboration"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-excalidraw",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "gtd-sidebar",
+      "displayName": "GTD Sidebar",
+      "description": "An action-oriented sidebar that groups threads by who can act next.",
+      "icon": {
+        "url": "./packages/bb-plugin-gtd-sidebar/assets/icon.svg"
+      },
+      "tags": [
+        "productivity",
+        "sidebar"
+      ],
+      "author": {
+        "name": "Scott Sunarto",
+        "github": "smsunarto"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-gtd-sidebar",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "omp",
+      "displayName": "OhMyPi (Pi-style)",
+      "description": "Pi-style OhMyPi provider with provider/model grouping (openai-codex/gpt-5, openrouter/…) — replace the bundled ACP omp.",
+      "icon": {
+        "url": "./packages/bb-plugin-omp/icons/omp.svg"
+      },
+      "tags": [
+        "providers"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-omp",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "plannotator",
+      "displayName": "Plannotator",
+      "description": "Embed the upstream Plannotator plan-review app in BB and bridge its decisions back to agents.",
+      "icon": "ClipboardCheck",
+      "tags": [
+        "planning",
+        "review"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-plannotator",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "prime-agent",
+      "displayName": "Prime Agent Provider",
+      "description": "Registers prime-agent as a bb ACP provider: installs the shim + logo, provisions the customAcpAgents config entry, and reloads the server config.",
+      "icon": "Bot",
+      "tags": [
+        "providers"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-prime-agent",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "spool",
+      "displayName": "Spool",
+      "description": "Give BB agents a read-only, audited Spool context connection and usage skill.",
+      "icon": "Database",
+      "tags": [
+        "context",
+        "integrations"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-spool",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "tok-speed",
+      "displayName": "Tok Speed",
+      "description": "Paints a small visible provider-output tokens-per-second figure in every assistant message's hover menu — hidden reasoning and host tool time excluded.",
+      "icon": "Gauge",
+      "tags": [
+        "metrics",
+        "threads"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-tok-speed",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "traces",
+      "displayName": "Traces",
+      "description": "Index local agent sessions and trajectories in one private explorer.",
+      "icon": "Activity",
+      "tags": [
+        "sessions",
+        "search"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-traces",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "ua-fetch",
+      "displayName": "UA Fetch",
+      "description": "Web fetch tool with adaptive User-Agent spoofing — probes AI-crawler/bot UAs on block and learns per-domain winners.",
+      "icon": "Globe",
+      "tags": [
+        "web",
+        "tools"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-ua-fetch",
+          "ref": "main"
+        }
+      }
+    }
+  ]
+}

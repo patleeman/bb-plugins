@@ -13,6 +13,7 @@ import {
   messageSchema,
   attachmentSchema,
   jobSchema,
+  type BotCreateRequest,
 } from "../contract";
 import { Store } from "../store";
 import plugin from "../server";
@@ -160,6 +161,240 @@ test("CLI creates and patches profiles, preserves fields, and exposes its skill"
     );
     assert.deepEqual(config.skills, ["bots"]);
   } finally {
+    await x.close();
+  }
+});
+
+test("bot CLI creation waits for explicit owner approval", async () => {
+  const x = await setup();
+  try {
+    const requester = await x.create("Requester");
+    x.store.putConversation({
+      id: "requester-admin",
+      botId: requester.id,
+      key: "admin",
+      kind: "admin",
+      threadId: "thr_requester",
+      title: "Requester",
+      createdAt: Date.now(),
+    });
+    const ctx = { threadId: "thr_requester" };
+    const before = x.store.all().length;
+    const pendingRun = x.run(
+      ["create", "Approved", "--mission", "Coordinate the team."],
+      ctx,
+    );
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if (x.store.botCreateRequests().length) break;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const pending = x.store.botCreateRequests()[0];
+    assert.ok(pending);
+    assert.equal(x.store.all().length, before);
+    assert.deepEqual(pending.input, {
+      name: "Approved",
+      avatar: "🤖",
+      description: "",
+      providerId: "codex",
+      model: "",
+      reasoningLevel: "medium",
+      permissionMode: "auto",
+      intervalMinutes: 0,
+      mission: "Coordinate the team.",
+    });
+    const listed = (await x.harness.behavior.callRpc("list", null)) as {
+      botCreateRequests: Array<{
+        id: string;
+        name: string;
+        requesterName: string;
+        mission: string;
+        missionTruncated: boolean;
+      }>;
+    };
+    assert.equal(listed.botCreateRequests.length, 1);
+    assert.deepEqual(listed.botCreateRequests[0], {
+      ...listed.botCreateRequests[0],
+      id: pending.id,
+      name: "Approved",
+      requesterName: "Requester",
+      mission: "Coordinate the team.",
+      missionTruncated: false,
+    });
+    await x.harness.behavior.callRpc("resolveBotCreateRequest", {
+      id: pending.id,
+      approved: true,
+    });
+    const created = botSchema.parse(await pendingRun.then((result) => {
+      assert.equal(result.exitCode, 0, result.stderr);
+      return JSON.parse(result.stdout);
+    }));
+    assert.equal(created.name, "Approved");
+    assert.equal(x.store.all().length, before + 1);
+
+    const deniedRun = x.run(
+      ["create", "Denied", "--mission", "No workspace should be created."],
+      ctx,
+    );
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if (x.store.botCreateRequests().some((request) => request.input.name === "Denied"))
+        break;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const denied = x.store
+      .botCreateRequests()
+      .find((request) => request.input.name === "Denied");
+    assert.ok(denied);
+    await x.harness.behavior.callRpc("resolveBotCreateRequest", {
+      id: denied.id,
+      approved: false,
+    });
+    const deniedResult = await deniedRun;
+    assert.equal(deniedResult.exitCode, 2);
+    assert.match(deniedResult.stderr, /not approved/);
+    assert.equal(x.store.all().some((b) => b.name === "Denied"), false);
+  } finally {
+    await x.close();
+  }
+});
+
+test("approved bot creation is recovered when the requester has already exited", async () => {
+  const x = await setup();
+  try {
+    const requester = await x.create("Requester");
+    const now = Date.now();
+    const request: BotCreateRequest = {
+      id: randomUUID(),
+      requesterBotId: requester.id,
+      requesterThreadId: "thr_finished_requester",
+      requesterName: requester.name,
+      channelName: null,
+      input: {
+        name: "Recovered",
+        avatar: "🤖",
+        description: "Recovered after approval.",
+        providerId: "codex",
+        model: "",
+        reasoningLevel: "medium",
+        permissionMode: "auto",
+        intervalMinutes: 0,
+        mission: "Continue after the requester exits.",
+      },
+      status: "pending",
+      createdAt: now,
+      expiresAt: now + 300_000,
+      resolvedAt: null,
+      createdBotId: null,
+    };
+    x.store.putBotCreateRequest(request);
+
+    await x.harness.behavior.callRpc("resolveBotCreateRequest", {
+      id: request.id,
+      approved: true,
+    });
+
+    const resolved = x.store.botCreateRequest(request.id);
+    assert.equal(resolved?.status, "created");
+    assert.ok(resolved?.createdBotId);
+    assert.equal(x.store.get(resolved!.createdBotId!).name, "Recovered");
+  } finally {
+    await x.close();
+  }
+});
+
+test("approved creation preserves a channel rename during workspace initialization", async () => {
+  const x = await setup();
+  const initialize = Store.prototype.initialize;
+  let release = () => {};
+  try {
+    const requester = await x.create("Requester");
+    const room = roomSchema.parse(await x.harness.behavior.callRpc("createRoom", {
+      name: "Original channel",
+      memberIds: [requester.id],
+    }));
+    const request: BotCreateRequest = {
+      id: randomUUID(),
+      requesterBotId: requester.id,
+      requesterThreadId: "thr_finished_requester",
+      requesterName: requester.name,
+      channelName: room.name,
+      input: { ...requester, name: "Approved", mission: "Help the team.", roomId: room.id },
+      status: "pending",
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 300_000,
+      resolvedAt: null,
+      createdBotId: null,
+    };
+    x.store.putBotCreateRequest(request);
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let entered = () => {};
+    const initializing = new Promise<void>((resolve) => { entered = resolve; });
+    Store.prototype.initialize = async function (...args) {
+      entered();
+      await gate;
+      return initialize.apply(this, args);
+    };
+    const approval = x.harness.behavior.callRpc("resolveBotCreateRequest", {
+      id: request.id, approved: true,
+    });
+    await initializing;
+    const rename = x.harness.behavior.callRpc("updateRoom", {
+      id: room.id, name: "Renamed channel",
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    release();
+    await Promise.all([approval, rename]);
+    assert.equal(x.store.room(room.id).name, "Renamed channel");
+    assert.equal(x.store.room(room.id).memberIds.length, 2);
+  } finally {
+    release();
+    Store.prototype.initialize = initialize;
+    await x.close();
+  }
+});
+
+test("approved creation rolls back the bot when recording completion fails", async () => {
+  const x = await setup();
+  const markCreated = Store.prototype.markBotCreateRequestCreated;
+  try {
+    const requester = await x.create("Requester");
+    const request: BotCreateRequest = {
+      id: randomUUID(),
+      requesterBotId: requester.id,
+      requesterThreadId: "thr_finished_requester",
+      requesterName: requester.name,
+      channelName: null,
+      input: { ...requester, name: "Atomic", mission: "Create exactly once." },
+      status: "pending",
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 300_000,
+      resolvedAt: null,
+      createdBotId: null,
+    };
+    x.store.putBotCreateRequest(request);
+    Store.prototype.markBotCreateRequestCreated = function () {
+      throw new Error("Simulated request write failure");
+    };
+    await assert.rejects(x.harness.behavior.callRpc("resolveBotCreateRequest", {
+      id: request.id, approved: true,
+    }), /Simulated request write failure/);
+    assert.deepEqual(x.store.all().map((bot) => bot.id), [requester.id]);
+    assert.equal(x.store.botCreateRequest(request.id)?.status, "approved");
+    Store.prototype.markBotCreateRequestCreated = markCreated;
+    x.harness.sdk.stub("threads.list", async () => []);
+    const service = x.harness.behavior.runService("rooms");
+    try {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (x.store.botCreateRequest(request.id)?.status === "created") break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      assert.equal(x.store.botCreateRequest(request.id)?.status, "created");
+      assert.equal(x.store.all().filter((bot) => bot.name === "Atomic").length, 1);
+    } finally {
+      service.controller.abort();
+      await service.done;
+    }
+  } finally {
+    Store.prototype.markBotCreateRequestCreated = markCreated;
     await x.close();
   }
 });

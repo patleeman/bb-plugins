@@ -2,6 +2,32 @@
 
 Plugins for [bb](https://github.com/patleeman/bb).
 
+## Marketplace
+
+Add this repository as a BB marketplace to browse and install its plugins:
+
+```sh
+bb marketplace add git:github.com/patleeman/bb-plugins@main
+```
+
+For a local checkout, run this from the repository root:
+
+```sh
+bb marketplace add path:.
+```
+
+The root [`marketplace.json`](marketplace.json) lists all 17 plugins. Each
+entry installs its package from this repository's `main` branch, including
+when the catalog is added from a local checkout. Refresh the catalog with:
+
+```sh
+bb marketplace refresh patleeman-bb-plugins
+```
+
+When adding a plugin, update both `marketplace.json` and
+[`.bb/plugins.json`](.bb/plugins.json). Keep its marketplace ID, display name,
+description, and icon aligned with its package manifest.
+
 ## Packages
 
 - [`bb-plugin-bots`](packages/bb-plugin-bots/) — persistent agents with their

@@ -243,6 +243,12 @@ requests exclude their sender and allow three sends per work session. Handoffs
 stay within two hops; a request stops adding replies at 32 responses and reports
 that limit. These rules prevent runaway consultation loops.
 
+Bots may also run `bb bots create`, but creation is approval-gated. The request
+appears in **Plugins → Bots** under **Pending bot approvals**, where the owner
+can review the requested profile and mission and approve or deny it. The
+workspace and profile are created only after approval; denying, cancelling, or
+letting the request expire leaves no partial bot behind.
+
 ### Migrate from Council
 
 On the BB server machine, with Bots installed:
@@ -351,7 +357,7 @@ The image workflow and chat mode selector below were captured in the running app
 
 ## Notifications
 
-Channel replies, failures, and requests for input use **Settings → Push notifications**, with the same mobile, browser, and desktop switches as regular threads. Replies open their channel message; questions and approvals open their work thread. Read or archived channels, system notices, and silent PASS responses do not notify. Events persist across plugin restarts, with duplicate suppression and a 24-hour expiry.
+Channel replies, failures, and requests for input use **Settings → Push notifications**, with the same mobile, browser, and desktop switches as regular threads. Replies open their channel message; questions open their work thread. Read or archived channels, system notices, and silent PASS responses do not notify. Events persist across plugin restarts, with duplicate suppression and a 24-hour expiry.
 
 This requires the shared notification source API in BB’s built-in Push notifications plugin (`notifications.enqueue`). Older BB builds keep channel events pending until they expire; installing Bots alone cannot update that built-in plugin. Mobile channel links require the corresponding mobile update; older mobile clients fall back to the backing thread when available.
 

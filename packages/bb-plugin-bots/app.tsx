@@ -32,6 +32,7 @@ import { Modal } from "./channel-controls";
 import { BotCollection } from "./bot-collection";
 import "./styles.css";
 const tabs = ["profile", "mission", "memory", "activity", "usage"] as const;
+
 function BotDetail({ id, tab }: { id: string; tab: string }) {
   const rpc = useRpc<typeof rpcContract>(),
     navigate = useBbNavigate();
@@ -227,7 +228,11 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
 function BotsPage({ subPath }: PluginNavPanelProps) {
   const rpc = useRpc<typeof rpcContract>(),
     navigate = useBbNavigate();
-  const [data, setData] = useState<{ bots: Bot[]; rooms: Room[] } | null>(null),
+  const [data, setData] = useState<{
+      bots: Bot[];
+      rooms: Room[];
+      botCreateRequests: import("./contract").BotCreateRequestView[];
+    } | null>(null),
     [error, setError] = useState<string | null>(null);
   const request = useRef(0);
   const load = useCallback(() => {
@@ -286,7 +291,15 @@ function BotsPage({ subPath }: PluginNavPanelProps) {
         />
       </div>
     );
-  return <BotCollection bots={bots} loading={!data} error={error} />;
+  return (
+    <BotCollection
+      bots={bots}
+      loading={!data}
+      error={error}
+      botCreateRequests={data?.botCreateRequests ?? []}
+      onBotCreateRequestResolved={load}
+    />
+  );
 }
 export default definePluginApp((app) => {
   app.slots.experimental_appOverlay({

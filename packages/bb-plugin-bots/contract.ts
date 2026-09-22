@@ -62,6 +62,51 @@ export const botSchema = profileInput.extend({
 });
 export type Bot = z.infer<typeof botSchema>;
 export type ProfileInput = z.infer<typeof profileInput>;
+export const botCreateInput = profileInput.extend({
+  mission: z.string().min(1).max(64000),
+  roomId: z.string().uuid().optional(),
+});
+export const botCreateRequestSchema = z.object({
+  id: z.string().uuid(),
+  requesterBotId: idSchema,
+  requesterThreadId: z.string().min(1),
+  requesterName: z.string().min(1),
+  channelName: z.string().nullable(),
+  input: botCreateInput,
+  status: z.enum([
+    "pending",
+    "approved",
+    "creating",
+    "created",
+    "denied",
+    "expired",
+    "cancelled",
+  ]),
+  createdAt: z.number(),
+  expiresAt: z.number(),
+  resolvedAt: z.number().nullable(),
+  createdBotId: idSchema.nullable().default(null),
+});
+export type BotCreateRequest = z.infer<typeof botCreateRequestSchema>;
+export const botCreateRequestViewSchema = z.object({
+  id: z.string().uuid(),
+  requesterBotId: idSchema,
+  requesterName: z.string().min(1),
+  channelName: z.string().nullable(),
+  name: z.string(),
+  description: z.string(),
+  avatar: z.string(),
+  providerId: z.string(),
+  model: z.string(),
+  reasoningLevel: z.string(),
+  permissionMode: z.string(),
+  intervalMinutes: z.number(),
+  mission: z.string().max(4000),
+  missionTruncated: z.boolean(),
+  createdAt: z.number(),
+  expiresAt: z.number(),
+});
+export type BotCreateRequestView = z.infer<typeof botCreateRequestViewSchema>;
 // Creation defaults must never reset fields omitted from a partial update.
 const profilePatch = z.object({
   limits: usageLimits.optional(),
@@ -325,14 +370,16 @@ export const rpcContract = defineRpcContract({
       bots: z.array(botSchema),
       rooms: z.array(roomSchema),
       activeRoomIds: z.array(z.string()),
+      botCreateRequests: z.array(botCreateRequestViewSchema),
     }),
   },
   create: {
-    input: profileInput.extend({
-      mission: z.string().min(1).max(64000),
-      roomId: z.string().uuid().optional(),
-    }),
+    input: botCreateInput,
     output: botSchema,
+  },
+  resolveBotCreateRequest: {
+    input: z.object({ id: z.string().uuid(), approved: z.boolean() }),
+    output: z.object({ ok: z.literal(true) }),
   },
   update: {
     input: profilePatch.extend({

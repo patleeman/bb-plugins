@@ -7,10 +7,12 @@ import {
   runSchema,
   jobSchema,
   messageSchema,
+  botCreateRequestSchema,
 } from "./contract";
 import type {
   Attachment,
   Bot,
+  BotCreateRequest,
   Conversation,
   Job,
   Room,
@@ -35,6 +37,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS draft_uploads (id TEXT PRIMARY KEY, bytes BLOB NOT NULL, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS routing_sessions (thread_id TEXT PRIMARY KEY, request_id TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS bot_create_requests (id TEXT PRIMARY KEY, status TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, json TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS pending_bot_create_requests ON bot_create_requests(status,created_at);
       CREATE TABLE IF NOT EXISTS reactions (message_id TEXT NOT NULL, emoji TEXT NOT NULL, actor_id TEXT NOT NULL, actor_name TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(message_id,emoji,actor_id));
       CREATE TABLE IF NOT EXISTS channel_notifications (id TEXT PRIMARY KEY,room_id TEXT NOT NULL,kind TEXT NOT NULL,subject_id TEXT NOT NULL,created_at INTEGER NOT NULL,dispatched_at INTEGER);
       CREATE INDEX IF NOT EXISTS pending_channel_notifications ON channel_notifications(dispatched_at,created_at);
@@ -101,6 +105,125 @@ export class Store {
     this.db
       .prepare("INSERT INTO conversations VALUES (?,?,?,?,?)")
       .run(c.id, c.botId, c.key, c.threadId, JSON.stringify(c));
+  }
+  putBotCreateRequest(request: BotCreateRequest) {
+    this.db
+      .prepare(
+        "INSERT INTO bot_create_requests (id,status,created_at,expires_at,json) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,created_at=excluded.created_at,expires_at=excluded.expires_at,json=excluded.json",
+      )
+      .run(
+        request.id,
+        request.status,
+        request.createdAt,
+        request.expiresAt,
+        JSON.stringify(request),
+      );
+  }
+  botCreateRequest(id: string): BotCreateRequest | null {
+    const row = this.db
+      .prepare("SELECT json FROM bot_create_requests WHERE id=?")
+      .get(id) as { json: string } | undefined;
+    return row ? botCreateRequestSchema.parse(JSON.parse(row.json)) : null;
+  }
+  botCreateRequests(now = Date.now()): BotCreateRequest[] {
+    this.expireBotCreateRequests(now);
+    return (
+      this.db
+        .prepare(
+          "SELECT json FROM bot_create_requests WHERE status='pending' ORDER BY created_at,rowid",
+        )
+        .all() as { json: string }[]
+    ).map((row) => botCreateRequestSchema.parse(JSON.parse(row.json)));
+  }
+  expireBotCreateRequests(now = Date.now()) {
+    const rows = this.db
+      .prepare(
+        "SELECT json FROM bot_create_requests WHERE status='pending' AND expires_at<=?",
+      )
+      .all(now) as { json: string }[];
+    if (!rows.length) return 0;
+    const resolvedAt = Date.now();
+    const update = this.db.prepare(
+      "UPDATE bot_create_requests SET status=?,json=? WHERE id=? AND status='pending'",
+    );
+    return this.db.transaction(() => {
+      let changed = 0;
+      for (const row of rows) {
+        const request = botCreateRequestSchema.parse(JSON.parse(row.json));
+        const next = {
+          ...request,
+          status: "expired" as const,
+          resolvedAt,
+        };
+        changed += update.run(next.status, JSON.stringify(next), next.id).changes;
+      }
+      return changed;
+    })();
+  }
+  resolveBotCreateRequest(
+    id: string,
+    status: Extract<BotCreateRequest["status"], "approved" | "denied" | "expired" | "cancelled">,
+  ): BotCreateRequest | null {
+    const current = this.botCreateRequest(id);
+    if (!current) return null;
+    if (current.status !== "pending") return current;
+    const next = { ...current, status, resolvedAt: Date.now() };
+    const changed = this.db
+      .prepare(
+        "UPDATE bot_create_requests SET status=?,json=? WHERE id=? AND status='pending'",
+      )
+      .run(next.status, JSON.stringify(next), id).changes;
+    if (!changed) return this.botCreateRequest(id);
+    return next;
+  }
+  approvedBotCreateRequests(): BotCreateRequest[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT json FROM bot_create_requests WHERE status IN ('approved','creating') ORDER BY created_at,rowid",
+        )
+        .all() as { json: string }[]
+    ).map((row) => botCreateRequestSchema.parse(JSON.parse(row.json)));
+  }
+  claimBotCreateRequest(id: string): BotCreateRequest | null {
+    const current = this.botCreateRequest(id);
+    if (!current || current.status === "created" || current.status === "creating")
+      return current;
+    if (current.status !== "approved") return current;
+    const next = { ...current, status: "creating" as const };
+    const changed = this.db
+      .prepare(
+        "UPDATE bot_create_requests SET status=?,json=? WHERE id=? AND status='approved'",
+      )
+      .run(next.status, JSON.stringify(next), id).changes;
+    return changed ? next : this.botCreateRequest(id);
+  }
+  markBotCreateRequestCreated(
+    id: string,
+    botId: string,
+  ): BotCreateRequest | null {
+    const current = this.botCreateRequest(id);
+    if (!current) return null;
+    if (current.status === "created") return current;
+    if (current.status !== "creating") return current;
+    const next = { ...current, status: "created" as const, createdBotId: botId };
+    const changed = this.db
+      .prepare(
+        "UPDATE bot_create_requests SET status=?,json=? WHERE id=? AND status='creating'",
+      )
+      .run(next.status, JSON.stringify(next), id).changes;
+    return changed ? next : this.botCreateRequest(id);
+  }
+  resetBotCreateRequest(id: string): BotCreateRequest | null {
+    const current = this.botCreateRequest(id);
+    if (!current || current.status !== "creating") return current;
+    const next = { ...current, status: "approved" as const };
+    const changed = this.db
+      .prepare(
+        "UPDATE bot_create_requests SET status=?,json=? WHERE id=? AND status='creating'",
+      )
+      .run(next.status, JSON.stringify(next), id).changes;
+    return changed ? next : this.botCreateRequest(id);
   }
   deleteConversation(threadId: string) {
     this.db

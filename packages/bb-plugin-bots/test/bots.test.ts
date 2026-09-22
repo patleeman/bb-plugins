@@ -832,6 +832,7 @@ test("unrelated threads cannot claim a bot identity using metadata", async () =>
       bots: [],
       rooms: [],
       activeRoomIds: [],
+      botCreateRequests: [],
     });
   } finally {
     await host.harness.lifecycle.dispose();

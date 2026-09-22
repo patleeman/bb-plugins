@@ -56,9 +56,13 @@ bb bots channel send 'Design review' --text '@grug Summarize the findings and di
 
 Top-level BB agents can manage channels. A persistent bot can access only
 channels it belongs to through these tools; creating one automatically joins its
-creator. In its current channel, a bot’s final answer posts automatically: use
-that final answer or an explicit @mention instead of sending a duplicate via a
-tool. Cross-channel consultations exclude the sender, allow up to three explicit
+creator. Bots may request another persistent bot with `bb bots create`, but BB
+pauses for explicit owner approval before creating its workspace and profile.
+Review these requests in **Plugins → Bots → Pending bot approvals**; they are
+not hidden inside the requesting bot’s work thread.
+In its current channel, a bot’s final answer posts automatically: use that final
+answer or an explicit @mention instead of sending a duplicate via a tool.
+Cross-channel consultations exclude the sender, allow up to three explicit
 messages per work session, and keep the two-hop handoff limit. A request is capped
 at 32 responses. Stop and limits are surfaced in request status. Each primary session handles
 one task at a time; explicit forks can run concurrently. Avoid cyclic consultations where agents wait for one another;

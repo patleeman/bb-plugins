@@ -8,7 +8,7 @@ import {
   type PluginRpcHandlers,
 } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { rpcContract, type ProfileInput } from "./contract";
+import { rpcContract, type Bot, type ProfileInput } from "./contract";
 import type { Store } from "./store";
 import type { ChannelAutomations } from "./channel-automations";
 import {
@@ -28,6 +28,7 @@ import {
 
 type Method = keyof typeof rpcContract;
 type Output<K extends Method> = z.output<(typeof rpcContract)[K]["output"]>;
+type BotCreateApproval = { approved: boolean; bot: Bot | null };
 const profileFlags = [
   "name",
   "description",
@@ -309,6 +310,11 @@ export function registerCli(
   ) => Promise<unknown>,
   automations?: ChannelAutomations,
   publishFile?: typeof publishImage,
+  approveCreate?: (
+    input: z.output<typeof rpcContract.create.input>,
+    threadId: string,
+    signal?: AbortSignal,
+  ) => Promise<BotCreateApproval>,
 ) {
   // Both entry points execute exactly the same validated operations.
   async function call<K extends Method>(
@@ -660,10 +666,6 @@ export function registerCli(
           if (!publish) throw new UsageError("File publishing is unavailable.");
           return emit(await publish(ctx.threadId, path!, a.text("alt")));
         }
-        if (caller?.botId && command === "create")
-          throw new UsageError(
-            "Use a top-level BB agent to create or administer other bots.",
-          );
         if (command === "list" || command === "channel list") {
           const a = argumentsFor(
             rest,
@@ -777,15 +779,29 @@ export function registerCli(
             throw new UsageError(
               "Pass the name as the positional argument when creating a bot.",
             );
+          const input = rpcContract.create.input.parse({
+            ...profile(a),
+            name: selector,
+            mission: await textInput(a, ctx, "mission", "mission-file", true),
+            roomId: a.has("channel")
+              ? channel(a.required("channel"), ctx.threadId).id
+              : undefined,
+          });
+          if (caller?.botId) {
+            if (!approveCreate || !ctx.threadId)
+              throw new UsageError("Bot creation approval is unavailable.");
+            const approval = await approveCreate(input, ctx.threadId, ctx.signal);
+            if (!approval.approved)
+              throw new UsageError("Bot creation was not approved.");
+            if (ctx.signal?.aborted)
+              throw new UsageError("Bot creation request was cancelled.");
+            if (approval.bot) return emit(approval.bot);
+            // The approval may have taken long enough for the invoking thread
+            // to be stopped or deleted. Revalidate the author before creating.
+            agentAuthor(store, ctx.threadId);
+          }
           return emit(
-            await call("create", {
-              ...profile(a),
-              name: selector,
-              mission: await textInput(a, ctx, "mission", "mission-file", true),
-              roomId: a.has("channel")
-                ? channel(a.required("channel"), ctx.threadId).id
-                : undefined,
-            }),
+            await call("create", input),
           );
         }
         if (["show", "pause", "resume", "wake"].includes(command!)) {
