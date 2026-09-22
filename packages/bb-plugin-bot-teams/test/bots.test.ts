@@ -2135,7 +2135,7 @@ test("history pages use stable cursors while new messages arrive, with old reply
       parents: { id: string }[];
       hasOlder: boolean;
     };
-    assert.equal(data.messages.length, 200);
+    assert.equal(data.messages.length, 50);
     assert.equal(data.hasOlder, true);
     assert.equal(data.parents[0]?.id, "message-0");
     const first = x.store.history(x.room.id, undefined, "", 100);
@@ -3203,6 +3203,149 @@ test("saved reference files survive a full set of current uploads", async () => 
       new Set(x.store.requestJobs(m.id)[0]!.attachments.map((a) => a.id)),
       new Set([...references, ...current].map((a) => a.id)),
     );
+  } finally {
+    await x.close();
+  }
+});
+
+test("transcript pages bound messages and reactions, seek directly, and refresh historical windows", async () => {
+  const x = setup();
+  await plugin(x.bb);
+  try {
+    for (let i = 0; i < 1000; i++) {
+      x.store.putMessage({
+        id: `return:fixture:${i}`,
+        roomId: x.room.id,
+        runId: "fixture",
+        botId: null,
+        speaker: "You",
+        text: `Message ${i}`,
+        replyTo: i === 999 ? "return:fixture:0" : null,
+        attachments: [],
+        createdAt: 1,
+      });
+      x.store.react(
+        x.room.id,
+        `return:fixture:${i}`,
+        "👍",
+        "user",
+        "You",
+        true,
+      );
+    }
+    const latest = (await x.harness.behavior.callRpc("room", {
+      id: x.room.id,
+    })) as ReturnType<Store["transcript"]>;
+    assert.equal(latest.messages.length, 50);
+    assert.equal(latest.messages[0]!.id, "return:fixture:950");
+    assert.equal(latest.parents[0]!.id, "return:fixture:0");
+    assert.equal(latest.reactions.length, 50);
+    assert.equal(latest.hasOlder, true);
+    assert.equal(latest.hasNewer, false);
+    const around = (await x.harness.behavior.callRpc("transcript", {
+      id: x.room.id,
+      around: "return:fixture:100",
+    })) as ReturnType<Store["transcript"]>;
+    assert.equal(around.messages.length, 50);
+    assert(around.messages.some((m) => m.id === "return:fixture:100"));
+    assert.equal(around.reactions.length, 50);
+    assert.equal(around.hasOlder, true);
+    assert.equal(around.hasNewer, true);
+    const older = x.store.transcript(x.room.id, {
+      before: around.messages[0]!.id,
+    });
+    const newer = x.store.transcript(x.room.id, {
+      after: older.messages.at(-1)!.id,
+    });
+    assert.deepEqual(newer.messages, around.messages);
+    x.store.putMessage({
+      ...latest.messages[0]!,
+      id: "new-arrival",
+      replyTo: null,
+    });
+    x.store.react(
+      x.room.id,
+      around.messages[0]!.id,
+      "👍",
+      "user",
+      "You",
+      false,
+    );
+    const refreshed = (await x.harness.behavior.callRpc("room", {
+      id: x.room.id,
+      start: around.messages[0]!.id,
+      limit: 50,
+    })) as ReturnType<Store["transcript"]>;
+    assert.deepEqual(refreshed.messages, around.messages);
+    assert.equal(refreshed.reactions.length, 49);
+    assert.equal(refreshed.hasNewer, true);
+    const other = { ...x.room, id: randomUUID() };
+    x.store.putRoom(other);
+    await assert.rejects(
+      x.harness.behavior.callRpc("transcript", {
+        id: other.id,
+        around: "return:fixture:100",
+      }),
+      /not found/,
+    );
+    await assert.rejects(
+      x.harness.behavior.callRpc("transcript", {
+        id: x.room.id,
+        around: "missing",
+      }),
+      /not found/,
+    );
+    await assert.rejects(
+      x.harness.behavior.callRpc("room", { id: x.room.id, limit: 151 }),
+    );
+    await assert.rejects(
+      x.harness.behavior.callRpc("transcript", {
+        id: x.room.id,
+        before: "return:fixture:100",
+        after: "return:fixture:100",
+      }),
+    );
+    const first = x.store.transcript(x.room.id, { around: "return:fixture:0" });
+    assert.equal(first.hasOlder, false);
+    assert.equal(first.messages.length, 50);
+    const nearEnd = x.store.transcript(x.room.id, { around: "new-arrival" });
+    assert.equal(nearEnd.messages.length, 50);
+    assert.equal(nearEnd.messages.at(-1)!.id, "new-arrival");
+    assert.equal(nearEnd.hasNewer, false);
+    const hidden = {
+      ...latest.messages[0]!,
+      id: "hidden-trigger",
+      automationId: "auto_fixture",
+    };
+    x.store.putMessage(hidden);
+    assert.throws(
+      () => x.store.transcript(x.room.id, { around: hidden.id }),
+      /not found/,
+    );
+    assert(
+      !x.store.transcript(x.room.id).messages.some((m) => m.id === hidden.id),
+    );
+    for (const sql of [
+      "SELECT json FROM room_messages WHERE room_id=? ORDER BY rowid DESC LIMIT 50",
+      "SELECT json FROM room_messages WHERE room_id=? AND rowid<? ORDER BY rowid DESC LIMIT 50",
+      "SELECT json FROM room_messages WHERE room_id=? AND rowid>? ORDER BY rowid ASC LIMIT 50",
+    ]) {
+      const plan = x.store.db
+        .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+        .all(
+          ...(sql.includes("rowid<") || sql.includes("rowid>")
+            ? [x.room.id, 500]
+            : [x.room.id]),
+        ) as { detail: string }[];
+      assert(
+        plan.some((p) => p.detail.includes("messages_by_room")),
+        JSON.stringify(plan),
+      );
+      assert(
+        !plan.some((p) => p.detail.includes("SCAN room_messages")),
+        JSON.stringify(plan),
+      );
+    }
   } finally {
     await x.close();
   }

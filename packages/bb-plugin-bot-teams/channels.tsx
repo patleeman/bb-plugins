@@ -9,8 +9,14 @@ import {
 import { Textarea } from "./components/ui/textarea";
 import { sharedReads } from "./shared-read";
 import {
+  extendTranscript,
+  TRANSCRIPT_PAGE_SIZE,
+  type TranscriptPage,
+} from "./transcript-window";
+import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -31,7 +37,6 @@ import type {
   Bot,
   Room,
   RoomMessage,
-  Reaction,
   Job,
   RoomRun,
   rpcContract,
@@ -198,18 +203,11 @@ export function ChannelLinkNavigation() {
   }, [rooms, navigate]);
   return null;
 }
-type ChannelData = {
+type ChannelData = TranscriptPage & {
   room: Room;
-  messages: RoomMessage[];
-  parents: RoomMessage[];
-  hasOlder: boolean;
-  reactions: Reaction[];
   jobs: Job[];
   runs: RoomRun[];
 };
-const mergeMessages = (first: RoomMessage[], next: RoomMessage[]) => [
-  ...new Map([...first, ...next].map((m) => [m.id, m])).values(),
-];
 function MessageActionButtons({
   message,
   job,
@@ -346,7 +344,9 @@ function useChannel(id: string | null, poll = true) {
   const realtimeConnectionState = useRealtimeConnectionState();
   const previousRealtimeConnectionState = useRef(realtimeConnectionState);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const olderRequest = useRef(false);
+  const pageRequest = useRef<symbol | null>(null);
+  const followingLatest = useRef(true);
+  const currentData = useRef<ChannelData | null>(null);
   const [data, setData] = useState<ChannelData | null>(null),
     [error, setError] = useState<string | null>(null);
   const load = useCallback((): Promise<void> => {
@@ -354,26 +354,26 @@ function useChannel(id: string | null, poll = true) {
       setData(null);
       return Promise.resolve();
     }
+    if (pageRequest.current) return Promise.resolve();
     const seq = ++request.current;
+    const previous =
+      currentData.current?.room.id === id ? currentData.current : null;
+    const options = {
+      id,
+      ...(previous?.messages.length && !followingLatest.current
+        ? { start: previous.messages[0]!.id }
+        : {}),
+      limit: Math.max(TRANSCRIPT_PAGE_SIZE, previous?.messages.length ?? 0),
+    };
     const promise = sharedReads
-      .read(`channel:${id}`, () => rpc.call("room", { id }))
+      .read(`channel:${JSON.stringify(options)}`, () =>
+        rpc.call("room", options),
+      )
       .then(
         (d) => {
           if (seq === request.current) {
-            setData((prev) =>
-              prev?.room.id === d.room.id
-                ? {
-                    ...d,
-                    messages: mergeMessages(prev.messages, d.messages),
-                    parents: mergeMessages(prev.parents, d.parents),
-                    hasOlder:
-                      prev.messages.length &&
-                      prev.messages[0]?.id !== d.messages[0]?.id
-                        ? prev.hasOlder
-                        : d.hasOlder,
-                  }
-                : d,
-            );
+            currentData.current = d;
+            setData(d);
             setError(null);
           }
         },
@@ -388,6 +388,10 @@ function useChannel(id: string | null, poll = true) {
     return promise;
   }, [rpc, id]);
   useEffect(() => {
+    currentData.current = null;
+    followingLatest.current = true;
+    pageRequest.current = null;
+    setLoadingOlder(false);
     setData(null);
     load();
     return () => {
@@ -470,36 +474,72 @@ function useChannel(id: string | null, poll = true) {
       if (timer) clearTimeout(timer);
     };
   }, [hasActiveWork, id, load, poll]);
-  const loadOlder = useCallback(async () => {
-    if (!id || !data?.hasOlder || olderRequest.current) return;
-    olderRequest.current = true;
-    setLoadingOlder(true);
-    try {
-      const page = await rpc.call("history", {
-        id,
-        before: data.messages[0]?.id,
-        limit: 100,
-      });
-      setData((prev) =>
-        prev?.room.id === id
-          ? {
-              ...prev,
-              messages: mergeMessages(page.messages, prev.messages),
-              parents: mergeMessages(page.parents, prev.parents),
-              hasOlder: !!page.nextBefore,
-            }
-          : prev,
-      );
-    } finally {
-      olderRequest.current = false;
-      setLoadingOlder(false);
-    }
-  }, [id, data, rpc]);
+  const loadPage = useCallback(
+    async (direction: "older" | "newer" | "around", target?: string) => {
+      const previous = currentData.current;
+      if (!id || previous?.room.id !== id || pageRequest.current) return;
+      if (
+        (direction === "older" && !previous.hasOlder) ||
+        (direction === "newer" && !previous.hasNewer)
+      )
+        return;
+      const token = Symbol();
+      pageRequest.current = token;
+      const seq = ++request.current;
+      followingLatest.current = false;
+      setLoadingOlder(true);
+      try {
+        const page = await rpc.call("transcript", {
+          id,
+          ...(direction === "older"
+            ? { before: previous.messages[0]!.id }
+            : {}),
+          ...(direction === "newer"
+            ? { after: previous.messages.at(-1)!.id }
+            : {}),
+          ...(direction === "around" && target ? { around: target } : {}),
+        });
+        if (seq !== request.current) return;
+        const next = {
+          ...previous,
+          ...(direction === "older" || direction === "newer"
+            ? extendTranscript(previous, page, direction)
+            : page),
+        };
+        currentData.current = next;
+        setData(next);
+      } finally {
+        if (pageRequest.current === token) {
+          pageRequest.current = null;
+          setLoadingOlder(false);
+        }
+      }
+    },
+    [id, rpc],
+  );
+  const loadOlder = useCallback(() => loadPage("older"), [loadPage]);
+  const loadNewer = useCallback(() => loadPage("newer"), [loadPage]);
+  const loadAround = useCallback(
+    (target: string) => loadPage("around", target),
+    [loadPage],
+  );
+  const loadLatest = useCallback(() => {
+    // Sending or jumping to the end supersedes any older-page request.
+    request.current++;
+    pageRequest.current = null;
+    setLoadingOlder(false);
+    followingLatest.current = true;
+    return load();
+  }, [load]);
   return {
     data: data?.room.id === id ? data : null,
     error,
     load,
     loadOlder,
+    loadNewer,
+    loadAround,
+    loadLatest,
+    followingLatest,
     loadingOlder,
   };
 }
@@ -1242,7 +1282,17 @@ export function ChannelsPage({ subPath }: PluginNavPanelProps) {
   );
 }
 function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
-  const { data, error, load, loadOlder, loadingOlder } = useChannel(id),
+  const {
+      data,
+      error,
+      load,
+      loadOlder,
+      loadNewer,
+      loadAround,
+      loadLatest,
+      followingLatest,
+      loadingOlder,
+    } = useChannel(id),
     { bots, rooms } = useRoster(),
     rpc = useRpc<typeof rpcContract>(),
     navigate = useBbNavigate();
@@ -1278,6 +1328,53 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
   const transcript = useRef<HTMLDivElement>(null),
     atBottom = useRef(!messageId),
     marked = useRef(0);
+  const scrollAnchor = useRef<{ id: string; top: number } | null>(null);
+  const pageInFlight = useRef<symbol | null>(null);
+  const loadHistory = useCallback(
+    async (direction: "older" | "newer") => {
+      if (pageInFlight.current || loadingOlder || !transcript.current) return;
+      const token = Symbol();
+      pageInFlight.current = token;
+      atBottom.current = false;
+      followingLatest.current = false;
+      const top = transcript.current.getBoundingClientRect().top;
+      const anchor = Array.from(
+        transcript.current.querySelectorAll<HTMLElement>(
+          "[data-channel-message]",
+        ),
+      ).find((el) => el.getBoundingClientRect().bottom > top);
+      scrollAnchor.current = anchor
+        ? {
+            id: anchor.dataset.channelMessage!,
+            top: anchor.getBoundingClientRect().top,
+          }
+        : null;
+      try {
+        await (direction === "older" ? loadOlder() : loadNewer());
+      } catch (e) {
+        if (pageInFlight.current === token) {
+          scrollAnchor.current = null;
+          setFailure(message(e));
+        }
+      } finally {
+        if (pageInFlight.current === token) pageInFlight.current = null;
+      }
+    },
+    [loadOlder, loadNewer, loadingOlder, followingLatest],
+  );
+  useLayoutEffect(() => {
+    const anchor = scrollAnchor.current;
+    if (!anchor || !transcript.current) return;
+    const element = Array.from(
+      transcript.current.querySelectorAll<HTMLElement>(
+        "[data-channel-message]",
+      ),
+    ).find((el) => el.dataset.channelMessage === anchor.id);
+    if (element)
+      transcript.current.scrollTop +=
+        element.getBoundingClientRect().top - anchor.top;
+    scrollAnchor.current = null;
+  }, [data?.messages]);
   const [readPosition, setReadPosition] = useState(0);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressPoint = useRef<{ x: number; y: number } | null>(null);
@@ -1378,23 +1475,20 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
       el.scrollIntoView({ block: "center" });
       el.focus();
       setJumpTarget(null);
-    } else if (data.hasOlder)
-      void loadOlder().catch((e) => {
+    } else
+      void loadAround(jumpTarget).catch((e) => {
         setFailure(message(e));
         setJumpTarget(null);
       });
-    else {
-      setFailure("This message is no longer available.");
-      setJumpTarget(null);
-    }
-  }, [jumpTarget, data, loadOlder, loadingOlder]);
+  }, [jumpTarget, data, loadAround, loadingOlder]);
   useEffect(() => {
     const el = transcript.current;
     if (el && atBottom.current && !jumpTarget) el.scrollTop = el.scrollHeight;
-  }, [data?.messages.length, jumpTarget]);
+  }, [data?.messages.at(-1)?.id, jumpTarget]);
   useEffect(() => {
     if (
       !data ||
+      data.hasNewer ||
       !atBottom.current ||
       document.visibilityState !== "visible" ||
       !document.hasFocus() ||
@@ -1517,10 +1611,18 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
             aria-live="polite"
             onScroll={() => {
               const el = transcript.current;
-              if (el)
-                atBottom.current =
-                  el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+              if (!el) return;
+              const distanceToBottom =
+                el.scrollHeight - el.scrollTop - el.clientHeight;
+              atBottom.current = !data.hasNewer && distanceToBottom < 100;
+              followingLatest.current = atBottom.current;
               if (atBottom.current) setReadPosition((n) => n + 1);
+              if (!loadingOlder && !jumpTarget) {
+                if (el.scrollTop < 160 && data.hasOlder)
+                  void loadHistory("older");
+                else if (distanceToBottom < 160 && data.hasNewer)
+                  void loadHistory("newer");
+              }
             }}
           >
             {data.hasOlder && (
@@ -1529,21 +1631,8 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
                   size="sm"
                   variant="ghost"
                   disabled={loadingOlder}
-                  onClick={async () => {
-                    atBottom.current = false;
-                    const anchor = messages[0]?.id;
-                    try {
-                      await loadOlder();
-                      requestAnimationFrame(() => {
-                        if (anchor)
-                          document
-                            .getElementById(`channel-message-${anchor}`)
-                            ?.scrollIntoView({ block: "start" });
-                      });
-                    } catch (e) {
-                      setFailure(message(e));
-                    }
-                  }}
+                  onClick={() => void loadHistory("older")}
+                  aria-label="Load earlier messages"
                 >
                   {loadingOlder
                     ? "Loading earlier messages…"
@@ -1603,7 +1692,7 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
               ];
               if (m.system === "bot_joined") {
                 return (
-                  <div key={m.id}>
+                  <div key={m.id} data-channel-message={m.id}>
                     {newDay && (
                       <div className="channel-date">
                         <span>
@@ -1625,7 +1714,7 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
                 );
               }
               return (
-                <div key={m.id}>
+                <div key={m.id} data-channel-message={m.id}>
                   {newDay && (
                     <div className="channel-date">
                       <span>
@@ -2006,6 +2095,19 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
                 </div>
               );
             })}
+            {data.hasNewer && (
+              <div className="flex justify-center py-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={loadingOlder}
+                  aria-label="Load newer messages"
+                  onClick={() => void loadHistory("newer")}
+                >
+                  {loadingOlder ? "Loading messages…" : "Load newer messages"}
+                </Button>
+              </div>
+            )}
             {responseErrors.slice(0, 5).map((j) => (
               <div key={j.id} className="channel-response-error" role="status">
                 <strong>
@@ -2132,6 +2234,27 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
               );
             })}
           </div>
+          {data.hasNewer && (
+            <div className="channel-latest">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={async () => {
+                  scrollAnchor.current = null;
+                  pageInFlight.current = null;
+                  setJumpTarget(null);
+                  atBottom.current = true;
+                  try {
+                    await loadLatest();
+                  } catch (e) {
+                    setFailure(message(e));
+                  }
+                }}
+              >
+                Jump to latest
+              </Button>
+            </div>
+          )}
           <GroupComposer
             key={id}
             autoFocus={!messages.length}
@@ -2148,8 +2271,11 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
             insertion={insertion}
             onInserted={() => setInsertion(null)}
             onSent={() => {
+              scrollAnchor.current = null;
+              pageInFlight.current = null;
+              setJumpTarget(null);
               atBottom.current = true;
-              load();
+              void loadLatest();
             }}
           />
         </div>

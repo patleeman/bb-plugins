@@ -305,7 +305,9 @@ export default async function plugin(bb: BbPluginApi) {
         if (requestId) {
           const saved = store.markBotCreateRequestCreated(requestId, bot.id);
           if (!saved || saved.status !== "created")
-            throw new Error("Bot creation finished without recording its request.");
+            throw new Error(
+              "Bot creation finished without recording its request.",
+            );
         }
       })();
       if (room)
@@ -616,7 +618,9 @@ export default async function plugin(bb: BbPluginApi) {
         approved ? "approved" : "denied",
       );
       if (!resolved || resolved.status === "pending")
-        throw new Error("This bot creation request changed before it was resolved.");
+        throw new Error(
+          "This bot creation request changed before it was resolved.",
+        );
       if (approved) await materializeBotCreateRequest(id);
       runtime.changed();
       return { ok: true as const };
@@ -625,6 +629,7 @@ export default async function plugin(bb: BbPluginApi) {
     retryJob: ({ id }) => runtime.retryJob(id),
     history: ({ id, before, query, limit }) =>
       store.history(id, before, query, limit),
+    transcript: ({ id, ...options }) => store.transcript(id, options),
     get: ({ id }) => ({
       bot: store.get(id),
       conversations: store.conversations(id),
@@ -825,14 +830,10 @@ export default async function plugin(bb: BbPluginApi) {
         }),
       ),
     deleteRoom: async ({ id }) => ({ deleted: await runtime.deleteRoom(id) }),
-    room: async ({ id }) => {
-      const messages = store.visibleMessages(id);
+    room: async ({ id, start, limit }) => {
       return {
         room: store.room(id),
-        messages,
-        parents: store.parents(messages),
-        hasOlder: store.visibleMessages(id, 1, 200).length > 0,
-        reactions: store.reactions(id),
+        ...store.transcript(id, { start, limit }),
         runs: store.runs(id, 50),
         jobs: await runtime.roomJobsWithActivity(id),
       };

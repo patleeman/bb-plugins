@@ -268,6 +268,13 @@ export const runSchema = z.object({
   routingBotIds: z.array(idSchema).optional(),
 });
 export type RoomRun = z.infer<typeof runSchema>;
+const transcriptPageSchema = z.object({
+  messages: z.array(messageSchema),
+  parents: z.array(messageSchema),
+  reactions: z.array(reactionSchema),
+  hasOlder: z.boolean(),
+  hasNewer: z.boolean(),
+});
 const roomInput = z.object({
   responseBehavior: responseBehavior.optional(),
   name: z.string().trim().min(1).max(80),
@@ -406,6 +413,23 @@ export const rpcContract = defineRpcContract({
       nextBefore: z.string().nullable(),
     }),
   },
+  transcript: {
+    input: z
+      .object({
+        id: z.string().uuid(),
+        before: z.string().optional(),
+        after: z.string().optional(),
+        around: z.string().optional(),
+      })
+      .refine(
+        (input) =>
+          [input.before, input.after, input.around].filter(
+            (v) => v !== undefined,
+          ).length <= 1,
+        "Choose one transcript cursor.",
+      ),
+    output: transcriptPageSchema,
+  },
   get: {
     input: z.object({ id: idSchema }),
     output: z.object({
@@ -461,13 +485,13 @@ export const rpcContract = defineRpcContract({
     output: z.object({ deleted: z.boolean() }),
   },
   room: {
-    input: z.object({ id: z.string().uuid() }),
-    output: z.object({
+    input: z.object({
+      id: z.string().uuid(),
+      start: z.string().optional(),
+      limit: z.number().int().min(1).max(150).default(50),
+    }),
+    output: transcriptPageSchema.extend({
       room: roomSchema,
-      messages: z.array(messageSchema),
-      parents: z.array(messageSchema),
-      hasOlder: z.boolean(),
-      reactions: z.array(reactionSchema),
       runs: z.array(runSchema),
       jobs: z.array(jobSchema),
     }),

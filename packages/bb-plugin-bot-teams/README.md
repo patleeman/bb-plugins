@@ -18,6 +18,13 @@ discarding them. Profile, mission, memory, and new-bot drafts survive navigation
 
 Your channel messages appear in right-aligned bubbles, like regular threads.
 Bot and BB agent messages stay left-aligned with their names and avatars.
+
+Channels open with the latest 50 messages. Scrolling toward either end loads
+another page while preserving your reading position. At most 150 messages and
+their reactions stay mounted; the rest remain available in history. Message
+links and search results load a page around the target directly. **Jump to
+latest** returns from older history, and sending a message brings your new post
+into view.
 Channels with unfinished work show the same loading glyph as running threads
 in the sidebar, including while routing or stopping. It clears when all work
 settles; unread replies keep the usual unread indicator.

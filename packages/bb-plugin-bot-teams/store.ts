@@ -3,6 +3,11 @@ import { mkdir, readFile, writeFile, rename, lstat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
 import {
+  TRANSCRIPT_PAGE_SIZE,
+  TRANSCRIPT_WINDOW_SIZE,
+  type TranscriptPage,
+} from "./transcript-window";
+import {
   isAutomationTrigger,
   runSchema,
   jobSchema,
@@ -155,14 +160,21 @@ export class Store {
           status: "expired" as const,
           resolvedAt,
         };
-        changed += update.run(next.status, JSON.stringify(next), next.id).changes;
+        changed += update.run(
+          next.status,
+          JSON.stringify(next),
+          next.id,
+        ).changes;
       }
       return changed;
     })();
   }
   resolveBotCreateRequest(
     id: string,
-    status: Extract<BotCreateRequest["status"], "approved" | "denied" | "expired" | "cancelled">,
+    status: Extract<
+      BotCreateRequest["status"],
+      "approved" | "denied" | "expired" | "cancelled"
+    >,
   ): BotCreateRequest | null {
     const current = this.botCreateRequest(id);
     if (!current) return null;
@@ -187,7 +199,11 @@ export class Store {
   }
   claimBotCreateRequest(id: string): BotCreateRequest | null {
     const current = this.botCreateRequest(id);
-    if (!current || current.status === "created" || current.status === "creating")
+    if (
+      !current ||
+      current.status === "created" ||
+      current.status === "creating"
+    )
       return current;
     if (current.status !== "approved") return current;
     const next = { ...current, status: "creating" as const };
@@ -206,7 +222,11 @@ export class Store {
     if (!current) return null;
     if (current.status === "created") return current;
     if (current.status !== "creating") return current;
-    const next = { ...current, status: "created" as const, createdBotId: botId };
+    const next = {
+      ...current,
+      status: "created" as const,
+      createdBotId: botId,
+    };
     const changed = this.db
       .prepare(
         "UPDATE bot_create_requests SET status=?,json=? WHERE id=? AND status='creating'",
@@ -417,6 +437,104 @@ export class Store {
       nextBefore: rows.length > limit ? messages[0]!.id : null,
     };
   }
+  transcript(
+    roomId: string,
+    options: {
+      before?: string;
+      after?: string;
+      around?: string;
+      start?: string;
+      limit?: number;
+    } = {},
+  ): TranscriptPage {
+    this.room(roomId);
+    const limit = Math.max(
+      1,
+      Math.min(options.limit ?? TRANSCRIPT_PAGE_SIZE, TRANSCRIPT_WINDOW_SIZE),
+    );
+    const visible = `room_id=? AND NOT (json_extract(json,'$.automationId') IS NOT NULL
+      AND json_extract(json,'$.botId') IS NULL)`;
+    const cursorId =
+      options.before ?? options.after ?? options.around ?? options.start;
+    const cursor =
+      cursorId === undefined
+        ? undefined
+        : (this.db
+            .prepare(
+              `SELECT rowid FROM room_messages WHERE id=? AND ${visible}`,
+            )
+            .get(cursorId, roomId) as { rowid: number } | undefined);
+    if (cursorId !== undefined && !cursor)
+      throw new Error("Message not found in this channel.");
+    type Row = { rowid: number; json: string };
+    const select = (
+      condition: string,
+      ascending: boolean,
+      count: number,
+      value?: number,
+    ) =>
+      this.db
+        .prepare(`SELECT rowid,json FROM room_messages WHERE ${visible} ${condition}
+        ORDER BY rowid ${ascending ? "ASC" : "DESC"} LIMIT ?`)
+        .all(
+          ...(value === undefined ? [roomId, count] : [roomId, value, count]),
+        ) as Row[];
+    let rows: Row[];
+    if (options.around !== undefined) {
+      const earlier = select(
+        "AND rowid<=?",
+        false,
+        Math.ceil(limit / 2),
+        cursor!.rowid,
+      ).reverse();
+      rows = [
+        ...earlier,
+        ...select("AND rowid>?", true, limit - earlier.length, cursor!.rowid),
+      ];
+      if (rows.length < limit && rows.length) {
+        rows = [
+          ...select(
+            "AND rowid<?",
+            false,
+            limit - rows.length,
+            rows[0]!.rowid,
+          ).reverse(),
+          ...rows,
+        ];
+      }
+    } else if (options.start !== undefined) {
+      rows = select("AND rowid>=?", true, limit, cursor!.rowid);
+    } else if (options.after !== undefined) {
+      rows = select("AND rowid>?", true, limit, cursor!.rowid);
+    } else {
+      rows = select(
+        cursor ? "AND rowid<?" : "",
+        false,
+        limit,
+        cursor?.rowid,
+      ).reverse();
+    }
+    const messages = rows.map((row) =>
+      messageSchema.parse(JSON.parse(row.json)),
+    );
+    const boundary = (operator: string, value: number | undefined) =>
+      value !== undefined &&
+      !!this.db
+        .prepare(
+          `SELECT 1 FROM room_messages WHERE ${visible} AND rowid${operator}? LIMIT 1`,
+        )
+        .get(roomId, value);
+    return {
+      messages,
+      parents: this.parents(messages),
+      reactions: this.reactions(
+        roomId,
+        messages.map((m) => m.id),
+      ),
+      hasOlder: boundary("<", rows[0]?.rowid ?? cursor?.rowid),
+      hasNewer: boundary(">", rows.at(-1)?.rowid ?? cursor?.rowid),
+    };
+  }
   message(id: string): RoomMessage | null {
     const row = this.db
       .prepare("SELECT json FROM room_messages WHERE id=?")
@@ -450,14 +568,17 @@ export class Store {
       return inserted;
     })();
   }
-  reactions(roomId: string): Reaction[] {
+  reactions(roomId: string, messageIds?: string[]): Reaction[] {
+    if (messageIds && !messageIds.length) return [];
     return this.db
       .prepare(
         `SELECT r.message_id AS messageId, r.emoji, r.actor_id AS actorId,
       r.actor_name AS actorName, r.created_at AS createdAt FROM reactions r
-      JOIN room_messages m ON m.id=r.message_id WHERE m.room_id=? ORDER BY r.created_at`,
+      JOIN room_messages m ON m.id=r.message_id WHERE m.room_id=?
+      ${messageIds ? `AND r.message_id IN (${messageIds.map(() => "?").join(",")})` : ""}
+      ORDER BY r.created_at`,
       )
-      .all(roomId) as Reaction[];
+      .all(roomId, ...(messageIds ?? [])) as Reaction[];
   }
   react(
     roomId: string,
@@ -479,7 +600,7 @@ export class Store {
           "DELETE FROM reactions WHERE message_id=? AND emoji=? AND actor_id=?",
         )
         .run(messageId, emoji, actorId);
-    return this.reactions(roomId);
+    return this.reactions(roomId, [messageId]);
   }
   runs(roomId: string, limit = -1, activeOnly = false): RoomRun[] {
     return (

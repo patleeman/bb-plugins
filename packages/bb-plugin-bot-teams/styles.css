@@ -599,6 +599,11 @@
   max-width: calc(var(--channel-content-width) - 32px);
   margin-inline: auto;
 }
+.channel-latest {
+  display: flex;
+  justify-content: center;
+  padding-block: 4px;
+}
 .bot-room-message {
   position: relative;
   display: flex;
