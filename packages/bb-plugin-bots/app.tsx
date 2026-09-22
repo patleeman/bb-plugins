@@ -26,6 +26,7 @@ import {
   ChannelsSidebar,
   ChannelsNavigation,
   ChannelRedirect,
+  ChannelLinkNavigation,
 } from "./channels";
 import { Modal } from "./channel-controls";
 import { BotCollection } from "./bot-collection";
@@ -288,6 +289,10 @@ function BotsPage({ subPath }: PluginNavPanelProps) {
   return <BotCollection bots={bots} loading={!data} error={error} />;
 }
 export default definePluginApp((app) => {
+  app.slots.experimental_appOverlay({
+    id: "channel-links",
+    component: ChannelLinkNavigation,
+  });
   app.slots.navPanel({
     id: "bots",
     title: "Bots",

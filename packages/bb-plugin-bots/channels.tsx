@@ -48,6 +48,10 @@ import { ProfileForm, WorkList, ErrorMessage, message } from "./bot-ui";
 import { channelWork, channelWorkActivity } from "./channel-work";
 import { ChannelSearch } from "./channel-search";
 import { ChannelSidebarRow } from "./channel-sidebar-row";
+import {
+  channelLinkDestination,
+  channelMessageReference,
+} from "./channel-links";
 import { ChannelAutomationsView } from "./channel-automations-view";
 import { ChannelAttachments } from "./channel-attachments";
 import { GroupComposer } from "./composer";
@@ -131,6 +135,48 @@ function useRoster(reconcile = false) {
     };
   }, [reconcile, hasActiveWork, load]);
   return { ...data, error, load };
+}
+export function ChannelLinkNavigation() {
+  const { rooms } = useRoster();
+  const navigate = useBbNavigate();
+  useEffect(() => {
+    const knownChannelIds = new Set(rooms.map((room) => room.id));
+    const openLink = (event: MouseEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+      )
+        return;
+      const anchor =
+        event.target instanceof Element
+          ? event.target.closest<HTMLAnchorElement>("a[href]")
+          : null;
+      if (!anchor || anchor.hasAttribute("download")) return;
+      const destination = channelLinkDestination(
+        anchor.getAttribute("href") ?? "",
+        window.location.origin,
+        knownChannelIds,
+      );
+      if (!destination) return;
+      event.preventDefault();
+      event.stopPropagation();
+      navigate.toPluginPanel("channels", { subPath: destination });
+      const [roomId, , messageId] = destination.split("/");
+      if (messageId)
+        window.dispatchEvent(
+          new CustomEvent("bb:bots:jump", {
+            detail: { roomId, messageId: decodeURIComponent(messageId) },
+          }),
+        );
+    };
+    document.addEventListener("click", openLink, true);
+    return () => document.removeEventListener("click", openLink, true);
+  }, [rooms, navigate]);
+  return null;
 }
 type ChannelData = {
   room: Room;
@@ -1402,10 +1448,7 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
   const permalink = async (m: RoomMessage) => {
     try {
       await navigator.clipboard.writeText(
-        new URL(
-          `/plugins/bots/channels/${id}/message/${encodeURIComponent(m.id)}`,
-          window.location.origin,
-        ).href,
+        channelMessageReference(id, room.name, m.id),
       );
       setCopied(m.id);
     } catch (e) {

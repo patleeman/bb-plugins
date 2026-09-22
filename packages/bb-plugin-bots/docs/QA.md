@@ -391,3 +391,21 @@ overflow. Typecheck, build, and focused independent review pass. Bots was reload
 and the QA channel archived afterward. No new unit test was added for this UI change.
 
 [Live channel hover controls](../assets/channel-hover-controls.jpg)
+
+## Portable message links — 2026-09-22
+
+Copy message link now copies a readable Markdown reference with a relative BB
+route, preserving the message ID without embedding the desktop's localhost URL.
+A plugin overlay routes ordinary channel-link clicks through BB navigation,
+including existing localhost links and host-rewritten port variants for channels
+known to this server. Other servers, modified clicks, downloads, malformed links,
+and credentials in URLs retain their normal handling.
+
+Reproduced the old absolute clipboard value in the running app. Verified copied
+references, legacy links from another desktop port, and portable links in a
+disposable channel on desktop and a 390 px touch viewport. Navigation retains the
+same document and makes no external-window calls. Six focused regressions cover
+Markdown escaping, encoded return-job IDs, origin boundaries, localhost rewrite,
+malformed routes, and uppercase channel IDs. The integrated 200-test suite,
+typecheck, build, and focused review pass. Concurrent bot-creation changes were
+excluded from this fix's commit.
