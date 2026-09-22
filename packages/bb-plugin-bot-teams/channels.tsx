@@ -141,6 +141,22 @@ export function ChannelLinkNavigation() {
   const navigate = useBbNavigate();
   useEffect(() => {
     const knownChannelIds = new Set(rooms.map((room) => room.id));
+    const restoreLegacyLink = () => {
+      if (!window.location.pathname.startsWith("/plugins/bots/channels/"))
+        return;
+      const destination = channelLinkDestination(
+        window.location.href,
+        window.location.origin,
+        knownChannelIds,
+      );
+      if (destination)
+        navigate.toPluginPanel("channels", {
+          subPath: destination,
+          replace: true,
+        });
+    };
+    restoreLegacyLink();
+    window.addEventListener("popstate", restoreLegacyLink);
     const openLink = (event: MouseEvent) => {
       if (
         event.defaultPrevented ||
@@ -165,16 +181,20 @@ export function ChannelLinkNavigation() {
       event.preventDefault();
       event.stopPropagation();
       navigate.toPluginPanel("channels", { subPath: destination });
-      const [roomId, , messageId] = destination.split("/");
+      const [roomId, , ...messageParts] = destination.split("/");
+      const messageId = messageParts.join("/");
       if (messageId)
         window.dispatchEvent(
           new CustomEvent("bb:bots:jump", {
-            detail: { roomId, messageId: decodeURIComponent(messageId) },
+            detail: { roomId, messageId },
           }),
         );
     };
     document.addEventListener("click", openLink, true);
-    return () => document.removeEventListener("click", openLink, true);
+    return () => {
+      document.removeEventListener("click", openLink, true);
+      window.removeEventListener("popstate", restoreLegacyLink);
+    };
   }, [rooms, navigate]);
   return null;
 }
@@ -500,7 +520,7 @@ export function ChannelsNavigation(props: ExperimentalSidebarNavigationProps) {
   const channel = props.items.find(
     (item) =>
       item.action.kind === "open-plugin-panel" &&
-      item.action.pluginId === "bots" &&
+      item.action.pluginId === "bot-teams" &&
       item.action.panelId === "channels",
   );
   const rest = props.items.filter((item) => item !== channel);

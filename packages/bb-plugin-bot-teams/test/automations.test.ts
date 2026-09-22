@@ -28,7 +28,7 @@ async function setup() {
   >();
   let sequence = 0;
   const host = createFakePluginHost({
-    pluginId: "bots",
+    pluginId: "bot-teams",
     agentSkillIds: ["bots"],
     sdk: {
       plugins: {

@@ -48,13 +48,15 @@
       }
     },
     {
-      "id": "bots",
-      "displayName": "Bots",
-      "description": "Persistent bots with workspaces, mission, memory, and sidebar channels.",
+      "id": "bot-teams",
+      "displayName": "Bot Teams",
+      "description": "Persistent bots that collaborate in channels, delegate work, and keep their own workspaces and memory.",
       "icon": "Bot",
       "tags": [
         "agents",
-        "collaboration"
+        "collaboration",
+        "channels",
+        "automation"
       ],
       "author": {
         "name": "Patrick Lee",
@@ -63,7 +65,7 @@
       "source": {
         "git": {
           "url": "https://github.com/patleeman/bb-plugins.git",
-          "subdir": "packages/bb-plugin-bots",
+          "subdir": "packages/bb-plugin-bot-teams",
           "ref": "main"
         }
       }

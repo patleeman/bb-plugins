@@ -23,7 +23,7 @@ function setup() {
     }
   >();
   const host = createFakePluginHost({
-    pluginId: "bots",
+    pluginId: "bot-teams",
     sdk: {
       providers: {
         list: async () =>

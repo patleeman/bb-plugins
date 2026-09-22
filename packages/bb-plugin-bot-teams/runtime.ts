@@ -1059,7 +1059,7 @@ export class Runtime {
       for (let offset = 0; ; offset += 100) {
         const threads = await this.bb.sdk.threads.list({
           projectId,
-          originPluginId: "bots",
+          originPluginId: "bot-teams",
           includeHidden: true,
           limit: 100,
           offset,
@@ -2168,7 +2168,7 @@ export class Runtime {
       for (let offset = 0; ; offset += 100) {
         const threads = await this.bb.sdk.threads.list({
           projectId: bot.projectId,
-          originPluginId: "bots",
+          originPluginId: "bot-teams",
           includeHidden: true,
           limit: 100,
           offset,

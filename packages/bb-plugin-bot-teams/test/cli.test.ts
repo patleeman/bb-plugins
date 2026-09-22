@@ -21,7 +21,7 @@ import plugin from "../server";
 async function setup() {
   const files = new Map<string, Buffer>();
   const host = createFakePluginHost({
-    pluginId: "bots",
+    pluginId: "bot-teams",
     agentSkillIds: ["bots"],
     sdk: {
       system: {

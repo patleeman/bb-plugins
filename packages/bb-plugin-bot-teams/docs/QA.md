@@ -409,3 +409,14 @@ Markdown escaping, encoded return-job IDs, origin boundaries, localhost rewrite,
 malformed routes, and uppercase channel IDs. The integrated 200-test suite,
 typecheck, build, and focused review pass. Concurrent bot-creation changes were
 excluded from this fix's commit.
+
+## Bot Teams rename — 22 September 2026
+
+- Renamed the package and installed identity to `bb-plugin-bot-teams` / `bot-teams`, with matching marketplace and collection entries. Preserved the scoped `bots` administration panel, CLI/tool names, and draft/event keys.
+- Ran the owner migration on the local BB installation after confirming no active bot work. Verified all 27 bot IDs, 18 channels, 82 conversations, 419 messages, 266 jobs, 4 reactions, 17 attachments, 230 runs, and 5 approval records survived. All 100 thread metadata records and nonsecret settings matched the private snapshot. Legacy workspace paths still resolve through the new homes symlink.
+- The predecessor registration was removed after the new plugin reported running and the live CLI returned the migrated bots and channels. The private backup remains in `<dataDir>/migrations/bots-to-bot-teams-v1`.
+- Real BB UI showed Bot Teams in navigation and its administration header. Desktop and touch/mobile (390 × 844) navigation from the owner's legacy channel/message URL resolved to the new route, focused the exact `return:job:…` message, and showed no horizontal overflow.
+- This check found and fixed a pre-existing double-encoding bug: `toPluginPanel` encodes subpath segments itself, so the link parser now supplies the decoded message ID. The same colon-containing message was visible and focused after the fix.
+- Regenerated `assets/staged-preview.png` through `scripts/capture-plugin-screenshots.mjs` using `BB_CAPTURE_ONLY=bot-teams`; the real UI was filtered to the staged Atlas bot. The capture restored Atlas's prior retired state.
+- Final verification: **210 tests pass**, package typecheck/build pass, and the independent migration review is clean.
+- Migration tests cover state preservation, metadata scope, existing workspace databases, active/pending/stopping refusals, destination conflicts, publisher mismatch, interrupted preparation, and repeated finalization. Marketplace validation uses BB's current schema and checks all 17 index entries against package identity, display metadata, source directories, and local icons.

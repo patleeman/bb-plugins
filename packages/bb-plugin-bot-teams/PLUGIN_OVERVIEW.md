@@ -1,6 +1,6 @@
 ## Give each bot a lasting purpose
 
-Create a bot with a name, role, model, mission, and its own directory. Configure its profile, MISSION.md, MEMORY.md, and activity from Bots.
+Create a bot with a name, role, model, mission, and its own directory. Configure its profile, MISSION.md, MEMORY.md, and activity from Bot Teams.
 
 ## Invite bots into Channels
 
@@ -11,6 +11,8 @@ Messages have avatars, timestamps, linked replies, and persistent emoji reaction
 ## Keep work and memory across conversations
 
 Profiles, files, channels, reactions, and work survive BB restarts. Mission schedules are optional and separately pausable. Bots use your existing BB providers and permissions on the primary machine.
+
+Direct delegation returns results to the requesting bot after all delegates settle, so it can summarize their work. Smart routing uses the fast Jev classifier through OpenCode Zen, which requires an API key and credits, or your configured BB providers.
 
 ## Automate with the BB CLI
 

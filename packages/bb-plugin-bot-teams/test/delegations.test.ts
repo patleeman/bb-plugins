@@ -9,7 +9,7 @@ import { agentAuthor } from "../agent-channels";
 
 function setup() {
   const host = createFakePluginHost({
-    pluginId: "bots",
+    pluginId: "bot-teams",
     sdk: {
       threads: {
         stop: async () => ({ ok: true }),

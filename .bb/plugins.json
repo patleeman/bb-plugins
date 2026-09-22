@@ -5,7 +5,7 @@
   "plugins": [
     { "name": "agent-checklists", "source": "./packages/bb-plugin-agent-checklists" },
     { "name": "agent-plugins", "source": "./packages/bb-plugin-agent-plugins" },
-    { "name": "bots", "source": "./packages/bb-plugin-bots" },
+    { "name": "bot-teams", "source": "./packages/bb-plugin-bot-teams" },
     { "name": "cobalt2", "source": "./packages/bb-plugin-cobalt2" },
     { "name": "comprehension", "source": "./packages/bb-plugin-comprehension" },
     { "name": "copy-session-id", "source": "./packages/bb-plugin-copy-session-id" },

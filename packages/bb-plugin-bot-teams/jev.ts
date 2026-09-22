@@ -42,7 +42,7 @@ export async function askJev(
   const key = config.zenApiKey?.trim() || process.env.OPENCODE_API_KEY?.trim();
   if (!key)
     throw new Error(
-      "Set the OpenCode Zen API key in Bots settings to use Jev.",
+      "Set the OpenCode Zen API key in Bot Teams settings to use Jev.",
     );
   const response = await fetch("https://opencode.ai/zen/v1/systemone", {
     method: "POST",
@@ -61,7 +61,7 @@ export async function askJev(
   if (!response.ok) {
     await response.body?.cancel();
     throw new Error(
-      `Jev classification failed (HTTP ${response.status}). Check the Zen key, credits, and model in Bots settings.`,
+      `Jev classification failed (HTTP ${response.status}). Check the Zen key, credits, and model in Bot Teams settings.`,
     );
   }
   const parsed = responseSchema.safeParse(await response.json());

@@ -243,7 +243,7 @@ export default async function plugin(bb: BbPluginApi) {
         );
       await mkdir(store.root, { recursive: true, mode: 0o700 });
       const result = await bb.sdk.projects.create({
-        name: "Bots",
+        name: "Bot Teams",
         source: { type: "local_path", hostId: primaryHostId, path: store.root },
       });
       await bb.storage.kv.set("projectId", result.id);
@@ -1250,7 +1250,7 @@ export default async function plugin(bb: BbPluginApi) {
     }
     const c = store.byThread(context.thread.id);
     if (!c)
-      return context.thread.originPluginId === "bots"
+      return context.thread.originPluginId === "bot-teams"
         ? {
             action: "wait",
             reason: "Registering bot conversation.",
@@ -1261,12 +1261,12 @@ export default async function plugin(bb: BbPluginApi) {
     if (bot.retired)
       return {
         action: "reject",
-        message: "This bot is retired. Restore it from the Bots page.",
+        message: "This bot is retired. Restore it from the Bot Teams page.",
       };
     if (bot.paused && c.kind !== "group")
       return {
         action: "wait",
-        reason: "This bot is paused. Resume it from the Bots page.",
+        reason: "This bot is paused. Resume it from the Bot Teams page.",
       };
     if (c.kind !== "admin") {
       const job = store

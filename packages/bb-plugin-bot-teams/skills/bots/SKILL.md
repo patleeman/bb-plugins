@@ -275,7 +275,7 @@ eligible bot routes every message to it automatically. Native tools `bots_channe
 fails, use `channel retry-routing CHANNEL REQUEST_ID`, mention a bot directly, or
 ask the owner about routing settings; do not duplicate a successfully sent message.
 Routing provider and model settings live in Plugins → Bots → Settings and are also
-available through `bb plugin config bots`. They use existing BB provider credentials.
+available through `bb plugin config bot-teams`. They use existing BB provider credentials.
 
 Write like a teammate in chat: usually one to three sentences, no default headings,
 assistant introductions, repeated summaries, or filler. Expand only when useful or
@@ -330,11 +330,11 @@ the hourly/daily budgets. Limits do not block reconciliation of existing work.
 ## Classifier setup
 
 Jev is the default classifier for recipient selection, busy-session actions, and
-implicit delegation returns. Set the OpenCode Zen API key in Bots settings; it is
+implicit delegation returns. Set the OpenCode Zen API key in Bot Teams settings; it is
 stored as a secret. The server's `OPENCODE_API_KEY` is also supported. Never print
 or paste a credential into chat.
 
-`bb plugin config bots set jevModel jev-1.13` selects the Jev model.
+`bb plugin config bot-teams set jevModel jev-1.13` selects the Jev model.
 `jevTimeoutMs` controls the direct request deadline (default 5000 ms), and
 `jevActionConfidence` controls when steer/fork becomes a safer follow-up (default
 0.7). Classifier failures expose Retry routing; they never launch a slow agent

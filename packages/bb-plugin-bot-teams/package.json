@@ -1,14 +1,14 @@
 {
-  "name": "bb-plugin-bots",
-  "version": "0.1.0",
+  "name": "bb-plugin-bot-teams",
+  "version": "0.2.0",
   "type": "module",
   "engines": {
     "bb": ">=0.43",
     "bbPluginSdk": ">=0.4.106"
   },
   "bb": {
-    "name": "Bots",
-    "description": "Persistent bots with workspaces, mission, memory, and sidebar channels.",
+    "name": "Bot Teams",
+    "description": "Persistent bots that collaborate in channels, delegate work, and keep their own workspaces and memory.",
     "branding": {
       "icon": "Bot"
     },

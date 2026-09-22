@@ -28,7 +28,7 @@ if (values.help || !values["data-dir"]) {
   process.exit(values.help ? 0 : 2);
 }
 const dataDir = resolve(values["data-dir"]);
-const directory = join(dataDir, "plugins", "bots", "imports", "council-v1");
+const directory = join(dataDir, "plugins", "bot-teams", "imports", "council-v1");
 const snapshot = join(directory, "council.db");
 const source = join(dataDir, "plugins", "council", "data.db");
 const bb = (args, json = true) => {

@@ -24,7 +24,7 @@ test("channel references link known slugs and preserve unknown text", () => {
       "See #design-notes and #missing, but keep `#design-notes` as code.",
       rooms,
     ),
-    "See [#Design Notes](/plugins/bots/channels/11111111-1111-4111-8111-111111111111) and #missing, but keep `#design-notes` as code.",
+    "See [#Design Notes](/plugins/bot-teams/channels/11111111-1111-4111-8111-111111111111) and #missing, but keep `#design-notes` as code.",
   );
 });
 

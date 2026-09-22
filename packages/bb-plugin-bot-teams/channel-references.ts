@@ -31,7 +31,7 @@ export function channelReference(room: Pick<Room, "id" | "name">) {
   const label = room.name
     .replace(/[\\[\]<>]/gu, "\\$&")
     .replace(/[\r\n]/gu, " ");
-  return `[#${label}](/plugins/bots/channels/${room.id})`;
+  return `[#${label}](/plugins/bot-teams/channels/${room.id})`;
 }
 
 /** Bind unambiguous plain-text mentions, never code, URLs, or existing links. */

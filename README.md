@@ -30,7 +30,7 @@ description, and icon aligned with its package manifest.
 
 ## Packages
 
-- [`bb-plugin-bots`](packages/bb-plugin-bots/) — persistent agents with their
+- [`bb-plugin-bot-teams`](packages/bb-plugin-bot-teams/) — persistent agents with their
   own workspaces, mission and memory files, profiles, sidebar channels, and
   group consultations that replace the former Council plugin.
 - [`bb-plugin-agent-checklists`](packages/bb-plugin-agent-checklists/) — attach

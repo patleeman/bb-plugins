@@ -39,7 +39,7 @@ const bot = (
 const setup = () => {
   let sequence = 0;
   const host = createFakePluginHost({
-    pluginId: "bots",
+    pluginId: "bot-teams",
     agentSkillIds: ["bots"],
     sdk: {
       projects: {
@@ -815,7 +815,7 @@ test("uncertain dispatch is visible after restart and is never replayed", async 
 
 test("unrelated threads cannot claim a bot identity using metadata", async () => {
   const host = createFakePluginHost({
-    pluginId: "bots",
+    pluginId: "bot-teams",
     agentSkillIds: ["bots"],
   });
   await plugin(host.bb);

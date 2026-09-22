@@ -11,7 +11,7 @@ import { botSchema, roomSchema, messageSchema, jobSchema } from "../contract";
 import { ChannelNotifications } from "../notifications";
 
 function setup() {
-  const host = createFakePluginHost({ pluginId: "bots" });
+  const host = createFakePluginHost({ pluginId: "bot-teams" });
   const store = new Store(host.bb.storage.database());
   const bot = botSchema.parse({
     id: "bot_0123456789abcdef",
@@ -99,7 +99,7 @@ test("only public bot replies enqueue; duplicate inserts do not notify twice", a
       kind: "turn-finished",
       threadId: "hidden-thread",
       projectId: "p",
-      path: `/plugins/bots/channels/${x.room.id}/message/reply-1`,
+      path: `/plugins/bot-teams/channels/${x.room.id}/message/reply-1`,
     });
     x.store.putRoom({
       ...x.store.room(x.room.id),

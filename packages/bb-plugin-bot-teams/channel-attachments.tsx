@@ -6,7 +6,7 @@ import { inlineImage } from "./image-format";
 import { Button } from "./components/ui/button";
 
 const url = (a: Attachment, inline = false) =>
-  `/api/v1/plugins/bots/http/attachment?id=${encodeURIComponent(a.id)}${inline ? "&inline=1" : ""}`;
+  `/api/v1/plugins/bot-teams/http/attachment?id=${encodeURIComponent(a.id)}${inline ? "&inline=1" : ""}`;
 
 export function ChannelAttachments({
   attachments,

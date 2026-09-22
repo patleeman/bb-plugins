@@ -246,7 +246,7 @@ export async function recoverRoutingSessions(bb: BbPluginApi, store: Store) {
     for (let offset = 0; ; offset += 100) {
       const threads = await bb.sdk.threads.list({
         projectId,
-        originPluginId: "bots",
+        originPluginId: "bot-teams",
         includeHidden: true,
         limit: 100,
         offset,

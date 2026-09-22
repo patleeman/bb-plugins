@@ -1,4 +1,4 @@
-# Bots and Channels
+# Bot Teams
 
 Persistent bots with their own files, mission, and memory, and Slack-style channels in BB’s sidebar. Inspired by [Hermes Bot Mode](https://hermes-agent.nousresearch.com/docs/user-guide/bot-mode).
 
@@ -7,7 +7,7 @@ Persistent bots with their own files, mission, and memory, and Slack-style chann
 1. Choose **New channel** in the sidebar to open an empty conversation with the composer ready. It starts with just you. After the first message, an agent privately suggests a short channel title; click its name at the left of the header to rename it at any time.
 2. Type `@` to find a bot. Sending a mention invites that bot into the channel. The picker also includes **Create new bot…**, which preserves your draft while you choose a name, mission, model, and permissions.
 3. Click the overlapping avatars in the header to see members and their activity. **Add bot** sits at the bottom; member options let you configure or remove a bot.
-4. Open **Bots** to administer profiles, `MISSION.md`, `MEMORY.md`, and activity. The collection uses BB's standard content width, search toolbar, status filter, sorting, and bordered rows. Conversations live in Channels.
+4. Open **Bot Teams** to administer profiles, `MISSION.md`, `MEMORY.md`, and activity. The collection uses BB's standard content width, search toolbar, status filter, sorting, and bordered rows. Conversations live in Channels.
 
 Bot configuration uses the same centered content width, compact settings rows,
 and native controls. Mission and memory use a Markdown editor with syntax
@@ -39,7 +39,7 @@ Hover or focus a message on desktop for **React**, **Reply**, **Copy**, or **Vie
 
 Bots receive standing guidance to write brief, conversational replies, use Markdown when it improves scanning, avoid dense walls of text and assistant boilerplate, and stay silent when they have nothing useful to add. Channel messages use BB’s native Markdown renderer, including short paragraphs, bullets, numbered steps, inline code, fenced code blocks, and links. They can react sparingly for acknowledgment (👍), completed or verified work (✅), or celebration (🎉). Direct questions and assignments still need an answer, action, or blocker.
 
-Smart routing uses **Jev** through OpenCode Zen's direct structured-decision API. **Plugins → Bots → Settings** controls the classifier, secret Zen API key, Jev model (default `jev-1.13`), timeout (default 5 seconds), and minimum confidence for steer/fork (default 0.7). `OPENCODE_API_KEY` on the BB server is an alternative to the secret setting. Recipient and action decisions are batched into one API request, without creating an agent session or loading tools and global instructions. Low-confidence steer/fork decisions become follow-ups. Delegation return decisions use the same API.
+Smart routing uses **Jev** through OpenCode Zen's direct structured-decision API. **Plugins → Bot Teams → Settings** controls the classifier, secret Zen API key, Jev model (default `jev-1.13`), timeout (default 5 seconds), and minimum confidence for steer/fork (default 0.7). `OPENCODE_API_KEY` on the BB server is an alternative to the secret setting. Recipient and action decisions are batched into one API request, without creating an agent session or loading tools and global instructions. Low-confidence steer/fork decisions become follow-ups. Delegation return decisions use the same API.
 
 For provider-based classification, select **providers** explicitly. Its primary/fallback settings default to Pi / `opencode-go/qwen3.8-flash`, then Codex / `gpt-5.6-luna`. This slower compatibility option creates temporary hidden agent sessions; each attempt can take up to 30 seconds. Jev failures never silently switch to an agent session. They keep the message visible with **Retry routing**, and delegation returns retry without waking the requester twice.
 
@@ -160,16 +160,16 @@ Default limits are 30 started turns per hour, 300 per day, 20 minutes per turn, 
 
 ## Persistence
 
-Each bot lives at `<BB data directory>/plugins/bots/homes/<bot-id>/`:
+Each bot lives at `<BB data directory>/plugins/bot-teams/homes/<bot-id>/`:
 
 - `MISSION.md`: the owner’s standing direction, read every turn.
 - `MEMORY.md`: durable facts, decisions, and unfinished work.
 - `AGENTS.md`: workspace instructions.
 - `files/`: working files.
 
-**Profile → Workspace** shows the exact path. Document saves detect stale editor versions. Profiles, channel history, reactions, membership, work, and draft uploads live in the plugin’s SQLite database. Sent attachments use BB’s project attachment storage. Back up `plugins/bots` along with BB’s conversation and attachment storage.
+**Profile → Workspace** shows the exact path. Document saves detect stale editor versions. Profiles, channel history, reactions, membership, work, and draft uploads live in the plugin’s SQLite database. Sent attachments use BB’s project attachment storage. Back up `plugins/bot-teams` along with BB’s conversation and attachment storage. Migrated installations also retain `plugins/bots/homes`; the new homes path links to it so saved workspace paths stay valid.
 
-Each bot keeps one hidden primary BB thread per channel, adding recent shared messages as context on each turn. Forks use separate hidden threads and keep their own reply history. **View work** opens native tools, approvals, and failures. Existing group conversations appear as Channels without losing history; old group links redirect to their channel. Existing private work sessions remain stored and accessible through BB, while the Bots page is for configuration.
+Each bot keeps one hidden primary BB thread per channel, adding recent shared messages as context on each turn. Forks use separate hidden threads and keep their own reply history. **View work** opens native tools, approvals, and failures. Existing group conversations appear as Channels without losing history; old group links redirect to their channel. Existing private work sessions remain stored and accessible through BB, while the Bot Teams page is for configuration.
 
 Channels initially load 200 messages. **Load earlier messages** pages through the retained transcript. **Search channel** searches all stored message text and names; selecting a result or an older reply reference loads and focuses its message. This is a single-owner local feature. Bots use BB’s configured providers, credentials, tools, and skills on the primary machine. Separate directories provide persistent storage, not separate accounts. Shared `MEMORY.md` should contain only information appropriate for every channel the bot joins.
 
@@ -244,7 +244,7 @@ stay within two hops; a request stops adding replies at 32 responses and reports
 that limit. These rules prevent runaway consultation loops.
 
 Bots may also run `bb bots create`, but creation is approval-gated. The request
-appears in **Plugins → Bots** under **Pending bot approvals**, where the owner
+appears in **Plugins → Bot Teams** under **Pending bot approvals**, where the owner
 can review the requested profile and mission and approve or deny it. The
 workspace and profile are created only after approval; denying, cancelling, or
 letting the request expire leaves no partial bot behind.
@@ -259,7 +259,7 @@ node scripts/migrate-council-to-bots.mjs --data-dir /absolute/path/to/BB/data --
 ```
 
 The first command previews the migration. Apply backs up the complete Council
-SQLite database and settings under `plugins/bots/imports/council-v1`, disables
+SQLite database and settings under `plugins/bot-teams/imports/council-v1`, disables
 Council, imports every member’s exact persona and configured provider/model/
 reasoning, and creates Council and preset channels. Chief advisors retain a
 synthesis role in their mission; disabled members are retired. Schedules remain
@@ -273,19 +273,31 @@ specified data directory. After verifying the new bots and channel, run
 `bb plugin remove council`. Existing legacy sessions remain in the private backup;
 they are not converted into new conversations or rerun.
 
+## Rename an existing Bots installation
+
+Bot Teams uses the unique plugin ID `bot-teams`, separate from the community plugin named Bots. Existing `bb bots` commands, `bots_*` tools, and the `bots` skill keep their names for saved automations. If another plugin also registers the command, use `bb plugin run bot-teams …`.
+
+See [the migration guide](docs/MIGRATION.md) before replacing an existing installation. New installations need no migration.
+
 ## Install and develop
 
 ```sh
 pnpm install
-pnpm --filter bb-plugin-bots typecheck
-pnpm --filter bb-plugin-bots test
-bb plugin build packages/bb-plugin-bots
-bb plugin install ./packages/bb-plugin-bots --yes
+pnpm --filter bb-plugin-bot-teams typecheck
+pnpm --filter bb-plugin-bot-teams test
+bb plugin build packages/bb-plugin-bot-teams
+bb plugin install ./packages/bb-plugin-bot-teams --yes
 ```
 
-Rebuild and run `bb plugin reload bots` after changes. Inspect state with `bb bots list --json`.
+Rebuild and run `bb plugin reload bot-teams` after changes. Inspect state with `bb bots list --json`.
 
 ## Staged preview
+
+![Bot Teams in the running BB application](assets/staged-preview.png)
+
+The renamed Bot Teams collection in BB, filtered to the staged Atlas research
+bot. Atlas has mission schedules off; the capture restores its prior retirement
+state afterward.
 
 ![Channel context, reference files, and published report](assets/channel-workbench.png)
 

@@ -55,7 +55,7 @@ export class ChannelNotifications {
     const room = this.store.findRoom(n.room_id);
     if (!room || room.archived || (room.lastReadAt ?? 0) >= n.created_at)
       return null;
-    const path = `/plugins/bots/channels/${room.id}`;
+    const path = `/plugins/bot-teams/channels/${room.id}`;
     if (n.kind === "reply") {
       const m = this.store.message(n.subject_id);
       if (!m?.botId || m.system || !room.memberIds.includes(m.botId))
@@ -153,7 +153,7 @@ export class ChannelNotifications {
             signal: requestSignal,
             pluginId: "push-notifications",
             method: "notifications.enqueue",
-            input: { pluginId: "bots", eventId: id },
+            input: { pluginId: "bot-teams", eventId: id },
             outputSchema: z.object({ ok: z.literal(true) }),
           });
         this.store.db

@@ -9,8 +9,22 @@ import {
 const id = "1a5943b7-4148-436b-94b0-aab0a5401064";
 const messageId =
   "return:job:2925deb5-e703-42c1-b4fa-7cae2ac51692:bot_7fdaa88f26cf748a:bot_7fdaa88f26cf748a";
-const path = `/plugins/bots/channels/${id}/message/${encodeURIComponent(messageId)}`;
+const path = `/plugins/bot-teams/channels/${id}/message/${encodeURIComponent(messageId)}`;
 const known = new Set([id]);
+
+test("legacy Bots links retain message IDs and only adopt known channels", () => {
+  const legacy = path.replace("/bot-teams/", "/bots/");
+  for (const href of [legacy, `http://127.0.0.1:38886${legacy}`]) {
+    assert.equal(
+      channelLinkDestination(href, "http://127.0.0.1:38886", known),
+      `${id}/message/${messageId}`,
+    );
+    assert.equal(
+      channelLinkDestination(href, "http://127.0.0.1:38886", new Set()),
+      null,
+    );
+  }
+});
 
 test("copied message references are portable Markdown with intact message identity", () => {
   const reference = channelMessageReference(
@@ -34,7 +48,7 @@ test("relative and same-server message links stay in the current client", () => 
     for (const href of [path, `${origin}${path}`]) {
       assert.equal(
         channelLinkDestination(href, origin, known),
-        path.replace("/plugins/bots/channels/", ""),
+        `${id}/message/${messageId}`,
       );
     }
   }
@@ -49,7 +63,7 @@ test("old desktop localhost links resolve on mobile only for a known channel", (
     const href = `http://${hostname}${path}`;
     assert.equal(
       channelLinkDestination(href, "https://bb.example.com", known),
-      path.replace("/plugins/bots/channels/", ""),
+      `${id}/message/${messageId}`,
     );
     assert.equal(
       channelLinkDestination(href, "https://bb.example.com", new Set()),
@@ -65,7 +79,7 @@ test("uppercase channel IDs resolve to the canonical channel", () => {
       "https://bb.example.com",
       known,
     ),
-    path.replace("/plugins/bots/channels/", ""),
+    `${id}/message/${messageId}`,
   );
 });
 
@@ -73,7 +87,7 @@ test("BB's localhost hostname rewrite still resolves when mobile uses another po
   const href = `http://bb.example.com:38886${path}`;
   assert.equal(
     channelLinkDestination(href, "https://bb.example.com", known),
-    path.replace("/plugins/bots/channels/", ""),
+    `${id}/message/${messageId}`,
   );
   assert.equal(
     channelLinkDestination(href, "https://bb.example.com", new Set()),
@@ -87,11 +101,11 @@ test("unrelated servers, schemes, downloads and malformed routes are not treated
     `//elsewhere.example${path}`,
     `javascript:alert(1)`,
     `https://user:pass@bb.example.com${path}`,
-    `/plugins/bots/files/${id}`,
+    `/plugins/bot-teams/files/${id}`,
     `${path}/extra`,
     `${path}?download=1`,
-    `/plugins/bots/channels/${id}/message/%E0%A4%A`,
-    `/plugins/bots/channels/${id}/message/%00`,
+    `/plugins/bot-teams/channels/${id}/message/%E0%A4%A`,
+    `/plugins/bot-teams/channels/${id}/message/%00`,
   ])
     assert.equal(
       channelLinkDestination(href, "https://bb.example.com", known),

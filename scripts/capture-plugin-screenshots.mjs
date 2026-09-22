@@ -392,17 +392,17 @@ const threadUrl = `/projects/${projectId}/threads/${threadId}`;
 const captures = [
   {
     id: "bots-workbench",
-    packageDir: "bb-plugin-bots",
+    packageDir: "bb-plugin-bot-teams",
     fileName: "channel-workbench.png",
     setup: async (client) => {
-      const { rooms } = await pluginRpc("bots", "list", null);
+      const { rooms } = await pluginRpc("bot-teams", "list", null);
       const room = rooms.find(r => process.env.BB_CAPTURE_CHANNEL_ID ? r.id === process.env.BB_CAPTURE_CHANNEL_ID : r.name === "Workbench QA");
       if (!room || room.archived) throw new Error("Seed or restore Workbench QA before capturing.");
-      const data = await pluginRpc("bots", "room", {id:room.id});
+      const data = await pluginRpc("bot-teams", "room", {id:room.id});
       if (!data.messages.some(m => m.botId && m.text === "ORBIT-42 release report is ready." && m.attachments.some(a => a.name === "release-check.csv")))
         throw new Error("A real bot must have published the staged release-check.csv report.");
-      const context = await pluginRpc("bots", "channelContext", {id:room.id});
-      const initialUsage=await pluginRpc("bots","usage",{id:room.id,kind:"channel"});
+      const context = await pluginRpc("bot-teams", "channelContext", {id:room.id});
+      const initialUsage=await pluginRpc("bot-teams","usage",{id:room.id,kind:"channel"});
       const savedMessage=data.messages.find(m=>m.saved);
       if(!savedMessage)throw new Error("Seed a saved release-planning decision.");
       if (!context.brief.includes("ORBIT-42") || !context.attachmentIds.length) throw new Error("Seed the release brief and retain the real report as a reference.");
@@ -458,15 +458,15 @@ const captures = [
         await client.waitForText(savedMessage.text.slice(0,80));
         await client.evaluate(`(() => { if(!document.querySelector('.channel-workbench .channel-search-result'))throw new Error('Saved decision missing'); })()`);
         await openPanel("Usage and limits");
-        const priorUsage=await pluginRpc("bots","usage",{id:room.id,kind:"channel"});
+        const priorUsage=await pluginRpc("bot-teams","usage",{id:room.id,kind:"channel"});
         await client.waitForInputValue("Turns per hour",String(priorUsage.limits.turnsPerHour));
         await fill("Turns per hour","12");
         await client.clickButtonText("Save limits");
         await client.waitForText("Limits saved.");
-        const usage=await pluginRpc("bots","usage",{id:room.id,kind:"channel"});
+        const usage=await pluginRpc("bot-teams","usage",{id:room.id,kind:"channel"});
         if(usage.turns<1 || usage.routingCalls!==initialUsage.routingCalls || usage.limits.turnsPerHour!==12)throw new Error('Single-bot usage or saved limits incorrect');
         await openPanel("Automations");
-        const priorSchedules=await pluginRpc("bots","automationList",{channelId:room.id});
+        const priorSchedules=await pluginRpc("bot-teams","automationList",{channelId:room.id});
         if(!priorSchedules.automations.some(a=>["Weekday release check","Release check at 9:30"].includes(a.name))) {
         await client.clickButtonText("New automation");
         await fill("Automation name","Weekday release check");
@@ -482,7 +482,7 @@ const captures = [
         await client.clickButtonText("Save automation");
         await client.waitForText("Release check at 9:30");
         await client.waitForText("Weekdays at 09:30");
-        const schedules=await pluginRpc("bots","automationList",{channelId:room.id});
+        const schedules=await pluginRpc("bot-teams","automationList",{channelId:room.id});
         const saved=schedules.automations.find(a=>a.name==="Release check at 9:30");
         if(!saved || saved.enabled || saved.trigger.cron!=="30 9 * * 1-5")throw new Error('Schedule edit lost its paused state or trigger');
         await client.clickButtonText("Run now");
@@ -494,7 +494,7 @@ const captures = [
         await client.clickButtonText("View response");
       }
       await openPanel("Channel context");
-      const current=await pluginRpc("bots","channelContext",{id:room.id});
+      const current=await pluginRpc("bot-teams","channelContext",{id:room.id});
       await client.waitForInputValue("Channel memory",current.memory);
       await client.command("Emulation.setDeviceMetricsOverride", {width:390,height:844,deviceScaleFactor:1,mobile:false});
       await sleep(900);
@@ -516,17 +516,17 @@ const captures = [
   },
   {
     id: "bots-automations",
-    packageDir: "bb-plugin-bots",
+    packageDir: "bb-plugin-bot-teams",
     fileName: "channel-automations.png",
     setup: async (client) => {
-      const { rooms } = await pluginRpc("bots", "list", null);
+      const { rooms } = await pluginRpc("bot-teams", "list", null);
       const room = rooms.find(r => r.name === "Channel automations QA" && !r.archived);
       if (!room) throw new Error("Seed or restore Channel automations QA before capturing.");
-      const { automations } = await pluginRpc("bots", "automationList", { channelId: room.id });
+      const { automations } = await pluginRpc("bot-teams", "automationList", { channelId: room.id });
       const brief = automations.find(a => a.name === "Weekday channel brief");
       if (!brief || brief.enabled || brief.trigger.timezone !== "America/New_York")
         throw new Error("Seed the paused Weekday channel brief with its New York timezone.");
-      const data = await pluginRpc("bots", "room", { id: room.id });
+      const data = await pluginRpc("bot-teams", "room", { id: room.id });
       if (!data.messages.some(m => m.botId && m.text === "Scheduled channel verified: ORBIT-42."))
         throw new Error("The scheduled bot response must be visible in the live channel.");
       await client.navigate("/");
@@ -574,7 +574,7 @@ const captures = [
         await rowAction("Delete");
         await rowAction("Confirm delete");
         await client.waitForText("Automation deleted.");
-        const live = await pluginRpc("bots", "automationList", { channelId: room.id });
+        const live = await pluginRpc("bot-teams", "automationList", { channelId: room.id });
         if (live.automations.some(a => a.name === 'CLI daily check')) throw new Error('Confirmed delete must remove the schedule');
       }
       if (process.env.BB_CAPTURE_QA_ACTIONS === "1" || process.env.BB_CAPTURE_QA_LAYOUT === "1") {
@@ -619,13 +619,13 @@ const captures = [
   },
   {
     id: "bots-images",
-    packageDir: "bb-plugin-bots",
+    packageDir: "bb-plugin-bot-teams",
     fileName: "channel-images.png",
     setup: async (client) => {
-      const { rooms } = await pluginRpc("bots", "list", null);
+      const { rooms } = await pluginRpc("bot-teams", "list", null);
       const room = rooms.find(r => r.name === "Chat polish QA" && !r.archived);
       if (!room) throw new Error("Seed or restore the Chat polish QA channel before capturing inline images.");
-      const data = await pluginRpc("bots", "room", { id: room.id });
+      const data = await pluginRpc("bot-teams", "room", { id: room.id });
       if (!data.messages.some(m => m.speaker === "You" && m.attachments.some(a => a.type === "localImage"))) throw new Error("Missing a real owner image message.");
       if (!data.messages.some(m => m.botId && m.text === "Here is the inline preview." && m.attachments.some(a => a.type === "localImage"))) throw new Error("Missing a bot-published inline image response.");
       await client.navigate("/");
@@ -653,7 +653,7 @@ const captures = [
   },
   {
     id: "bots-behavior",
-    packageDir: "bb-plugin-bots",
+    packageDir: "bb-plugin-bot-teams",
     fileName: "channel-behavior.png",
     setup: async (client) => {
       await captures.find(c => c.id === "bots-images").setup(client);
@@ -670,10 +670,10 @@ const captures = [
   },
   {
     id: "bots-consultation",
-    packageDir: "bb-plugin-bots",
+    packageDir: "bb-plugin-bot-teams",
     fileName: "channel-consultation.png",
     setup: async (client) => {
-      const { rooms, bots } = await pluginRpc("bots", "list", null);
+      const { rooms, bots } = await pluginRpc("bot-teams", "list", null);
       const room = rooms.find(r => r.name === "Council" && !r.archived);
       if (!room) throw new Error("Migrate the Council advisors and seed their consultation before capturing.");
       const names = room.memberIds.map(id => bots.find(b => b.id === id)?.name);
@@ -703,7 +703,7 @@ const captures = [
   },
   {
     id: "bots-profile",
-    packageDir: "bb-plugin-bots",
+    packageDir: "bb-plugin-bot-teams",
     fileName: "bot-profile.png",
     setup: async (client) => {
       await captures.find((capture) => capture.id === "bots-collection").setup(client);
@@ -729,7 +729,7 @@ const captures = [
   },
   {
     id: "bots-memory",
-    packageDir: "bb-plugin-bots",
+    packageDir: "bb-plugin-bot-teams",
     fileName: "bot-memory.png",
     setup: async (client) => {
       await captures.find((capture) => capture.id === "bots-profile").setup(client);
@@ -751,15 +751,51 @@ const captures = [
     },
   },
   {
+    id: "bot-teams",
+    packageDir: "bb-plugin-bot-teams",
+    setup: async (client) => {
+      const { bots } = await pluginRpc("bot-teams", "list", null);
+      const atlas = bots.find((bot) => bot.name === "Atlas" && bot.description === "Research and verify the facts");
+      if (!atlas || !atlas.paused || atlas.intervalMinutes !== 0) {
+        throw new Error("Seed the paused Atlas demonstration bot with mission schedules off before capturing Bot Teams.");
+      }
+      const cleanup = async () => {
+        if (atlas.retired) await pluginRpc("bot-teams", "retire", { id: atlas.id, retired: true });
+      };
+      try {
+        if (atlas.retired) await pluginRpc("bot-teams", "retire", { id: atlas.id, retired: false });
+        await client.navigate("/plugins/bot-teams/bots");
+        await client.waitForText("Bot Teams");
+        await client.waitForAriaButton("Filter bots");
+        await client.evaluate(`(() => {
+          const input = document.querySelector('input[aria-label="Search bots"]');
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Atlas');
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        })()`);
+        await client.waitForText("Research and verify the facts");
+        await client.evaluate(`(() => {
+          const rows = [...document.querySelectorAll('[data-bots-collection] [data-resource-row]')];
+          if (location.pathname !== '/plugins/bot-teams/bots' || rows.length !== 1 || !rows[0].textContent.includes('Atlas') || !rows[0].textContent.includes('Research and verify the facts')) {
+            throw new Error('The renamed Bot Teams collection must show only the staged Atlas bot.');
+          }
+        })()`);
+        return cleanup;
+      } catch (error) {
+        await cleanup();
+        throw error;
+      }
+    },
+  },
+  {
     id: "bots-collection",
-    packageDir: "bb-plugin-bots",
+    packageDir: "bb-plugin-bot-teams",
     fileName: "bots-collection.png",
     setup: async (client) => {
       await client.navigate("/");
-      await client.waitForText("Bots");
+      await client.waitForText("Bot Teams");
       await client.evaluate(`(() => {
         const button = Array.from(document.querySelectorAll('.channels-navigation button'))
-          .find((candidate) => candidate.textContent.trim() === 'Bots');
+          .find((candidate) => candidate.textContent.trim() === 'Bot Teams');
         if (!button) throw new Error('Bots navigation is missing');
         button.click();
       })()`);
@@ -784,13 +820,13 @@ const captures = [
   },
   {
     id: "bots-forks",
-    packageDir: "bb-plugin-bots",
+    packageDir: "bb-plugin-bot-teams",
     fileName: "channel-forks.png",
     setup: async (client) => {
-      const { rooms } = await pluginRpc("bots", "list", null);
+      const { rooms } = await pluginRpc("bot-teams", "list", null);
       const room = rooms.find((r) => process.env.BB_CAPTURE_CHANNEL_ID ? r.id === process.env.BB_CAPTURE_CHANNEL_ID : r.name === "Fork QA");
       if (!room) throw new Error("Seed the Fork QA channel with a real primary session and native fork before capturing.");
-      const data = await pluginRpc("bots", "room", { id: room.id });
+      const data = await pluginRpc("bot-teams", "room", { id: room.id });
       const fork = data.jobs.find((j) => j.forkSourceThreadId && j.reply === "SIDE_ANSWER");
       if (!fork?.threadId || fork.threadId === fork.forkSourceThreadId)
         throw new Error("Fork QA must contain a completed native fork with SIDE_ANSWER and a distinct source thread.");
@@ -827,9 +863,9 @@ const captures = [
   },
   {
     id: "bots",
-    packageDir: "bb-plugin-bots",
+    packageDir: "bb-plugin-bot-teams",
     setup: async (client) => {
-      const { rooms } = await pluginRpc("bots", "list", null);
+      const { rooms } = await pluginRpc("bot-teams", "list", null);
       const room = rooms.find((candidate) => candidate.name === "Launch room");
       if (!room) throw new Error("Seed the Launch room channel with Atlas and Scribe before capturing.");
       await client.navigate("/");
@@ -908,7 +944,7 @@ const captures = [
   },
   {
     id: "bots-emoji",
-    packageDir: "bb-plugin-bots",
+    packageDir: "bb-plugin-bot-teams",
     fileName: "emoji-picker.png",
     setup: async (client) => {
       await captures.find((capture) => capture.id === "bots").setup(client);
@@ -947,7 +983,7 @@ const captures = [
   },
   {
     id: "bots-search",
-    packageDir: "bb-plugin-bots",
+    packageDir: "bb-plugin-bot-teams",
     fileName: "channel-search.png",
     setup: async (client) => {
       await captures.find((capture) => capture.id === "bots").setup(client);
@@ -1341,7 +1377,7 @@ try {
       const outputPath = join(repoRoot, "packages", capture.packageDir, "assets", capture.fileName ?? "staged-preview.png");
       // Use BB's real collapsed-sidebar state so publication does not expose
       // unrelated local projects/threads alongside the deterministic fixtures.
-      const privateSidebar = (capture.packageDir === "bb-plugin-bots" && capture.id !== "bots-forks") || capture.id === "spool";
+      const privateSidebar = (capture.packageDir === "bb-plugin-bot-teams" && capture.id !== "bots-forks") || capture.id === "spool";
       if (privateSidebar) {
         await client.evaluate(`document.querySelector('button[aria-label^="Toggle sidebar"]')?.click()`);
         await sleep(350);
