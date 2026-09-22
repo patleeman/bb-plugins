@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import * as Dialog from "@radix-ui/react-dialog";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import EmojiPicker, {
   Categories,
   EmojiStyle,
@@ -8,7 +9,8 @@ import EmojiPicker, {
 } from "emoji-picker-react";
 import { emojiCatalog } from "./emoji-catalog";
 import { experimental_Icon as Icon } from "@get-bb/plugin-sdk/app";
-import type { Bot } from "./contract";
+import type { Bot, Room } from "./contract";
+import { channelSlug, matchingChannels } from "./channel-references";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 
@@ -19,6 +21,7 @@ export function Menu({
   open,
   onOpenChange,
   className = "",
+  tooltip,
 }: {
   trigger: ReactNode;
   children: ReactNode;
@@ -26,10 +29,23 @@ export function Menu({
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   className?: string;
+  tooltip?: string;
 }) {
+  const triggerElement = <Popover.Trigger asChild>{trigger}</Popover.Trigger>;
   return (
     <Popover.Root open={open} onOpenChange={onOpenChange}>
-      <Popover.Trigger asChild>{trigger}</Popover.Trigger>
+      {tooltip ? (
+        <Tooltip.Root>
+          <Tooltip.Trigger asChild>{triggerElement}</Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content className="channel-tooltip" sideOffset={6}>
+              {tooltip}
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+      ) : (
+        triggerElement
+      )}
       <Popover.Portal>
         <Popover.Content
           aria-label={label}
@@ -41,6 +57,25 @@ export function Menu({
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
+  );
+}
+
+export function IconActionTooltip({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip.Root>
+      <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content className="channel-tooltip" sideOffset={6}>
+          {label}
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
   );
 }
 export function Modal({
@@ -148,6 +183,59 @@ export function BotOptions({
     </div>
   );
 }
+
+export function ChannelOptions({
+  rooms,
+  currentRoomId,
+  query,
+  selected,
+  onSelect,
+  listId,
+  onHover,
+}: {
+  rooms: Room[];
+  currentRoomId: string;
+  query: string;
+  selected?: number;
+  onSelect: (room: Room) => void;
+  listId?: string;
+  onHover?: (index: number) => void;
+}) {
+  const matches = matchingChannels(rooms, currentRoomId, query);
+  return (
+    <div
+      id={listId}
+      role="listbox"
+      aria-label="Channels"
+      className="channel-bot-options"
+    >
+      {matches.map((room, i) => (
+        <button
+          type="button"
+          role="option"
+          aria-selected={selected === i}
+          id={listId ? `${listId}-${i}` : undefined}
+          className="channel-menu-row"
+          key={room.id}
+          onMouseDown={(event) => event.preventDefault()}
+          onMouseEnter={() => onHover?.(i)}
+          onClick={() => onSelect(room)}
+        >
+          <span className="channel-hash" aria-hidden>
+            #
+          </span>
+          <span className="channel-bot-name">
+            {room.name}
+            <small>#{channelSlug(room.name)}</small>
+          </span>
+        </button>
+      ))}
+      {!matches.length && (
+        <p className="channel-menu-label">No matching channels</p>
+      )}
+    </div>
+  );
+}
 export function matchingBots(bots: Bot[], memberIds: string[], query: string) {
   const q = query.toLowerCase();
   return bots
@@ -204,21 +292,31 @@ const emojiCategories = [
 export function ReactionPicker({
   onReact,
   label = "Add reaction",
+  open,
+  onOpenChange,
 }: {
   onReact: (emoji: string) => void;
   label?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const visible = open ?? internalOpen;
+  const setVisible = (next: boolean) => {
+    onOpenChange?.(next);
+    if (open === undefined) setInternalOpen(next);
+  };
   const select = (emoji: string) => {
     onReact(emoji);
-    setOpen(false);
+    setVisible(false);
   };
   return (
     <Menu
       label="Choose a reaction"
-      open={open}
-      onOpenChange={setOpen}
+      open={visible}
+      onOpenChange={setVisible}
       className="channel-emoji-picker"
+      tooltip={label}
       trigger={
         <Button variant="ghost" size="icon" aria-label={label}>
           <span className="channel-react-icon" aria-hidden>

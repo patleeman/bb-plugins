@@ -1,10 +1,12 @@
 import type { Attachment, RoomMessage } from "./contract";
+import { parseSendMode, sendModes, type SendMode } from "./send-mode";
 
 export type Draft = {
   text: string;
   attachments: Attachment[];
   reply: RoomMessage | null;
   request: { fingerprint: string; id: string } | null;
+  sendMode: SendMode;
 };
 type Storage = Pick<globalThis.Storage, "getItem" | "setItem">;
 export const emptyDraft = (): Draft => ({
@@ -12,6 +14,7 @@ export const emptyDraft = (): Draft => ({
   attachments: [],
   reply: null,
   request: null,
+  sendMode: "auto",
 });
 export function readDraft(storage: Storage, key: string): Draft {
   try {
@@ -21,7 +24,11 @@ export function readDraft(storage: Storage, key: string): Draft {
       typeof value.text === "string" &&
       Array.isArray(value.attachments)
     )
-      return { ...emptyDraft(), ...value };
+      return {
+        ...emptyDraft(),
+        ...value,
+        sendMode: sendModes.includes(value.sendMode) ? value.sendMode : "auto",
+      };
   } catch {}
   return emptyDraft();
 }
@@ -32,9 +39,11 @@ export function prepareSend(
   roomId: string,
   draft: Draft,
 ) {
+  const parsed = parseSendMode(draft.text, draft.sendMode);
   const payload = {
     id: roomId,
-    text: draft.text.trim(),
+    text: parsed.text,
+    sendMode: parsed.mode,
     attachmentIds: draft.attachments.map((a) => a.id),
     replyTo: draft.reply?.id ?? null,
   };
@@ -60,6 +69,7 @@ export function clearSentDraft(
       draft.text,
       draft.attachments.map((a) => a.id),
       draft.reply?.id ?? null,
+      draft.sendMode,
     ]);
   if (
     current.request?.id !== sent.request?.id ||

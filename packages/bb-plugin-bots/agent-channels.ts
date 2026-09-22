@@ -1,3 +1,4 @@
+import { isExecuting } from "./job-state";
 import { z } from "zod";
 import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
 import { rpcContract, idSchema } from "./contract";
@@ -27,7 +28,7 @@ export function agentAuthor(
   if (bot.retired) throw new Error("This bot is retired.");
   const job = store
     .work(bot.id)
-    .find((j) => j.threadId === threadId && j.status === "running");
+    .find((j) => j.threadId === threadId && isExecuting(j));
   if (conversation.kind !== "admin" && !job)
     throw new Error("This bot's response is no longer active.");
   if (job?.roomId) {
@@ -45,6 +46,7 @@ export function agentAuthor(
     botId: bot.id,
     speaker: bot.name,
     sourceThreadId: threadId,
+    ...(job ? { jobId: job.id } : {}),
     depth: job?.roomId ? job.depth + 1 : 0,
     ...(job?.automationId ? { automationId: job.automationId } : {}),
   };

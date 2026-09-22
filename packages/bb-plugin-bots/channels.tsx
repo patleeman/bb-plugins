@@ -1,4 +1,14 @@
 import {
+  ContextPanel,
+  FilesPanel,
+  UsagePanel,
+  SavedPanel,
+  workbenchLabels,
+  type WorkbenchPanel,
+} from "./channel-workbench";
+import { Textarea } from "./components/ui/textarea";
+import { sharedReads } from "./shared-read";
+import {
   useCallback,
   useEffect,
   useRef,
@@ -35,38 +45,54 @@ import {
   ContextMenuItem,
 } from "./components/ui/context-menu";
 import { ProfileForm, WorkList, ErrorMessage, message } from "./bot-ui";
-import { channelWork } from "./channel-work";
+import { channelWork, channelWorkActivity } from "./channel-work";
 import { ChannelSearch } from "./channel-search";
+import { ChannelSidebarRow } from "./channel-sidebar-row";
 import { ChannelAutomationsView } from "./channel-automations-view";
 import { ChannelAttachments } from "./channel-attachments";
 import { GroupComposer } from "./composer";
 import { ChannelModePicker } from "./channel-mode-picker";
-import { Menu, Modal, InvitePicker, ReactionPicker } from "./channel-controls";
+import {
+  IconActionTooltip,
+  Menu,
+  Modal,
+  InvitePicker,
+  ReactionPicker,
+} from "./channel-controls";
+import { isForkConversation, type SendMode } from "./send-mode";
 
 const uuid = /^[a-f0-9-]{36}$/;
 const channelId = (subPath: string) =>
   uuid.test(subPath.split("/")[0] ?? "") ? subPath.split("/")[0]! : null;
-function useRoster() {
+function useRoster(reconcile = false) {
   const rpc = useRpc<typeof rpcContract>();
-  const [data, setData] = useState<{ bots: Bot[]; rooms: Room[] }>({
+  const connectionState = useRealtimeConnectionState();
+  const [data, setData] = useState<{
+    bots: Bot[];
+    rooms: Room[];
+    activeRoomIds: string[];
+  }>({
     bots: [],
     rooms: [],
+    activeRoomIds: [],
   });
   const [error, setError] = useState<string | null>(null);
   const request = useRef(0);
   const load = useCallback(() => {
     const seq = ++request.current;
-    rpc.call("list").then(
-      (d) => {
-        if (seq === request.current) {
-          setData(d);
-          setError(null);
-        }
-      },
-      (e) => {
-        if (seq === request.current) setError(message(e));
-      },
-    );
+    sharedReads
+      .read("roster", () => rpc.call("list"))
+      .then(
+        (d) => {
+          if (seq === request.current) {
+            setData(d);
+            setError(null);
+          }
+        },
+        (e) => {
+          if (seq === request.current) setError(message(e));
+        },
+      );
   }, [rpc]);
   useEffect(() => {
     load();
@@ -74,7 +100,36 @@ function useRoster() {
       request.current++;
     };
   }, [load]);
-  useRealtime("changed", load);
+  useRealtime("changed", (event) => {
+    sharedReads.invalidate(
+      event && typeof event === "object" && "revision" in event
+        ? event.revision
+        : undefined,
+    );
+    void load();
+  });
+  useEffect(() => {
+    if (reconcile && connectionState === "connected") load();
+  }, [reconcile, connectionState, load]);
+  const hasActiveWork = data.activeRoomIds.length > 0;
+  useEffect(() => {
+    if (!reconcile) return;
+    const refresh = () => {
+      if (document.visibilityState !== "hidden") load();
+    };
+    const timer = window.setInterval(refresh, hasActiveWork ? 2_500 : 15_000);
+    window.addEventListener("pageshow", refresh);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("pageshow", refresh);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [reconcile, hasActiveWork, load]);
   return { ...data, error, load };
 }
 type ChannelData = {
@@ -118,7 +173,9 @@ function MessageActionButtons({
         aria-label={`Reply to ${message.speaker}`}
         onClick={onReply}
       >
-        <Icon name="CornerDownRight" />
+        <IconActionTooltip label="Reply">
+          <Icon name="CornerDownRight" />
+        </IconActionTooltip>
       </Button>
       <Button
         variant="ghost"
@@ -126,7 +183,9 @@ function MessageActionButtons({
         aria-label={`Copy ${message.speaker}'s message`}
         onClick={onCopy}
       >
-        <Icon name={copied === message.id ? "Check" : "Copy"} />
+        <IconActionTooltip label={copied === message.id ? "Copied" : "Copy"}>
+          <Icon name={copied === message.id ? "Check" : "Copy"} />
+        </IconActionTooltip>
       </Button>
       {(job?.threadId || message.sourceThreadId) && (
         <Button
@@ -135,8 +194,82 @@ function MessageActionButtons({
           aria-label={`View ${message.speaker}'s work`}
           onClick={onView}
         >
-          <Icon name="ExternalLink" />
+          <IconActionTooltip label="See work">
+            <Icon name="ExternalLink" />
+          </IconActionTooltip>
         </Button>
+      )}
+    </>
+  );
+}
+
+function MessageContextActions({
+  saved,
+  onSave,
+  onPermalink,
+  onEdit,
+  hasWork,
+  onFork,
+  selectedText,
+  onReply,
+  onAddSelected,
+  onEmoji,
+  onCopy,
+  onView,
+}: {
+  saved?: boolean;
+  onSave: () => void;
+  onPermalink: () => void;
+  onEdit?: () => void;
+  hasWork: boolean;
+  onFork?: () => void;
+  selectedText: string;
+  onReply: () => void;
+  onAddSelected: () => void;
+  onEmoji: () => void;
+  onCopy: () => void;
+  onView: () => void;
+}) {
+  return (
+    <>
+      <ContextMenuItem onSelect={onReply}>
+        <Icon name="CornerDownRight" />
+        Reply
+      </ContextMenuItem>
+      {onFork && (
+        <ContextMenuItem onSelect={onFork}>
+          <Icon name="GitFork" />
+          Ask separately
+        </ContextMenuItem>
+      )}
+      {!!selectedText && (
+        <ContextMenuItem onSelect={onAddSelected}>
+          <Icon name="Copy" />
+          Add selected text to chat
+        </ContextMenuItem>
+      )}
+      <ContextMenuItem onSelect={onEmoji}>
+        <Icon name="Plus" />
+        Emoji…
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={onCopy}>
+        <Icon name="Copy" />
+        Copy
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={onPermalink}>
+        Copy message link
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={onSave}>
+        {saved ? "Unsave decision" : "Save decision"}
+      </ContextMenuItem>
+      {onEdit && (
+        <ContextMenuItem onSelect={onEdit}>Edit message</ContextMenuItem>
+      )}
+      {hasWork && (
+        <ContextMenuItem onSelect={onView}>
+          <Icon name="ExternalLink" />
+          See thread
+        </ContextMenuItem>
       )}
     </>
   );
@@ -156,34 +289,36 @@ function useChannel(id: string | null, poll = true) {
       return Promise.resolve();
     }
     const seq = ++request.current;
-    const promise = rpc.call("room", { id }).then(
-      (d) => {
-        if (seq === request.current) {
-          setData((prev) =>
-            prev?.room.id === d.room.id
-              ? {
-                  ...d,
-                  messages: mergeMessages(prev.messages, d.messages),
-                  parents: mergeMessages(prev.parents, d.parents),
-                  hasOlder:
-                    prev.messages.length &&
-                    prev.messages[0]?.id !== d.messages[0]?.id
-                      ? prev.hasOlder
-                      : d.hasOlder,
-                }
-              : d,
-          );
-          setError(null);
-        }
-      },
-      (e) => {
-        if (seq === request.current) {
-          setError(message(e));
-          // Do not leave a deleted channel's transcript and composer on screen.
-          if (message(e).includes("Channel not found")) setData(null);
-        }
-      },
-    );
+    const promise = sharedReads
+      .read(`channel:${id}`, () => rpc.call("room", { id }))
+      .then(
+        (d) => {
+          if (seq === request.current) {
+            setData((prev) =>
+              prev?.room.id === d.room.id
+                ? {
+                    ...d,
+                    messages: mergeMessages(prev.messages, d.messages),
+                    parents: mergeMessages(prev.parents, d.parents),
+                    hasOlder:
+                      prev.messages.length &&
+                      prev.messages[0]?.id !== d.messages[0]?.id
+                        ? prev.hasOlder
+                        : d.hasOlder,
+                  }
+                : d,
+            );
+            setError(null);
+          }
+        },
+        (e) => {
+          if (seq === request.current) {
+            setError(message(e));
+            // Do not leave a deleted channel's transcript and composer on screen.
+            if (message(e).includes("Channel not found")) setData(null);
+          }
+        },
+      );
     return promise;
   }, [rpc, id]);
   useEffect(() => {
@@ -193,7 +328,14 @@ function useChannel(id: string | null, poll = true) {
       request.current++;
     };
   }, [load]);
-  useRealtime("changed", load);
+  useRealtime("changed", (event) => {
+    sharedReads.invalidate(
+      event && typeof event === "object" && "revision" in event
+        ? event.revision
+        : undefined,
+    );
+    void load();
+  });
   useEffect(() => {
     const previous = previousRealtimeConnectionState.current;
     previousRealtimeConnectionState.current = realtimeConnectionState;
@@ -371,7 +513,7 @@ export function ChannelsSidebar({
   onNavigate,
   activeThreadId,
 }: PluginThreadListProps) {
-  const { rooms, error } = useRoster(),
+  const { rooms, activeRoomIds, error } = useRoster(true),
     rpc = useRpc<typeof rpcContract>(),
     navigate = useBbNavigate();
   const [selected, setSelected] = useState<string | null>(null),
@@ -391,6 +533,14 @@ export function ChannelsSidebar({
       setFailure(message(e));
     } finally {
       setPending(false);
+    }
+  };
+  const copyChannelId = async (id: string) => {
+    setFailure(null);
+    try {
+      await navigator.clipboard.writeText(id);
+    } catch (e) {
+      setFailure(`Could not copy channel ID: ${message(e)}`);
     }
   };
   useEffect(() => {
@@ -454,63 +604,18 @@ export function ChannelsSidebar({
         {error && <ErrorMessage error={error} />}
         <ErrorMessage error={failure} />
         {list.map((r) => (
-          <ContextMenu key={r.id}>
-            <ContextMenuTrigger asChild>
-              <button
-                className={`channel-nav-row ${r.updatedAt > (r.lastReadAt ?? 0) && selected !== r.id ? "is-unread" : ""}`}
-                aria-current={selected === r.id ? "page" : undefined}
-                onClick={() => open(r.id)}
-                onKeyDown={(event) => {
-                  if (
-                    event.key !== "ContextMenu" &&
-                    !(event.shiftKey && event.key === "F10")
-                  )
-                    return;
-                  event.preventDefault();
-                  const rect = event.currentTarget.getBoundingClientRect();
-                  event.currentTarget.dispatchEvent(
-                    new MouseEvent("contextmenu", {
-                      bubbles: true,
-                      clientX: rect.left + 16,
-                      clientY: rect.bottom,
-                    }),
-                  );
-                }}
-              >
-                {r.pinned ? (
-                  <Icon name="Pin" />
-                ) : (
-                  <span className="channel-hash" aria-hidden>
-                    #
-                  </span>
-                )}
-                <span>{r.name}</span>
-                {r.updatedAt > (r.lastReadAt ?? 0) && selected !== r.id && (
-                  <span className="channel-unread-dot" aria-label="Unread" />
-                )}
-              </button>
-            </ContextMenuTrigger>
-            <ContextMenuContent aria-label={`${r.name} options`}>
-              <ContextMenuItem onSelect={() => setRenaming(r)}>
-                <Icon name="Edit" />
-                Rename
-              </ContextMenuItem>
-              <ContextMenuItem
-                disabled={pending}
-                onSelect={() => void archive(r)}
-              >
-                <Icon name="Archive" />
-                {r.archived ? "Restore" : "Archive"}
-              </ContextMenuItem>
-              <ContextMenuItem
-                className="text-destructive focus:text-destructive"
-                onSelect={() => setDeleting(r)}
-              >
-                <Icon name="Trash2" />
-                Delete
-              </ContextMenuItem>
-            </ContextMenuContent>
-          </ContextMenu>
+          <ChannelSidebarRow
+            key={r.id}
+            room={r}
+            selected={selected === r.id}
+            working={activeRoomIds.includes(r.id)}
+            pending={pending}
+            onOpen={() => open(r.id)}
+            onRename={() => setRenaming(r)}
+            onCopyId={() => void copyChannelId(r.id)}
+            onArchive={() => void archive(r)}
+            onDelete={() => setDeleting(r)}
+          />
         ))}
         {!list.length && searching && (
           <p className="channel-menu-label">No matching channels</p>
@@ -526,7 +631,9 @@ export function ChannelsSidebar({
       {deleting && (
         <DeleteChannel room={deleting} onClose={() => setDeleting(null)} />
       )}
-      <Original />
+      <div className="channels-thread-list">
+        <Original />
+      </div>
     </>
   );
 }
@@ -689,12 +796,10 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
   const rpc = useRpc<typeof rpcContract>(),
     navigate = useBbNavigate();
   const [searchOpen, setSearchOpen] = useState(false);
-  const [automationsOpen, setAutomationsOpen] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false),
     [inviteOpen, setInviteOpen] = useState(false),
     [createOpen, setCreateOpen] = useState(false),
-    [activityOpen, setActivityOpen] = useState(false),
     [deleteOpen, setDeleteOpen] = useState(false),
     [settingsOpen, setSettingsOpen] = useState(false);
   const [failure, setFailure] = useState<string | null>(null),
@@ -703,8 +808,6 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
     setMembersOpen(false);
     setInviteOpen(false);
     setCreateOpen(false);
-    setActivityOpen(false);
-    setAutomationsOpen(false);
     setOptionsOpen(false);
     setDeleteOpen(false);
     setSettingsOpen(false);
@@ -724,6 +827,14 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
     } finally {
       setPending(false);
     }
+  };
+  const openWorkbench = (panel: WorkbenchPanel) => {
+    setOptionsOpen(false);
+    window.dispatchEvent(
+      new CustomEvent("bots:channel-workbench", {
+        detail: { roomId: room.id, panel },
+      }),
+    );
   };
   const removeBot = (botId: string) =>
     void act(async () => {
@@ -883,18 +994,24 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
           </Button>
         }
       >
+        {(["context", "files", "saved", "usage"] as const).map((panel) => (
+          <button
+            className="channel-menu-row"
+            key={panel}
+            onClick={() => openWorkbench(panel)}
+          >
+            {workbenchLabels[panel]}
+          </button>
+        ))}
         <button
           className="channel-menu-row"
-          onClick={() => {
-            setOptionsOpen(false);
-            setAutomationsOpen(true);
-          }}
+          onClick={() => openWorkbench("automations")}
         >
           <Icon name="Calendar" /> Automations
         </button>
         <button
           className="channel-menu-row"
-          onClick={() => setActivityOpen(true)}
+          onClick={() => openWorkbench("activity")}
         >
           <Icon name="Clock" />
           Activity
@@ -943,12 +1060,6 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
         </button>
         <ErrorMessage error={failure} />
       </Menu>
-      <ChannelAutomationsView
-        id={room.id}
-        bots={bots}
-        open={automationsOpen}
-        onOpenChange={setAutomationsOpen}
-      />
       <Modal title="Add a bot" open={inviteOpen} onOpenChange={setInviteOpen}>
         <InvitePicker
           bots={bots}
@@ -975,18 +1086,6 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
         open={createOpen}
         onClose={() => setCreateOpen(false)}
       />
-      <Modal
-        title="Channel activity"
-        open={activityOpen}
-        onOpenChange={setActivityOpen}
-      >
-        <WorkList
-          jobs={data.jobs}
-          bots={bots}
-          onCancel={(id) => void act(() => rpc.call("cancelJob", { id }))}
-        />
-        <ErrorMessage error={failure} />
-      </Modal>
       {settingsOpen && (
         <RenameChannel
           key={room.id}
@@ -1061,11 +1160,20 @@ export function ChannelsPage({ subPath }: PluginNavPanelProps) {
       );
     };
   }, [id]);
-  return id ? <ChannelChat key={id} id={id} /> : <CreateChannel />;
+  let messageId: string | undefined;
+  try {
+    if (subPath.split("/")[1] === "message")
+      messageId = decodeURIComponent(subPath.split("/").slice(2).join("/"));
+  } catch {}
+  return id ? (
+    <ChannelChat key={id} id={id} messageId={messageId} />
+  ) : (
+    <CreateChannel />
+  );
 }
-function ChannelChat({ id }: { id: string }) {
+function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
   const { data, error, load, loadOlder, loadingOlder } = useChannel(id),
-    { bots } = useRoster(),
+    { bots, rooms } = useRoster(),
     rpc = useRpc<typeof rpcContract>(),
     navigate = useBbNavigate();
   const [reply, setReply] = useState<RoomMessage | null>(null),
@@ -1073,18 +1181,34 @@ function ChannelChat({ id }: { id: string }) {
       text: string;
       nonce: number;
       replaceMention?: boolean;
+      sendMode?: SendMode;
+      reply?: RoomMessage;
     } | null>(null),
     [createOpen, setCreateOpen] = useState(false),
     [failure, setFailure] = useState<string | null>(null),
     [copied, setCopied] = useState<string | null>(null);
-  const [jumpTarget, setJumpTarget] = useState<string | null>(null);
+  const [jumpTarget, setJumpTarget] = useState<string | null>(
+    messageId ?? null,
+  );
+  const [editing, setEditing] = useState<RoomMessage | null>(null),
+    [editedText, setEditedText] = useState(""),
+    [editPending, setEditPending] = useState(false);
+  useEffect(() => {
+    if (messageId) {
+      atBottom.current = false;
+      setJumpTarget(messageId);
+    }
+  }, [messageId]);
   const [retrying, setRetrying] = useState<string | null>(null);
   const [mobileActionsMessage, setMobileActionsMessage] = useState<
     string | null
   >(null);
+  const [contextSelection, setContextSelection] = useState("");
+  const [workbench, setWorkbench] = useState<WorkbenchPanel | null>(null);
   const transcript = useRef<HTMLDivElement>(null),
-    atBottom = useRef(true),
+    atBottom = useRef(!messageId),
     marked = useRef(0);
+  const [readPosition, setReadPosition] = useState(0);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressPoint = useRef<{ x: number; y: number } | null>(null);
   const longPressTriggered = useRef(false);
@@ -1143,6 +1267,28 @@ function ChannelChat({ id }: { id: string }) {
   }, [cancelLongPress]);
   useEffect(() => cancelLongPress, [cancelLongPress]);
   useEffect(() => {
+    const visible = () => setReadPosition((n) => n + 1);
+    window.addEventListener("focus", visible);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      window.removeEventListener("focus", visible);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, []);
+  useEffect(() => {
+    const listener = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{
+          roomId: string;
+          panel: WorkbenchPanel;
+        }>
+      ).detail;
+      if (detail.roomId === id) setWorkbench(detail.panel);
+    };
+    window.addEventListener("bots:channel-workbench", listener);
+    return () => window.removeEventListener("bots:channel-workbench", listener);
+  }, [id]);
+  useEffect(() => {
     const onJump = (event: Event) => {
       const detail = (
         event as CustomEvent<{ roomId: string; messageId: string }>
@@ -1177,14 +1323,21 @@ function ChannelChat({ id }: { id: string }) {
     if (el && atBottom.current && !jumpTarget) el.scrollTop = el.scrollHeight;
   }, [data?.messages.length, jumpTarget]);
   useEffect(() => {
-    if (!data || marked.current >= data.room.updatedAt) return;
+    if (
+      !data ||
+      !atBottom.current ||
+      document.visibilityState !== "visible" ||
+      !document.hasFocus() ||
+      marked.current >= data.room.updatedAt
+    )
+      return;
     marked.current = data.room.updatedAt;
     rpc
       .call("channelState", { id, lastReadAt: data.room.updatedAt })
       .catch(() => {
         marked.current = 0;
       });
-  }, [id, data?.room.updatedAt, rpc]);
+  }, [id, data?.room.updatedAt, rpc, readPosition]);
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(null), 1800);
@@ -1246,11 +1399,40 @@ function ChannelChat({ id }: { id: string }) {
       setFailure(message(e));
     }
   };
+  const permalink = async (m: RoomMessage) => {
+    try {
+      await navigator.clipboard.writeText(
+        new URL(
+          `/plugins/bots/channels/${id}/message/${encodeURIComponent(m.id)}`,
+          window.location.origin,
+        ).href,
+      );
+      setCopied(m.id);
+    } catch (e) {
+      setFailure(message(e));
+    }
+  };
+  const saveDecision = async (m: RoomMessage) => {
+    try {
+      await rpc.call("saveMessage", { id, messageId: m.id, saved: !m.saved });
+      await load();
+    } catch (e) {
+      setFailure(message(e));
+    }
+  };
+  const edit = (m: RoomMessage) => {
+    setEditing(m);
+    setEditedText(m.text);
+    setMobileActionsMessage(null);
+  };
   const jump = (messageId: string) => {
     atBottom.current = false;
     setJumpTarget(messageId);
   };
   const working = channelWork(jobs);
+  const responseErrors = jobs.filter(
+    (j) => j.status === "error" && !jobs.some((r) => r.retryOf === j.id),
+  );
   return (
     <div className="bot-room">
       {(failure || error) && (
@@ -1258,481 +1440,754 @@ function ChannelChat({ id }: { id: string }) {
           <ErrorMessage error={failure || error} />
         </div>
       )}
-      <div
-        ref={transcript}
-        className="bot-room-messages"
-        role="log"
-        aria-label="Channel conversation"
-        aria-live="polite"
-        onScroll={() => {
-          const el = transcript.current;
-          if (el)
-            atBottom.current =
-              el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-        }}
-      >
-        {data.hasOlder && (
-          <div className="flex justify-center py-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={loadingOlder}
-              onClick={async () => {
-                atBottom.current = false;
-                const anchor = messages[0]?.id;
-                try {
-                  await loadOlder();
-                  requestAnimationFrame(() => {
-                    if (anchor)
-                      document
-                        .getElementById(`channel-message-${anchor}`)
-                        ?.scrollIntoView({ block: "start" });
-                  });
-                } catch (e) {
-                  setFailure(message(e));
-                }
-              }}
-            >
-              {loadingOlder
-                ? "Loading earlier messages…"
-                : "Load earlier messages"}
-            </Button>
-          </div>
-        )}
-        {jumpTarget && (
-          <p role="status" className="text-xs text-muted-foreground">
-            Finding message…
-          </p>
-        )}
-        {!messages.length && (
-          <div className="channel-empty">
-            <span className="channel-hash" aria-hidden>
-              #
-            </span>
-            <h2>{room.name}</h2>
-            <p>Use @ to invite a bot and start the conversation.</p>
-          </div>
-        )}
-        {messages.map((m, i) => {
-          const bot = bots.find((b) => b.id === m.botId),
-            previous = messages[i - 1];
-          const day = new Date(m.createdAt).toLocaleDateString(),
-            newDay =
-              !previous ||
-              new Date(previous.createdAt).toLocaleDateString() !== day;
-          const compact =
-            !newDay &&
-            previous?.botId === m.botId &&
-            previous?.sourceThreadId === m.sourceThreadId &&
-            previous?.speaker === m.speaker &&
-            m.createdAt - previous.createdAt < 5 * 60000 &&
-            !m.replyTo;
-          const parent = m.replyTo
-              ? (messages.find((x) => x.id === m.replyTo) ??
-                data.parents.find((x) => x.id === m.replyTo))
-              : null,
-            job = jobs.find((j) => j.id === m.id);
-          const grouped = [
-            ...new Set(
-              reactions.filter((r) => r.messageId === m.id).map((r) => r.emoji),
-            ),
-          ];
-          if (m.system === "bot_joined") {
-            return (
-              <div key={m.id}>
-                {newDay && (
-                  <div className="channel-date">
-                    <span>
-                      {new Intl.DateTimeFormat(undefined, {
-                        dateStyle: "medium",
-                      }).format(m.createdAt)}
-                    </span>
-                  </div>
-                )}
-                <div
-                  id={`channel-message-${m.id}`}
-                  className="channel-system-message"
-                  role="status"
-                >
-                  <Icon name="UserRoundPlus" />
-                  <span>{m.text}</span>
-                </div>
-              </div>
-            );
-          }
-          return (
-            <div key={m.id}>
-              {newDay && (
-                <div className="channel-date">
-                  <span>
-                    {new Intl.DateTimeFormat(undefined, {
-                      dateStyle: "medium",
-                    }).format(m.createdAt)}
-                  </span>
-                </div>
-              )}
-              <Popover.Root
-                open={mobileActionsMessage === m.id}
-                onOpenChange={(open) => {
-                  if (!open) setMobileActionsMessage(null);
-                }}
-              >
-                <Popover.Anchor asChild>
-                  <article
-                    id={`channel-message-${m.id}`}
-                    className={`bot-room-message ${compact ? "is-continuation" : ""}`}
-                    tabIndex={0}
-                    aria-haspopup="dialog"
-                    onPointerDown={(event) => startLongPress(event, m.id)}
-                    onPointerMove={moveLongPress}
-                    onPointerUp={finishLongPress}
-                    onPointerCancel={finishLongPress}
-                    onPointerLeave={finishLongPress}
-                    onClickCapture={(event) => {
-                      if (!longPressTriggered.current) return;
-                      event.preventDefault();
-                      event.stopPropagation();
-                      longPressTriggered.current = false;
-                    }}
-                    onKeyDown={(event) => {
-                      if (
-                        event.key === "ContextMenu" ||
-                        (event.key === "F10" && event.shiftKey)
-                      ) {
-                        event.preventDefault();
-                        mobileActionsOpenedByKeyboard.current = true;
-                        setMobileActionsMessage(m.id);
-                      }
-                    }}
-                    onContextMenu={(event) => {
-                      if (window.matchMedia("(pointer: coarse)").matches) {
-                        event.preventDefault();
-                        mobileActionsOpenedByKeyboard.current = false;
-                        setMobileActionsMessage(m.id);
-                      }
-                    }}
-                  >
-                    <span className="bot-message-avatar" aria-hidden>
-                      {compact
-                        ? ""
-                        : (bot?.avatar ?? (
-                            <Icon
-                              name={m.sourceThreadId ? "Bot" : "UserRound"}
-                            />
-                          ))}
-                    </span>
-                    <div className="bot-message-body">
-                      {!compact && (
-                        <header>
-                          <strong>{bot?.name ?? m.speaker}</strong>
-                          <time
-                            dateTime={new Date(m.createdAt).toISOString()}
-                            title={new Date(m.createdAt).toLocaleString()}
-                          >
-                            {new Intl.DateTimeFormat(undefined, {
-                              hour: "numeric",
-                              minute: "2-digit",
-                            }).format(m.createdAt)}
-                          </time>
-                        </header>
-                      )}
-                      {parent && (
-                        <button
-                          className="bot-message-reference"
-                          onClick={() => jump(parent.id)}
-                        >
-                          <Icon name="CornerDownRight" />
-                          <span>
-                            {parent.speaker}:{" "}
-                            {parent.text.slice(0, 160) || "Attachment"}
-                          </span>
-                        </button>
-                      )}
-                      {m.text && (
-                        <Markdown
-                          className="bot-message-markdown text-sm leading-5"
-                          content={m.text}
-                        />
-                      )}
-                      {!!m.attachments.length && (
-                        <ChannelAttachments
-                          attachments={m.attachments}
-                          onImageLoad={() => {
-                            const el = transcript.current;
-                            if (el && atBottom.current && !jumpTarget)
-                              el.scrollTop = el.scrollHeight;
-                          }}
-                        />
-                      )}
-                      {!!grouped.length && (
-                        <div className="channel-reactions">
-                          {grouped.map((emoji) => {
-                            const people = reactions.filter(
-                                (r) =>
-                                  r.messageId === m.id && r.emoji === emoji,
-                              ),
-                              mine = people.some((r) => r.actorId === "user");
-                            return (
-                              <button
-                                key={emoji}
-                                aria-label={`${emoji}: ${people.map((r) => r.actorName).join(", ")}`}
-                                title={people
-                                  .map((r) => r.actorName)
-                                  .join(", ")}
-                                aria-pressed={mine}
-                                onClick={() => void react(m, emoji)}
-                              >
-                                {emoji} <span>{people.length}</span>
-                              </button>
-                            );
-                          })}
-                          <ReactionPicker
-                            label={`Add reaction to ${m.speaker}'s message`}
-                            onReact={(emoji) => void react(m, emoji)}
-                          />
-                        </div>
-                      )}
-                      <div
-                        className="bot-message-actions rounded-md border border-border bg-popover text-popover-foreground shadow-md"
-                        aria-label={`Actions for ${m.speaker}'s message`}
-                      >
-                        <MessageActionButtons
-                          message={m}
-                          job={job}
-                          copied={copied}
-                          onReact={(emoji) => void react(m, emoji)}
-                          onReply={() => {
-                            setReply(m);
-                            if (bot)
-                              setInsertion({
-                                text: `@${bot.handle} `,
-                                nonce: Date.now(),
-                              });
-                          }}
-                          onCopy={() => void copy(m)}
-                          onView={() =>
-                            navigate.toThread(
-                              (job?.threadId ?? m.sourceThreadId)!,
-                            )
-                          }
-                        />
-                      </div>
-                    </div>
-                  </article>
-                </Popover.Anchor>
-                {mobileActionsMessage === m.id && (
-                  <Popover.Portal>
-                    <Popover.Content
-                      side="top"
-                      align="end"
-                      sideOffset={6}
-                      collisionPadding={8}
-                      className="channel-popover mobile-message-menu"
-                      aria-label={`Actions for ${m.speaker}'s message`}
-                      data-mobile-message-actions
-                      onOpenAutoFocus={(event) => {
-                        if (!mobileActionsOpenedByKeyboard.current)
-                          event.preventDefault();
-                      }}
-                      onCloseAutoFocus={(event) => {
-                        event.preventDefault();
-                        if (mobileActionsOpenedByKeyboard.current)
-                          document
-                            .getElementById(`channel-message-${m.id}`)
-                            ?.focus();
-                        mobileActionsOpenedByKeyboard.current = false;
-                      }}
-                    >
-                      <div className="mobile-message-menu-actions">
-                        <MessageActionButtons
-                          message={m}
-                          job={job}
-                          copied={copied}
-                          onReact={(emoji) => {
-                            setMobileActionsMessage(null);
-                            void react(m, emoji);
-                          }}
-                          onReply={() => {
-                            setMobileActionsMessage(null);
-                            setReply(m);
-                            if (bot)
-                              setInsertion({
-                                text: `@${bot.handle} `,
-                                nonce: Date.now(),
-                              });
-                          }}
-                          onCopy={() => {
-                            setMobileActionsMessage(null);
-                            void copy(m);
-                          }}
-                          onView={() => {
-                            setMobileActionsMessage(null);
-                            navigate.toThread(
-                              (job?.threadId ?? m.sourceThreadId)!,
-                            );
-                          }}
-                        />
-                      </div>
-                    </Popover.Content>
-                  </Popover.Portal>
-                )}
-              </Popover.Root>
-            </div>
-          );
-        })}
-        {jobs
-          .filter(
-            (j) =>
-              j.status === "error" && !jobs.some((r) => r.retryOf === j.id),
-          )
-          .slice(0, 5)
-          .map((j) => (
-            <div key={j.id} className="channel-response-error" role="status">
-              <strong>
-                {bots.find((b) => b.id === j.botId)?.name ?? "Bot"} couldn’t
-                finish
-              </strong>
-              <span>{j.error}</span>
-              {(!room.memberIds.includes(j.botId) ||
-                !bots.some((b) => b.id === j.botId && !b.retired)) && (
-                <span>Restore and invite this bot to retry.</span>
-              )}
-              <div className="flex gap-2">
-                {j.threadId && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => navigate.toThread(j.threadId!)}
-                  >
-                    View work
-                  </Button>
-                )}
+      <div className="bot-room-layout">
+        <div className="bot-room-main">
+          <div
+            ref={transcript}
+            className="bot-room-messages"
+            role="log"
+            aria-label="Channel conversation"
+            aria-live="polite"
+            onScroll={() => {
+              const el = transcript.current;
+              if (el)
+                atBottom.current =
+                  el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+              if (atBottom.current) setReadPosition((n) => n + 1);
+            }}
+          >
+            {data.hasOlder && (
+              <div className="flex justify-center py-2">
                 <Button
-                  variant="ghost"
                   size="sm"
-                  disabled={
-                    !!retrying ||
-                    !!room.archived ||
-                    !room.memberIds.includes(j.botId) ||
-                    !bots.some((b) => b.id === j.botId && !b.retired)
-                  }
+                  variant="ghost"
+                  disabled={loadingOlder}
                   onClick={async () => {
-                    setRetrying(j.id);
+                    atBottom.current = false;
+                    const anchor = messages[0]?.id;
                     try {
-                      await rpc.call("retryJob", { id: j.id });
-                      load();
+                      await loadOlder();
+                      requestAnimationFrame(() => {
+                        if (anchor)
+                          document
+                            .getElementById(`channel-message-${anchor}`)
+                            ?.scrollIntoView({ block: "start" });
+                      });
                     } catch (e) {
                       setFailure(message(e));
-                    } finally {
-                      setRetrying(null);
                     }
                   }}
                 >
-                  Retry response
+                  {loadingOlder
+                    ? "Loading earlier messages…"
+                    : "Load earlier messages"}
                 </Button>
               </div>
-            </div>
-          ))}
-        {data.runs.some(
-          (r) => r.routing === "pending" && r.status === "running",
-        ) && (
-          <p className="channel-routing-status" role="status">
-            Choosing who can help…
-          </p>
-        )}
-        {data.runs
-          .filter((r) => r.routing === "error")
-          .slice(-3)
-          .map((r) => (
-            <div key={r.id} className="channel-response-error" role="status">
-              <span>{r.routingError}</span>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={!!room.archived || !!retrying}
-                onClick={async () => {
-                  setRetrying(r.id);
-                  try {
-                    await rpc.call("retryRouting", { id, requestId: r.id });
-                    load();
-                  } catch (e) {
-                    setFailure(message(e));
-                  } finally {
-                    setRetrying(null);
-                  }
-                }}
-              >
-                Retry routing
-              </Button>
-            </div>
-          ))}
-        {working.map((current) => {
-          const b = bots.find((b) => b.id === current.botId);
-          if (!b) return null;
-          return (
-            <div
-              className="channel-agent-stub bot-room-message"
-              key={current.id}
-              role="status"
-              aria-label={`${b.name} is ${current.cancellationPending ? "stopping" : "working"}`}
-            >
-              <span className="bot-message-avatar" aria-hidden>
-                {b.avatar}
-              </span>
-              <div className="bot-message-body">
-                <header>
-                  <strong>{b.name}</strong>
-                </header>
-                <span
-                  className="channel-thinking"
-                  aria-label={
-                    current.cancellationPending ? "Stopping" : "Working"
-                  }
-                >
-                  <i />
-                  <i />
-                  <i />
+            )}
+            {jumpTarget && (
+              <p role="status" className="text-xs text-muted-foreground">
+                Finding message…
+              </p>
+            )}
+            {!messages.length && (
+              <div className="channel-empty">
+                <span className="channel-hash" aria-hidden>
+                  #
                 </span>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  className="channel-stop-button"
-                  aria-label={`Stop ${b.name}'s response`}
-                  disabled={!current}
-                  onClick={() => {
-                    if (current)
-                      void rpc
-                        .call("cancelJob", { id: current.id })
-                        .catch((e) => setFailure(message(e)));
-                  }}
-                >
-                  <Icon name="Square" />
-                  <span>Stop</span>
-                </Button>
+                <h2>{room.name}</h2>
+                <p>Use @ to invite a bot and start the conversation.</p>
               </div>
-            </div>
-          );
-        })}
+            )}
+            {messages.map((m, i) => {
+              const bot = bots.find((b) => b.id === m.botId),
+                previous = messages[i - 1];
+              const isUser = m.botId === null && !m.sourceThreadId;
+              const day = new Date(m.createdAt).toLocaleDateString(),
+                newDay =
+                  !previous ||
+                  new Date(previous.createdAt).toLocaleDateString() !== day;
+              const compact =
+                !newDay &&
+                previous?.botId === m.botId &&
+                previous?.sourceThreadId === m.sourceThreadId &&
+                previous?.speaker === m.speaker &&
+                m.createdAt - previous.createdAt < 5 * 60000 &&
+                !m.replyTo;
+              const messageClasses = [
+                "bot-room-message",
+                compact ? "is-continuation" : "is-message-start",
+                !previous ? "is-first-message" : "",
+                newDay ? "is-day-start" : "",
+                isUser ? "is-user-message" : "is-bot-message",
+              ]
+                .filter(Boolean)
+                .join(" ");
+              const parent = m.replyTo
+                  ? (messages.find((x) => x.id === m.replyTo) ??
+                    data.parents.find((x) => x.id === m.replyTo))
+                  : null,
+                job = jobs.find((j) => j.id === m.id);
+              const grouped = [
+                ...new Set(
+                  reactions
+                    .filter((r) => r.messageId === m.id)
+                    .map((r) => r.emoji),
+                ),
+              ];
+              if (m.system === "bot_joined") {
+                return (
+                  <div key={m.id}>
+                    {newDay && (
+                      <div className="channel-date">
+                        <span>
+                          {new Intl.DateTimeFormat(undefined, {
+                            dateStyle: "medium",
+                          }).format(m.createdAt)}
+                        </span>
+                      </div>
+                    )}
+                    <div
+                      id={`channel-message-${m.id}`}
+                      className="channel-system-message"
+                      role="status"
+                    >
+                      <Icon name="UserRoundPlus" />
+                      <span>{m.text}</span>
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div key={m.id}>
+                  {newDay && (
+                    <div className="channel-date">
+                      <span>
+                        {new Intl.DateTimeFormat(undefined, {
+                          dateStyle: "medium",
+                        }).format(m.createdAt)}
+                      </span>
+                    </div>
+                  )}
+                  <ContextMenu
+                    onOpenChange={(open) => {
+                      if (open)
+                        setContextSelection(
+                          window.getSelection()?.toString().trim() ?? "",
+                        );
+                      else setContextSelection("");
+                    }}
+                  >
+                    <Popover.Root
+                      open={mobileActionsMessage === m.id}
+                      onOpenChange={(open) => {
+                        if (!open) setMobileActionsMessage(null);
+                      }}
+                    >
+                      <ContextMenuTrigger asChild>
+                        <Popover.Anchor asChild>
+                          <article
+                            id={`channel-message-${m.id}`}
+                            className={messageClasses}
+                            tabIndex={0}
+                            aria-haspopup="dialog"
+                            onPointerDown={(event) =>
+                              startLongPress(event, m.id)
+                            }
+                            onPointerMove={moveLongPress}
+                            onPointerUp={finishLongPress}
+                            onPointerCancel={finishLongPress}
+                            onPointerLeave={finishLongPress}
+                            onClickCapture={(event) => {
+                              if (!longPressTriggered.current) return;
+                              event.preventDefault();
+                              event.stopPropagation();
+                              longPressTriggered.current = false;
+                            }}
+                            onKeyDown={(event) => {
+                              if (
+                                event.key === "ContextMenu" ||
+                                (event.key === "F10" && event.shiftKey)
+                              ) {
+                                event.preventDefault();
+                                if (
+                                  window.matchMedia("(pointer: coarse)").matches
+                                ) {
+                                  mobileActionsOpenedByKeyboard.current = true;
+                                  setMobileActionsMessage(m.id);
+                                } else {
+                                  const rect =
+                                    event.currentTarget.getBoundingClientRect();
+                                  event.currentTarget.dispatchEvent(
+                                    new MouseEvent("contextmenu", {
+                                      bubbles: true,
+                                      clientX: rect.left + 16,
+                                      clientY: rect.bottom,
+                                    }),
+                                  );
+                                }
+                              }
+                            }}
+                            onContextMenu={(event) => {
+                              setContextSelection(
+                                window.getSelection()?.toString().trim() ?? "",
+                              );
+                              if (
+                                window.matchMedia("(pointer: coarse)").matches
+                              ) {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                mobileActionsOpenedByKeyboard.current = false;
+                                setMobileActionsMessage(m.id);
+                              }
+                            }}
+                          >
+                            {!isUser && (
+                              <span className="bot-message-avatar" aria-hidden>
+                                {compact
+                                  ? ""
+                                  : (bot?.avatar ?? (
+                                      <Icon
+                                        name={
+                                          m.sourceThreadId ? "Bot" : "UserRound"
+                                        }
+                                      />
+                                    ))}
+                              </span>
+                            )}
+                            <div className="bot-message-body">
+                              {(!compact || isUser) && (
+                                <header>
+                                  <strong
+                                    className={isUser ? "sr-only" : undefined}
+                                  >
+                                    {bot?.name ?? m.speaker}
+                                  </strong>
+                                  <time
+                                    dateTime={new Date(
+                                      m.createdAt,
+                                    ).toISOString()}
+                                    title={new Date(
+                                      m.createdAt,
+                                    ).toLocaleString()}
+                                  >
+                                    {new Intl.DateTimeFormat(undefined, {
+                                      hour: "numeric",
+                                      minute: "2-digit",
+                                    }).format(m.createdAt)}
+                                  </time>
+                                </header>
+                              )}
+                              <div className="bot-message-content">
+                                {parent && (
+                                  <button
+                                    className="bot-message-reference"
+                                    onClick={() => jump(parent.id)}
+                                  >
+                                    <Icon name="CornerDownRight" />
+                                    <span>
+                                      {parent.speaker}:{" "}
+                                      {parent.text.slice(0, 160) ||
+                                        "Attachment"}
+                                    </span>
+                                  </button>
+                                )}
+                                {(m.sendMode === "fork" ||
+                                  isForkConversation(
+                                    m.conversationKey ??
+                                      job?.conversationKey ??
+                                      "",
+                                  )) && (
+                                  <span className="channel-fork-label">
+                                    Fork
+                                  </span>
+                                )}
+                                {(m.saved || m.editedAt) && (
+                                  <small className="text-muted-foreground">
+                                    {m.saved ? "Saved decision" : null}
+                                    {m.saved && m.editedAt ? " · " : null}
+                                    {m.editedAt ? "Edited" : null}
+                                  </small>
+                                )}
+                                {m.text && (
+                                  <Markdown
+                                    className="bot-message-markdown text-sm leading-5"
+                                    content={m.text}
+                                  />
+                                )}
+                                {!!m.attachments.length && (
+                                  <ChannelAttachments
+                                    attachments={m.attachments}
+                                    onImageLoad={() => {
+                                      const el = transcript.current;
+                                      if (el && atBottom.current && !jumpTarget)
+                                        el.scrollTop = el.scrollHeight;
+                                    }}
+                                  />
+                                )}
+                              </div>
+                              {!!grouped.length && (
+                                <div className="channel-reactions">
+                                  {grouped.map((emoji) => {
+                                    const people = reactions.filter(
+                                        (r) =>
+                                          r.messageId === m.id &&
+                                          r.emoji === emoji,
+                                      ),
+                                      mine = people.some(
+                                        (r) => r.actorId === "user",
+                                      );
+                                    return (
+                                      <button
+                                        key={emoji}
+                                        aria-label={`${emoji}: ${people.map((r) => r.actorName).join(", ")}`}
+                                        title={people
+                                          .map((r) => r.actorName)
+                                          .join(", ")}
+                                        aria-pressed={mine}
+                                        onClick={() => void react(m, emoji)}
+                                      >
+                                        {emoji} <span>{people.length}</span>
+                                      </button>
+                                    );
+                                  })}
+                                  <ReactionPicker
+                                    label={`Add reaction to ${m.speaker}'s message`}
+                                    onReact={(emoji) => void react(m, emoji)}
+                                  />
+                                </div>
+                              )}
+                              <div
+                                className="bot-message-actions rounded-md border border-border bg-popover text-popover-foreground shadow-md"
+                                aria-label={`Actions for ${m.speaker}'s message`}
+                              >
+                                <MessageActionButtons
+                                  message={m}
+                                  job={job}
+                                  copied={copied}
+                                  onReact={(emoji) => void react(m, emoji)}
+                                  onReply={() => {
+                                    setReply(m);
+                                    if (bot)
+                                      setInsertion({
+                                        text: `@${bot.handle} `,
+                                        nonce: Date.now(),
+                                      });
+                                  }}
+                                  onCopy={() => void copy(m)}
+                                  onView={() =>
+                                    navigate.toThread(
+                                      (job?.threadId ?? m.sourceThreadId)!,
+                                    )
+                                  }
+                                />
+                              </div>
+                            </div>
+                          </article>
+                        </Popover.Anchor>
+                      </ContextMenuTrigger>
+                      {mobileActionsMessage === m.id && (
+                        <Popover.Portal>
+                          <Popover.Content
+                            side="top"
+                            align="end"
+                            sideOffset={6}
+                            collisionPadding={8}
+                            className="channel-popover mobile-message-menu"
+                            aria-label={`Actions for ${m.speaker}'s message`}
+                            data-mobile-message-actions
+                            onOpenAutoFocus={(event) => {
+                              if (!mobileActionsOpenedByKeyboard.current)
+                                event.preventDefault();
+                            }}
+                            onCloseAutoFocus={(event) => {
+                              event.preventDefault();
+                              if (mobileActionsOpenedByKeyboard.current)
+                                document
+                                  .getElementById(`channel-message-${m.id}`)
+                                  ?.focus();
+                              mobileActionsOpenedByKeyboard.current = false;
+                            }}
+                          >
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setMobileActionsMessage(null);
+                                void permalink(m);
+                              }}
+                            >
+                              Copy link
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setMobileActionsMessage(null);
+                                void saveDecision(m);
+                              }}
+                            >
+                              {m.saved ? "Unsave" : "Save decision"}
+                            </Button>
+                            {!m.botId &&
+                              !m.sourceThreadId &&
+                              !m.automationId &&
+                              !room.archived && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => edit(m)}
+                                >
+                                  Edit
+                                </Button>
+                              )}
+                            <div className="mobile-message-menu-actions">
+                              <MessageActionButtons
+                                message={m}
+                                job={job}
+                                copied={copied}
+                                onReact={(emoji) => {
+                                  setMobileActionsMessage(null);
+                                  void react(m, emoji);
+                                }}
+                                onReply={() => {
+                                  setMobileActionsMessage(null);
+                                  setReply(m);
+                                  if (bot)
+                                    setInsertion({
+                                      text: `@${bot.handle} `,
+                                      nonce: Date.now(),
+                                    });
+                                }}
+                                onCopy={() => {
+                                  setMobileActionsMessage(null);
+                                  void copy(m);
+                                }}
+                                onView={() => {
+                                  setMobileActionsMessage(null);
+                                  navigate.toThread(
+                                    (job?.threadId ?? m.sourceThreadId)!,
+                                  );
+                                }}
+                              />
+                            </div>
+                          </Popover.Content>
+                        </Popover.Portal>
+                      )}
+                    </Popover.Root>
+                    <ContextMenuContent
+                      aria-label={`Actions for ${m.speaker}'s message`}
+                      onCloseAutoFocus={(event) => {
+                        event.preventDefault();
+                        document
+                          .getElementById(`channel-message-${m.id}`)
+                          ?.focus();
+                      }}
+                    >
+                      <MessageContextActions
+                        saved={m.saved}
+                        onSave={() => void saveDecision(m)}
+                        onPermalink={() => void permalink(m)}
+                        onEdit={
+                          !m.botId &&
+                          !m.sourceThreadId &&
+                          !m.automationId &&
+                          !room.archived
+                            ? () => edit(m)
+                            : undefined
+                        }
+                        hasWork={!!(job?.threadId || m.sourceThreadId)}
+                        onFork={
+                          bot
+                            ? () =>
+                                setInsertion({
+                                  text: `@${bot.handle} `,
+                                  nonce: Date.now(),
+                                  sendMode: "fork",
+                                  reply: m,
+                                })
+                            : undefined
+                        }
+                        selectedText={contextSelection}
+                        onReply={() => {
+                          setReply(m);
+                          if (bot)
+                            setInsertion({
+                              text: `@${bot.handle} `,
+                              nonce: Date.now(),
+                            });
+                        }}
+                        onAddSelected={() => {
+                          if (contextSelection)
+                            setInsertion({
+                              text: contextSelection,
+                              nonce: Date.now(),
+                            });
+                        }}
+                        onEmoji={() => {
+                          mobileActionsOpenedByKeyboard.current = false;
+                          setMobileActionsMessage(m.id);
+                        }}
+                        onCopy={() => void copy(m)}
+                        onView={() =>
+                          navigate.toThread(
+                            (job?.threadId ?? m.sourceThreadId)!,
+                          )
+                        }
+                      />
+                    </ContextMenuContent>
+                  </ContextMenu>
+                </div>
+              );
+            })}
+            {responseErrors.slice(0, 5).map((j) => (
+              <div key={j.id} className="channel-response-error" role="status">
+                <strong>
+                  {bots.find((b) => b.id === j.botId)?.name ?? "Bot"} couldn’t
+                  finish
+                </strong>
+                <span>{j.error}</span>
+                {(!room.memberIds.includes(j.botId) ||
+                  !bots.some((b) => b.id === j.botId && !b.retired)) && (
+                  <span>Restore and invite this bot to retry.</span>
+                )}
+                <div className="flex gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={
+                      !!retrying ||
+                      !!room.archived ||
+                      !room.memberIds.includes(j.botId) ||
+                      !bots.some((b) => b.id === j.botId && !b.retired)
+                    }
+                    onClick={async () => {
+                      setRetrying(j.id);
+                      try {
+                        await rpc.call("retryJob", { id: j.id });
+                        load();
+                      } catch (e) {
+                        setFailure(message(e));
+                      } finally {
+                        setRetrying(null);
+                      }
+                    }}
+                  >
+                    Retry response
+                  </Button>
+                </div>
+              </div>
+            ))}
+            {responseErrors.length > 5 && (
+              <p className="channel-response-overflow" role="status">
+                {responseErrors.length - 5} more response
+                {responseErrors.length - 5 === 1 ? "" : "s"} need attention.
+              </p>
+            )}
+            {data.runs.some(
+              (r) => r.routing === "pending" && r.status === "running",
+            ) && (
+              <p className="channel-routing-status" role="status">
+                Choosing recipients and delivery…
+              </p>
+            )}
+            {data.runs
+              .filter((r) => r.routing === "error")
+              .slice(-3)
+              .map((r) => (
+                <div
+                  key={r.id}
+                  className="channel-response-error"
+                  role="status"
+                >
+                  <span>{r.routingError}</span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={!!room.archived || !!retrying}
+                    onClick={async () => {
+                      setRetrying(r.id);
+                      try {
+                        await rpc.call("retryRouting", { id, requestId: r.id });
+                        load();
+                      } catch (e) {
+                        setFailure(message(e));
+                      } finally {
+                        setRetrying(null);
+                      }
+                    }}
+                  >
+                    Retry routing
+                  </Button>
+                </div>
+              ))}
+            {working.map((current) => {
+              const b = bots.find((b) => b.id === current.botId);
+              if (!b) return null;
+              const activity = channelWorkActivity(current);
+              const stopLabel = `${current.cancellationPending ? "Stopping" : "Stop"} ${b.name}'s response`;
+              return (
+                <div
+                  className="channel-agent-stub"
+                  key={current.id}
+                  role="status"
+                  aria-label={`${b.name}: ${activity}`}
+                >
+                  <span className="channel-agent-avatar" aria-hidden>
+                    {b.avatar}
+                  </span>
+                  <strong className="channel-agent-name" title={b.name}>
+                    {b.name}
+                  </strong>
+                  {isForkConversation(current.conversationKey) && (
+                    <span className="channel-fork-label">Fork</span>
+                  )}
+                  <span className="channel-activity-snippet" title={activity}>
+                    {activity}
+                  </span>
+                  <IconActionTooltip label={stopLabel}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="channel-stop-button"
+                      aria-label={stopLabel}
+                      disabled={!!current.cancellationPending}
+                      onClick={() => {
+                        if (current.cancellationPending) return;
+                        void rpc
+                          .call("cancelJob", { id: current.id })
+                          .catch((e) => setFailure(message(e)));
+                      }}
+                    >
+                      <Icon name="Square" />
+                    </Button>
+                  </IconActionTooltip>
+                </div>
+              );
+            })}
+          </div>
+          <GroupComposer
+            key={id}
+            autoFocus={!messages.length}
+            roomId={id}
+            roomName={room.name}
+            paused={!!room.archived}
+            bots={bots}
+            memberIds={room.memberIds}
+            rooms={rooms}
+            footer={<ChannelModePicker room={room} onChanged={load} />}
+            onCreateBot={() => setCreateOpen(true)}
+            reply={reply}
+            onClearReply={() => setReply(null)}
+            insertion={insertion}
+            onInserted={() => setInsertion(null)}
+            onSent={() => {
+              atBottom.current = true;
+              load();
+            }}
+          />
+        </div>
+        {workbench && (
+          <aside className="channel-workbench" aria-label="Channel workbench">
+            <header>
+              <h2>{workbenchLabels[workbench]}</h2>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Close channel workbench"
+                onClick={() => setWorkbench(null)}
+              >
+                <Icon name="X" />
+              </Button>
+            </header>
+            {workbench === "context" ? (
+              <ContextPanel id={id} />
+            ) : workbench === "files" ? (
+              <FilesPanel id={id} />
+            ) : workbench === "usage" ? (
+              <UsagePanel id={id} kind="channel" />
+            ) : workbench === "saved" ? (
+              <SavedPanel id={id} onJump={jump} />
+            ) : workbench === "automations" ? (
+              <ChannelAutomationsView
+                id={room.id}
+                bots={bots.filter((b) => room.memberIds.includes(b.id))}
+                open
+                onOpenChange={(open) => {
+                  if (!open) setWorkbench(null);
+                }}
+                presentation="panel"
+              />
+            ) : (
+              <div className="bot-work-list">
+                <WorkList
+                  jobs={data.jobs}
+                  bots={bots}
+                  onJump={jump}
+                  onCancel={(jobId) =>
+                    void rpc
+                      .call("cancelJob", { id: jobId })
+                      .catch((e) => setFailure(message(e)))
+                  }
+                />
+              </div>
+            )}
+          </aside>
+        )}
       </div>
-      <GroupComposer
-        key={id}
-        autoFocus={!messages.length}
-        roomId={id}
-        roomName={room.name}
-        paused={!!room.archived}
-        bots={bots}
-        memberIds={room.memberIds}
-        footer={<ChannelModePicker room={room} onChanged={load} />}
-        onCreateBot={() => setCreateOpen(true)}
-        reply={reply}
-        onClearReply={() => setReply(null)}
-        insertion={insertion}
-        onInserted={() => setInsertion(null)}
-        onSent={() => {
-          atBottom.current = true;
-          load();
+      <Modal
+        title="Edit message"
+        open={!!editing}
+        onOpenChange={(open) => {
+          if (!open && !editPending) setEditing(null);
         }}
-      />
+      >
+        <p className="text-sm text-muted-foreground">
+          Edits update the transcript. Existing tasks keep the original request
+          and are not rerun.
+        </p>
+        <Textarea
+          aria-label="Message text"
+          value={editedText}
+          maxLength={16000}
+          disabled={editPending}
+          onChange={(e) => setEditedText(e.target.value)}
+        />
+        <div className="mt-3 flex justify-end gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={editPending}
+            onClick={() => setEditing(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            disabled={editPending || !editedText.trim()}
+            onClick={async () => {
+              if (!editing) return;
+              setEditPending(true);
+              try {
+                await rpc.call("editMessage", {
+                  id,
+                  messageId: editing.id,
+                  text: editedText,
+                  expectedText: editing.text,
+                });
+                setEditing(null);
+                await load();
+              } catch (e) {
+                setFailure(message(e));
+              } finally {
+                setEditPending(false);
+              }
+            }}
+          >
+            Save message
+          </Button>
+        </div>
+        <ErrorMessage error={failure} />
+      </Modal>
       <NewBot
         room={room}
         open={createOpen}

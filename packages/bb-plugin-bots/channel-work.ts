@@ -1,9 +1,29 @@
 import type { Job } from "./contract";
+import { normalizeActivity } from "./activity";
+
+export function channelWorkActivity(
+  job: Pick<
+    Job,
+    | "status"
+    | "cancellationPending"
+    | "queueReason"
+    | "queuePosition"
+    | "activitySnippet"
+  >,
+) {
+  if (job.cancellationPending) return "Stopping…";
+  if (job.status === "queued")
+    return job.queueReason
+      ? `${job.queueReason}${job.queuePosition ? ` · Position ${job.queuePosition}` : ""}`
+      : "Waiting to start…";
+  if (job.status === "dispatching") return "Preparing response…";
+  return normalizeActivity(job.activitySnippet) ?? "Working…";
+}
+
 export const isActiveJob = (job: Job) =>
   !!job.cancellationPending ||
   ["queued", "dispatching", "running"].includes(job.status);
-// A bot runs serially. Its visible stop control must target the current response,
-// even when newer requests have queued behind it.
+// Each session runs serially; forks have their own activity and Stop control.
 export function channelWork(jobs: Job[]): Job[] {
   const priority = (job: Job) =>
     job.status === "running" ? 0 : job.status === "dispatching" ? 1 : 2;
@@ -12,8 +32,9 @@ export function channelWork(jobs: Job[]): Job[] {
     .sort((a, b) => priority(a) - priority(b) || a.createdAt - b.createdAt);
   const seen = new Set<string>();
   return sorted.filter((job) => {
-    if (seen.has(job.botId)) return false;
-    seen.add(job.botId);
+    const session = `${job.botId}:${job.conversationKey}`;
+    if (seen.has(session)) return false;
+    seen.add(session);
     return true;
   });
 }

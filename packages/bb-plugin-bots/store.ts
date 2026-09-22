@@ -36,7 +36,23 @@ export class Store {
       CREATE TABLE IF NOT EXISTS draft_uploads (id TEXT PRIMARY KEY, bytes BLOB NOT NULL, created_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS routing_sessions (thread_id TEXT PRIMARY KEY, request_id TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS reactions (message_id TEXT NOT NULL, emoji TEXT NOT NULL, actor_id TEXT NOT NULL, actor_name TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(message_id,emoji,actor_id));
-      CREATE TABLE IF NOT EXISTS room_runs (id TEXT PRIMARY KEY, room_id TEXT NOT NULL, json TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS channel_notifications (id TEXT PRIMARY KEY,room_id TEXT NOT NULL,kind TEXT NOT NULL,subject_id TEXT NOT NULL,created_at INTEGER NOT NULL,dispatched_at INTEGER);
+      CREATE INDEX IF NOT EXISTS pending_channel_notifications ON channel_notifications(dispatched_at,created_at);
+      CREATE TABLE IF NOT EXISTS room_runs (id TEXT PRIMARY KEY, room_id TEXT NOT NULL, json TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS messages_by_room ON room_messages(room_id);
+      CREATE INDEX IF NOT EXISTS runs_by_room ON room_runs(room_id);
+      CREATE INDEX IF NOT EXISTS active_runs_by_room ON room_runs(room_id,json_extract(json,'$.status'));
+      CREATE INDEX IF NOT EXISTS unfinished_jobs_by_room ON jobs(json_extract(json,'$.roomId'))
+        WHERE status IN ('queued','dispatching','running') OR json_extract(json,'$.cancellationPending')=1;
+      CREATE INDEX IF NOT EXISTS unfinished_runs_by_room ON room_runs(room_id)
+        WHERE json_extract(json,'$.status') IN ('queued','running');
+      CREATE INDEX IF NOT EXISTS jobs_by_bot_started ON jobs(bot_id,COALESCE(json_extract(json,'$.startedAt'),json_extract(json,'$.dispatchStartedAt')));
+      CREATE INDEX IF NOT EXISTS jobs_by_room_started ON jobs(json_extract(json,'$.roomId'),COALESCE(json_extract(json,'$.startedAt'),json_extract(json,'$.dispatchStartedAt')));
+      CREATE INDEX IF NOT EXISTS jobs_by_room ON jobs(json_extract(json,'$.roomId'),created_at);
+      CREATE INDEX IF NOT EXISTS jobs_by_run ON jobs(json_extract(json,'$.runId'),created_at);
+      CREATE INDEX IF NOT EXISTS messages_by_source_job ON room_messages(room_id,json_extract(json,'$.sourceJobId'));
+      CREATE INDEX IF NOT EXISTS messages_by_source ON room_messages(json_extract(json,'$.sourceThreadId'));
+      CREATE INDEX IF NOT EXISTS attachments_by_room ON attachments(json_extract(json,'$.roomId'));`);
   }
   all(): Bot[] {
     return (
@@ -86,6 +102,11 @@ export class Store {
       .prepare("INSERT INTO conversations VALUES (?,?,?,?,?)")
       .run(c.id, c.botId, c.key, c.threadId, JSON.stringify(c));
   }
+  deleteConversation(threadId: string) {
+    this.db
+      .prepare("DELETE FROM conversations WHERE thread_id=?")
+      .run(threadId);
+  }
   jobs(id: string, limit = 100): Job[] {
     return (
       this.db
@@ -120,9 +141,13 @@ export class Store {
   }
   putJob(j: Job) {
     j.updatedAt = Date.now();
-    this.db
-      .prepare("UPDATE jobs SET status=?,json=? WHERE id=?")
-      .run(j.status, JSON.stringify(j), j.id);
+    this.db.transaction(() => {
+      this.db
+        .prepare("UPDATE jobs SET status=?,json=? WHERE id=?")
+        .run(j.status, JSON.stringify(j), j.id);
+      if (j.status === "error" && j.roomId)
+        this.queueNotification(`error:${j.id}`, j.roomId, "error", j.id);
+    })();
   }
   rooms(): Room[] {
     return (
@@ -130,6 +155,20 @@ export class Store {
         json: string;
       }[]
     ).map((r) => JSON.parse(r.json));
+  }
+  activeRoomIds(): string[] {
+    return (
+      this.db
+        .prepare(`
+      SELECT id FROM rooms WHERE id IN (
+        SELECT json_extract(json,'$.roomId') FROM jobs
+        WHERE status IN ('queued','dispatching','running') OR json_extract(json,'$.cancellationPending')=1
+        UNION
+        SELECT room_id FROM room_runs WHERE json_extract(json,'$.status') IN ('queued','running')
+      ) ORDER BY id
+    `)
+        .all() as { id: string }[]
+    ).map((row) => row.id);
   }
   room(id: string): Room {
     const room = this.findRoom(id);
@@ -261,12 +300,32 @@ export class Store {
       .get(id) as { json: string } | undefined;
     return row ? messageSchema.parse(JSON.parse(row.json)) : null;
   }
+  queueNotification(
+    id: string,
+    roomId: string,
+    kind: "reply" | "error" | "interaction",
+    subjectId: string,
+  ) {
+    const room = this.findRoom(roomId);
+    if (!room) return;
+    const createdAt = Math.max(Date.now(), room.updatedAt + 1);
+    const inserted = this.db
+      .prepare(
+        "INSERT OR IGNORE INTO channel_notifications(id,room_id,kind,subject_id,created_at) VALUES (?,?,?,?,?)",
+      )
+      .run(id, roomId, kind, subjectId, createdAt).changes;
+    if (inserted) this.putRoom({ ...room, updatedAt: createdAt });
+  }
   putMessage(m: RoomMessage) {
-    return (
-      this.db
-        .prepare("INSERT OR IGNORE INTO room_messages VALUES (?,?,?)")
-        .run(m.id, m.roomId, JSON.stringify(m)).changes > 0
-    );
+    return this.db.transaction(() => {
+      const inserted =
+        this.db
+          .prepare("INSERT OR IGNORE INTO room_messages VALUES (?,?,?)")
+          .run(m.id, m.roomId, JSON.stringify(m)).changes > 0;
+      if (inserted && m.botId && !m.system)
+        this.queueNotification(`reply:${m.id}`, m.roomId, "reply", m.id);
+      return inserted;
+    })();
   }
   reactions(roomId: string): Reaction[] {
     return this.db
@@ -299,11 +358,15 @@ export class Store {
         .run(messageId, emoji, actorId);
     return this.reactions(roomId);
   }
-  runs(roomId: string): RoomRun[] {
+  runs(roomId: string, limit = -1, activeOnly = false): RoomRun[] {
     return (
       this.db
-        .prepare("SELECT json FROM room_runs WHERE room_id=? ORDER BY rowid")
-        .all(roomId) as { json: string }[]
+        .prepare(
+          `SELECT json FROM (SELECT rowid,json FROM room_runs WHERE room_id=?
+          ${activeOnly ? "AND json_extract(json,'$.status') IN ('queued','running')" : ""}
+          ORDER BY rowid DESC LIMIT ?) ORDER BY rowid`,
+        )
+        .all(roomId, limit) as { json: string }[]
     ).map((r) => runSchema.parse(JSON.parse(r.json)));
   }
   requestJobs(runId: string): Job[] {

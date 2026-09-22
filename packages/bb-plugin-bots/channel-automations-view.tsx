@@ -1,5 +1,6 @@
+import { AutomationEditor, scheduleDescription } from "./automation-editor";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRpc, useRealtime } from "@get-bb/plugin-sdk/app";
+import { useRpc, useRealtime, useBbNavigate } from "@get-bb/plugin-sdk/app";
 import type { Bot, rpcContract } from "./contract";
 import type {
   ChannelAutomation,
@@ -9,24 +10,24 @@ import { Button } from "./components/ui/button";
 import { ErrorMessage, message } from "./bot-ui";
 import { Modal } from "./channel-controls";
 
-function scheduleText(a: ChannelAutomation) {
-  return a.trigger.triggerType === "once"
-    ? `Once · ${new Date(a.trigger.runAt).toLocaleString()}`
-    : `${a.trigger.cron} · ${a.trigger.timezone}`;
-}
-
 export function ChannelAutomationsView({
   id,
   bots,
   open,
   onOpenChange,
+  presentation = "modal",
 }: {
   id: string;
   bots: Bot[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  presentation?: "modal" | "panel";
 }) {
   const rpc = useRpc<typeof rpcContract>();
+  const navigate = useBbNavigate();
+  const [editing, setEditing] = useState<ChannelAutomation | "new" | null>(
+    null,
+  );
   const [history, setHistory] = useState<
     (ChannelAutomationRunPage & { automationId: string }) | null
   >(null);
@@ -76,8 +77,30 @@ export function ChannelAutomationsView({
     };
   }, [open, load]);
   useRealtime("changed", () => {
-    if (open && !pending) void load();
+    if (open && !pending) {
+      void load();
+      const selected = items.find((a) => a.id === history?.automationId);
+      if (selected) void showHistory(selected);
+    }
   });
+  useEffect(() => {
+    if (
+      !open ||
+      !history ||
+      !history.runs.some(
+        (r) =>
+          r.status === "running" ||
+          ["queued", "dispatching", "running"].includes(r.responseStatus ?? ""),
+      )
+    )
+      return;
+    const timer = setInterval(() => {
+      const selected = items.find((a) => a.id === history.automationId);
+      if (!pending && selected && document.visibilityState === "visible")
+        void showHistory(selected);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [open, history, items, pending]);
   async function act(
     a: ChannelAutomation,
     action: "pause" | "resume" | "run" | "delete",
@@ -138,8 +161,29 @@ export function ChannelAutomationsView({
       setPending(null);
     }
   }
-  return (
-    <Modal title="Channel automations" open={open} onOpenChange={onOpenChange}>
+  const content = (
+    <div className="channel-workbench-panel">
+      {editing ? (
+        <AutomationEditor
+          key={editing === "new" ? "new" : editing.id}
+          id={id}
+          bots={bots.filter((b) => !b.retired)}
+          initial={editing === "new" ? undefined : editing}
+          onCancel={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            void load();
+          }}
+        />
+      ) : (
+        <Button
+          size="sm"
+          disabled={!bots.some((b) => !b.retired)}
+          onClick={() => setEditing("new")}
+        >
+          New automation
+        </Button>
+      )}
       <p className="channel-automation-hint">
         Ask a bot to schedule a task here, including the time and timezone. For
         example: “Every weekday at 9am New York time, summarize our open
@@ -158,7 +202,7 @@ export function ChannelAutomationsView({
             </div>
             <p>
               {bots.find((b) => b.id === a.botId)?.name ?? "Unavailable bot"} ·{" "}
-              {scheduleText(a)}
+              {scheduleDescription(a)}
             </p>
             <p>
               {a.nextRunAt
@@ -180,6 +224,14 @@ export function ChannelAutomationsView({
               {a.lastError && <p role="alert">{a.lastError}</p>}
             </details>
             <div className="channel-automation-actions">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!!pending}
+                onClick={() => setEditing(a)}
+              >
+                Edit
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -239,9 +291,7 @@ export function ChannelAutomationsView({
                 aria-label={`Run history for ${a.name}`}
                 className="channel-automation-history"
               >
-                <p>
-                  Dispatch history · check channel Activity for bot responses.
-                </p>
+                <p>Dispatch and response history</p>
                 {!history.runs.length && <p>No runs yet.</p>}
                 {history.runs.map((run) => (
                   <div key={run.id}>
@@ -250,6 +300,39 @@ export function ChannelAutomationsView({
                       {run.trigger === "manual" ? "Manual" : "Scheduled"} ·{" "}
                       {run.status}
                     </p>
+                    {run.responseStatus && (
+                      <p>Response: {run.responseStatus}</p>
+                    )}
+                    {run.responseError && (
+                      <p role="alert">{run.responseError}</p>
+                    )}
+                    {run.responseMessageId && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          window.dispatchEvent(
+                            new CustomEvent("bb:bots:jump", {
+                              detail: {
+                                roomId: id,
+                                messageId: run.responseMessageId,
+                              },
+                            }),
+                          )
+                        }
+                      >
+                        View response
+                      </Button>
+                    )}
+                    {run.responseThreadId && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => navigate.toThread(run.responseThreadId!)}
+                      >
+                        View work
+                      </Button>
+                    )}
                     {run.error && <p role="alert">{run.error}</p>}
                     {run.skipReason && <p>{run.skipReason}</p>}
                   </div>
@@ -301,6 +384,13 @@ export function ChannelAutomationsView({
           Refresh
         </Button>
       )}
+    </div>
+  );
+  return presentation === "panel" ? (
+    content
+  ) : (
+    <Modal title="Channel automations" open={open} onOpenChange={onOpenChange}>
+      {content}
     </Modal>
   );
 }

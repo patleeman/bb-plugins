@@ -1,5 +1,55 @@
 # Bots and Channels verification
 
+## Channel workspace and reliability — 2026-09-21
+
+Verified in the running BB application using a disposable Workbench QA bot and
+channel, with existing owner bots and channels preserved.
+
+- A plain Directed-mode message reached the only bot without a classifier call.
+  The bot read the channel brief and published `release-check.csv` through the
+  real `bots_publish_file` tool; the sent file appeared in Files and reference
+  selection. No failed or unposted output appears in the file library.
+- The exact ambiguous wording “Do not stop the current task. Why PostgreSQL
+  instead of SQLite?” went through the configured classifier while the bot was
+  busy. It chose a fork. The original task finished with `PRIMARY_UNCHANGED`,
+  and the fork finished independently. Regression cases cover all three chat modes.
+- Context drafts survived closing and reopening the workbench; Save, version
+  comparisons, sent-reference selection, Files, Saved decisions, and editable
+  hourly limits worked through the rendered UI. Stale saves and cross-channel
+  reads/writes are covered by lifecycle tests.
+- The UI created a paused weekday schedule, edited its name and cron/timezone,
+  preserved the paused state, and manually ran it through the Automations plugin.
+  Real responses appeared in the channel. Run history showed response completion
+  and usable View response/View work actions. Live QA caught and fixed stale
+  running status in open history; pending histories now reconcile on changes and
+  poll while unfinished.
+- Live UI testing caught strict-RPC rejection of an undefined first-page cursor.
+  Context, document history, Files, and Saved decisions omit absent cursors now.
+- Bot memory history displayed the old/new diff; restoring an earlier version
+  loaded it into the editor and saved through the existing version check.
+- Owner message editing preserved the original execution text and did not create
+  another job. Channel-reference tests cover renames, colliding slugs, URL
+  fragments, escaped references, Markdown links, and code blocks.
+- Context fit a 390 × 844 viewport without horizontal overflow. The real capture
+  asserts the report, saved reference, context values, revision differences, and
+  rendered workbench instead of accepting an empty panel.
+- Focused regressions cover deleted-fork recovery, cleanup despite rate limits,
+  dispatching-phase tools, recursion guards, reference-file retention with ten
+  current uploads, CAS revisions, artifact visibility, edited-message retry
+  identity, bounded/indexed SQL, and invalidation during a shared read.
+- The 148-test Bots suite, TypeScript, and plugin build passed. Independent
+  backend and UI rereviews found no remaining medium-or-higher issues in scope.
+- After plugin reload, context, limits, files, and restored memory persisted. All
+  QA work settled; the bot was retired, channel archived, and schedule left paused.
+
+Screenshot: [Channel workspace](../assets/channel-workbench.png).
+Use `BB_CAPTURE_ONLY=bots-workbench` with a seeded Workbench QA channel.
+`BB_CAPTURE_QA_ACTIONS=1` additionally exercises the draft, file, saved-message,
+usage, schedule create/edit/run, and response-history flows. It deliberately runs
+only a staged schedule, which stays paused. Restore and reinvite the disposable
+QA bot/channel before rerunning actions after cleanup.
+
+
 ## Channel automations — 2026-09-20
 
 Verified against the running BB app and its installed Automations plugin in
@@ -167,3 +217,177 @@ Live screenshots: [inline images](../assets/channel-images.png) and
 [chat mode beneath the composer](../assets/channel-behavior.png). Restore the archived QA channel
 before rerunning `BB_CAPTURE_ONLY=bots-images,bots-behavior` captures. Its bot is
 retired after verification, with workspace and history preserved.
+
+
+## Channel notifications — 2026-09-21
+
+Tested the Bots workspace together with BB source branch `bots/channel-notifications` in `/Users/patrick/workingdir/bb-channel-notifications` (based on upstream `97c376b33`). The isolated normal `pnpm dev` application ran at `http://localhost:11825`, API `http://127.0.0.1:19825`; no production notification preferences or push subscriptions were changed.
+
+Seeded a disposable Notification QA bot/channel with deterministic public reply data. Captured the browser Notification constructor in the headless QA page: the real Bots outbox → cross-plugin RPC → shared sender → realtime overlay produced one notification with the channel/bot title and reply text. Invoking its click handler opened the exact channel permalink and focused the reply, shown in `assets/channel-notifications.jpg`. A second reply marked read before delivery produced zero notifications. This verifies browser delivery/navigation, not physical OS banners or actual phone delivery.
+
+Regression coverage checks owner/system exclusions, attachment-only replies, duplicate insertion, read/archive/removal/retirement, timestamp ordering, terminal errors superseded by retries, pending input read/answer suppression, durable source recovery, settings fanout, mobile server selection, live/cold-start taps, and invalid link rejection. The shared sender reuses the regular thread Expo and desktop/web transport. BB’s reserved built-in plugin and the mobile client require a BB build to deploy these source changes.
+
+
+## Implicit delegation returns — 2026-09-21
+
+Focused runtime tests use the real SQLite store and SDK fake host. They cover a single delegate without a return mention; fan-out waiting for all delegates; mixed success/failure/cancellation; queued and nested timeouts; unrelated replies; classifier-rejected acknowledgments; explicit ancestor mentions; synthesis loop prevention; cross-channel reply targeting and multi-message aggregation; classifier outages/restart; archive races; delegate retry ancestry, renewed deadlines, and stale classifier results; requester retry and cancellation during classification; and nested A → B → C synthesis. The existing three-step handoff-depth regression remains covered. Classifier decisions are deterministic fixtures in these tests; live model judgment is not a deterministic guarantee.
+
+Final verification: **173 Bots tests**, **35 shared notification tests**, and **318 mobile tests** pass. All three typechecks pass, and the Bots plugin and shared notification bundle build successfully. Independent review verified the delegation retry, ancestor, cross-channel, and nested timeout fixes. The screenshot and README link checks and both worktrees' `git diff --check` pass.
+
+## Jev classifier — 2026-09-21
+
+Replaced the default temporary agent classifier with OpenCode Zen's direct
+`jev-1.13` System One API. The existing OpenCode credential was verified against
+the endpoint, then saved through BB's settings API as a Bots secret. No credential
+was written into source or printed. Provider sessions remain an explicit setting.
+
+Ten live API checks took **380–647 ms** (median **505 ms**). Fixtures covered the
+PostgreSQL/SQLite comparison, negated stop, a real correction, ambiguous follow-up,
+thanks, one relevant expert, two requested experts, a substantive return,
+acknowledgment-only return, and a failed delegate. The comparison and negated stop
+did not steer; the explicit correction did. A separate mixed busy/idle recipient
+check verified the one-option decision for an idle, explicitly addressed bot.
+
+The normal running BB server classified a disposable two-bot channel message in
+**399 ms**, recording a completed routing decision with zero responses and zero
+classifier agent sessions. Its native HTTP path used the configured secret. The
+channel was archived and both QA bots retired afterward. Two retained earlier
+provider-route durations were 9,774 and 14,547 ms; these are historical samples,
+not a matched benchmark or a latency guarantee.
+
+**181 Bots tests**, typecheck, and plugin build pass. New tests cover one-request
+batching, required recipients, idle actions, confidence fallback, malformed
+answers, HTTP failures without secret disclosure or provider fallback, caller
+cancellation, deadlines, settings validation, and delegation return predicates.
+Independent review found no remaining blocker. Bots was reloaded with
+`routingEngine=jev`, the default five-second deadline, and confidence threshold
+0.7. These measurements check representative cases, not all possible model errors.
+
+
+## Compact channel activity — 2026-09-21
+
+Replaced the stacked active-response card with one line: small avatar, bot name,
+truncated activity, and an accessible stop icon. Removed the repeated task title
+and inline View work buttons. Queue reasons and stopping state replace stale
+activity; raw `[PASS]` control markers are suppressed.
+
+Verified in the running BB application with a disposable bot performing a bounded
+wait: the row is 32 px high at 1280 px desktop width and 40 px high at a 390 px
+touch viewport. Long activity text truncates, the stop target remains 36 × 36 px
+on touch screens, and the page has no horizontal overflow. Clicking Stop cancelled
+the real response and removed its row. The QA channel was archived and the bot
+retired after verification. [Mobile screenshot](../assets/channel-status-mobile.jpg).
+
+All **183 Bots tests**, typecheck, and build pass. Focused regressions cover silence
+markers and stale activity during queueing, dispatch, and cancellation.
+
+## Channel reading width — 2026-09-21
+
+Matched the running regular thread's 760 px outer column: channel messages and
+the composer are centered, with 728 px inside the standard gutters. The transcript
+scrollbar remains at the pane edge. Verified the actual Command Center channel at
+1728 px desktop width, 390 px touch width, and 1280 px with Channel context open.
+Mobile messages and composer both use the available 358 px inside 16 px gutters.
+The side panel reduces the column naturally; neither the page nor transcript
+overflows horizontally. The CSS bundle builds, was reloaded, and `git diff --check`
+passes. No new logic tests were added for this CSS-only layout change.
+
+## Markdown file editor — 2026-09-21
+
+Replaced the Mission and Memory textareas with CodeMirror: Markdown highlighting,
+line numbers, wrapping, formatting controls, find and replace, undo/redo, and an
+Edit/Preview switch using BB's Markdown renderer. The existing save, draft,
+conflict, reload confirmation, and version-history flows remain connected.
+
+Verified in the running BB application using a paused disposable QA bot:
+
+- Editing, keyboard save, persisted reload, search/replace, formatting, and
+  undo/redo across Edit/Preview switches.
+- Draft recovery after switching to Mission and returning to Memory.
+- Restoring a saved version and undoing that restoration.
+- Concurrent file changes reject stale saves and preserve the local draft.
+- Reload offers Keep editing or Discard and reload.
+- A 64,001-character paste shows the limit, disables saving, and remains undoable.
+  The exact immediate-paste-after-reload regression now restores the saved
+  baseline with one Undo, without restoring the discarded draft.
+- Desktop at 1440 px and touch layouts at 390 and 320 px, including search and
+  preview. No horizontal overflow; editor height remains stable between modes.
+  Mobile Reload and Save stay on one row.
+
+QA caught unsupported host glyph names, an italic action that could strip bold,
+and undo events merging formatting/reloads with adjacent edits. These are fixed.
+Six focused regressions cover formatting selections, placeholders, nested
+emphasis, line boundaries, link destinations, read-only state, and undo isolation.
+All **189 Bots tests**, typecheck, build, and focused independent review pass.
+Bots was reloaded and the disposable bot retired after verification.
+
+[Desktop editor](../assets/bot-markdown-editor.jpg) ·
+[Mobile preview](../assets/bot-markdown-preview-mobile.jpg)
+
+## Channel message alignment — 2026-09-21
+
+Owner messages now use right-aligned bubbles with the same surface, border,
+radius, and desktop width as regular thread messages. Timestamps sit above the
+bubble; the redundant user avatar and visible You label are removed. Bot and
+external BB agent messages retain left alignment, names, and avatars. Reply
+references and attachments remain inside the message; reactions remain beneath it.
+
+Verified the existing Command Center conversation in the running BB app at
+1440 px desktop width and 390/320 px touch widths. All owner messages reach the
+right edge of their column, bot avatars remain present, and neither the page nor
+message content overflows horizontally. The mobile message menu remains usable
+from keyboard focus. Typecheck, plugin build, and `git diff --check` pass; Bots
+was reloaded. No new logic tests were added for this presentation change.
+
+## Sidebar channel activity — 2026-09-21
+
+Added the host's Loading glyph beside channels with unfinished work. The list
+RPC returns active channel IDs from indexed queries over routing runs and jobs;
+it does not load per-channel history. Activity includes queueing, dispatch,
+execution, and pending host cancellation. Multiple replies keep one indicator
+until all work settles. The sidebar reconciles on reconnect, focus, visibility,
+and visible polling in addition to realtime changes.
+
+Verified in the running BB app with a disposable channel and bounded bot waits:
+the spinner appears while another page is open, remains in the selected channel,
+and clears after both natural completion and confirmed cancellation. A long
+channel name truncates while the 15 × 15 px glyph remains visible on desktop and
+in the 390 px mobile sidebar; no horizontal overflow. Reduced-motion styling
+keeps the glyph visible without rotation.
+
+Independent review caught a stale CSS selector adding padding to the new icon
+and a status assertion masked by a second running job. Both were fixed and the
+focused rereview was clean. Four new tests cover routing-only work, individual
+job states, multiple responses, terminal states, pending cancellation, channel
+isolation, and active work older than a page of completed history. All **193
+Bots tests**, typecheck, and build pass. Bots was reloaded; the disposable channel
+was archived and the bot retired after QA.
+
+[Live sidebar activity](../assets/channel-sidebar-activity.jpg)
+
+## Copy channel ID — 2026-09-21
+
+Added Copy channel ID to the sidebar context menu, between Rename and Archive.
+Verified an actual right-click and clipboard read in the running application:
+the copied value exactly matches the selected channel's ID. Keyboard context-menu
+activation also works. Injected clipboard denial produces a visible error instead
+of an unhandled rejection. Typecheck, plugin build, and `git diff --check` pass;
+Bots was reloaded. No new unit test was added for this small clipboard action.
+
+## Channel hover controls — 2026-09-21
+
+Channel rows now reveal Archive and a three-dot menu on hover or keyboard focus,
+matching the thread sidebar. Both menu entry points use the same Radix context
+menu and action handlers. Navigation and action buttons are siblings. The idle
+status indicator gives way to the controls while hovered, and long titles truncate.
+Touch layouts keep a 36 px menu button visible and put Archive inside the menu.
+
+Verified in the running app with the disposable sidebar QA channel: idle/hover
+visibility, quick archive and restore without navigation, right-click and ellipsis
+menu parity, exact clipboard contents, Tab/Enter and Shift-F10 activation, and
+Escape focus restoration. At 390 px, an actual touch tap opens the menu, Rename
+opens its dialog, all menu options fit onscreen, and the page has no horizontal
+overflow. Typecheck, build, and focused independent review pass. Bots was reloaded
+and the QA channel archived afterward. No new unit test was added for this UI change.
+
+[Live channel hover controls](../assets/channel-hover-controls.jpg)

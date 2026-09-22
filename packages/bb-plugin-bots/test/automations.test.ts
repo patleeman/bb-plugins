@@ -104,6 +104,7 @@ async function setup() {
         },
       },
       threads: {
+        send: async () => ({ ok: true, delivery: "sent" }),
         spawn: async () =>
           makeThreadResponse({ id: `thr_work_${++sequence}`, status: "idle" }),
         get: async () => makeThreadResponse({ status: "idle" }),
@@ -636,6 +637,70 @@ test("a run that expires while waiting for the room lock cannot enqueue work", a
     await blocked;
     await assert.rejects(dispatch, /no longer active/);
     assert.equal(x.store.roomJobs(x.room.id).length, 0);
+  } finally {
+    await x.harness.lifecycle.dispose();
+  }
+});
+
+test("automation history links dispatch to the completed response and retries", async () => {
+  const x = await setup();
+  try {
+    const a = await x.service.create(x.input());
+    x.runs.set(a.id, [{ id: "result", status: "running" }]);
+    await x.service.dispatch(a.projectId, a.id, "result");
+    await x.runtime.drive(x.a);
+    const job = x.store.work(x.a.id)[0]!;
+    let page = await x.service.runs({
+      channelId: x.room.id,
+      automationId: a.id,
+      limit: 20,
+    });
+    assert.equal(page.runs[0]?.responseStatus, "running");
+    assert.equal(page.runs[0]?.responseThreadId, job.threadId);
+    x.runtime.complete(job.threadId!, null, "Temporary failure");
+    await x.runtime.driveRoom(x.room);
+    const retry = await x.runtime.retryJob(job.id);
+    await x.runtime.drive(x.a);
+    x.runtime.complete(x.store.job(retry.id)!.threadId!, "AUTOMATION_COMPLETE");
+    await x.runtime.driveRoom(x.room);
+    page = await x.service.runs({
+      channelId: x.room.id,
+      automationId: a.id,
+      limit: 20,
+    });
+    assert.equal(page.runs[0]?.responseStatus, "done");
+    assert.equal(page.runs[0]?.responseMessageId, retry.id);
+    assert.equal(page.runs[0]?.responseError, undefined);
+  } finally {
+    await x.harness.lifecycle.dispose();
+  }
+});
+
+test("CLI edits a paused schedule without enabling it", async () => {
+  const x = await setup();
+  try {
+    const a = await x.service.create(x.input({ enabled: false }));
+    const result = await x.harness.behavior.runCli([
+      "channel",
+      "schedule-update",
+      x.room.id,
+      a.id,
+      "--name",
+      "Updated reminder",
+      "--text",
+      "New task",
+      "--cron",
+      "0 9 * * 1-5",
+      "--timezone",
+      "America/New_York",
+      "--json",
+    ]);
+    assert.equal(result.exitCode, 0, result.stderr);
+    const updated = JSON.parse(result.stdout!);
+    assert.equal(updated.name, "Updated reminder");
+    assert.equal(updated.prompt, "New task");
+    assert.equal(updated.enabled, false);
+    assert.equal(updated.trigger.cron, "0 9 * * 1-5");
   } finally {
     await x.harness.lifecycle.dispose();
   }

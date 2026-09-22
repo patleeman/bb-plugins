@@ -75,6 +75,9 @@ export function ChannelModePicker({
             <DropdownMenu.Label className="channel-menu-label">
               Chat mode
             </DropdownMenu.Label>
+            <p className="channel-mode-default-hint">
+              New channels start in {selected.label} mode.
+            </p>
             <DropdownMenu.RadioGroup
               value={value}
               onValueChange={(next) => void changeMode(next)}

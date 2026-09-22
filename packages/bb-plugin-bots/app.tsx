@@ -1,3 +1,4 @@
+import { UsagePanel } from "./channel-workbench";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   definePluginApp,
@@ -29,7 +30,7 @@ import {
 import { Modal } from "./channel-controls";
 import { BotCollection } from "./bot-collection";
 import "./styles.css";
-const tabs = ["profile", "mission", "memory", "activity"] as const;
+const tabs = ["profile", "mission", "memory", "activity", "usage"] as const;
 function BotDetail({ id, tab }: { id: string; tab: string }) {
   const rpc = useRpc<typeof rpcContract>(),
     navigate = useBbNavigate();
@@ -189,6 +190,7 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
                 file={tab === "mission" ? "MISSION.md" : "MEMORY.md"}
               />
             )}
+            {tab === "usage" && <UsagePanel id={id} kind="bot" />}
             {tab === "activity" && (
               <>
                 <div className="mb-3 flex items-center justify-between gap-3">

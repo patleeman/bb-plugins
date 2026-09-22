@@ -1,3 +1,4 @@
+import { isExecuting } from "./job-state";
 import { createHash } from "node:crypto";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
@@ -86,7 +87,7 @@ export class ChannelAutomations {
       conversation &&
       this.store
         .work(conversation.botId)
-        .find((j) => j.threadId === threadId && j.status === "running");
+        .find((j) => j.threadId === threadId && isExecuting(j));
     const id = channelId ?? job?.roomId;
     if (!id) throw new Error("Choose a channelId for this automation.");
     const room = this.store.room(id);
@@ -106,8 +107,7 @@ export class ChannelAutomations {
       this.store
         .work(c.botId)
         .some(
-          (j) =>
-            j.threadId === threadId && j.status === "running" && j.automationId,
+          (j) => j.threadId === threadId && isExecuting(j) && j.automationId,
         )
     )
       throw new Error(
@@ -310,11 +310,33 @@ export class ChannelAutomations {
     );
     return {
       ...page,
-      runs: page.runs.map((run) => ({
-        ...run,
-        output: run.output?.slice(0, 2000) ?? null,
-        error: run.error?.slice(0, 2000) ?? null,
-      })),
+      runs: page.runs.map((run) => {
+        const jobs = this.store.requestJobs(
+          `automation:${input.automationId}:${run.id}`,
+        );
+        const current = jobs.filter(
+          (j) => !jobs.some((r) => r.retryOf === j.id),
+        );
+        const pending = current.find((j) =>
+          ["queued", "dispatching", "running"].includes(j.status),
+        );
+        const error = current.find((j) => j.status === "error");
+        const last = current.at(-1);
+        const response = current.find((j) => !!this.store.message(j.id));
+        return {
+          ...run,
+          ...(last
+            ? {
+                responseStatus: pending?.status ?? error?.status ?? last.status,
+                ...(last.threadId ? { responseThreadId: last.threadId } : {}),
+                ...(response ? { responseMessageId: response.id } : {}),
+                ...(error?.error ? { responseError: error.error } : {}),
+              }
+            : {}),
+          output: run.output?.slice(0, 2000) ?? null,
+          error: run.error?.slice(0, 2000) ?? null,
+        };
+      }),
     };
   }
   async dispatch(

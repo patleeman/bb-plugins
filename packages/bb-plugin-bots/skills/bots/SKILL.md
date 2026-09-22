@@ -31,7 +31,7 @@ rounds, voting tools, or automatic majority verdicts.
    compact brief: the proposal, relevant evidence/file locations, constraints,
    questions, and requested response length. Bots work in their own directories;
    provide absolute repository paths or attachments when asking them to inspect code.
-   Ordinary text requests all members; `@handle` selects specific members.
+   Ordinary text follows the channel chat mode; `@all` requests every member. A single eligible bot receives all messages. `@handle` selects specific members.
 3. Use `bots_channel_request` with `channelId` and the returned message ID as
    `requestId`. It returns each response, status, errors, and pending work. Check
    periodically while doing useful independent work; do not busy-poll. Give the
@@ -60,8 +60,8 @@ creator. In its current channel, a bot’s final answer posts automatically: use
 that final answer or an explicit @mention instead of sending a duplicate via a
 tool. Cross-channel consultations exclude the sender, allow up to three explicit
 messages per work session, and keep the two-hop handoff limit. A request is capped
-at 32 responses. Stop and limits are surfaced in request status. Each bot handles
-one task at a time, so avoid cyclic consultations where agents wait for one another;
+at 32 responses. Stop and limits are surfaced in request status. Each primary session handles
+one task at a time; explicit forks can run concurrently. Avoid cyclic consultations where agents wait for one another;
 finish the current response and let the originating agent collect results.
 
 ## Create and configure
@@ -124,6 +124,18 @@ finish. Explicit bot handoffs are limited to two further hops.
 using `--request-id` and reuse it with identical text, attachments, and reply
 target. If a submitted request fails, its error includes the ID. Do not retry
 uncertain sends with a new ID. CLI calls inside BB threads are attributed to the calling agent or bot. Native tools bind identity the same way; outside a thread, CLI sends and reactions belong to the owner.
+
+Use `--mode fork` on `channel send` or `sendMode: "fork"` on
+`bots_channel_send` to answer separately while primary work continues. `/fork`
+also works at the start of the text. `steer` changes active work; `followup`
+queues behind it; `auto` lets Smart routing decide. Explicit modes override
+classification. Mentions select recipients, not delivery mode. Reply to a fork’s
+answer to continue that fork. An ordinary message targets the primary session.
+Forks share workspace files and must leave shared MEMORY.md updates to the
+primary; include durable findings in the answer. Native fork support and an
+existing session are required. Two forks per bot run concurrently; more wait.
+The mode is part of request identity, so preserve it when retrying an uncertain
+send. Each fork has its own Activity and Stop control.
 
 Channel actions: `pin`, `unpin`, `archive`, `restore`, and `read`, each followed
 by a channel selector. Archive cancels unfinished work and keeps history.
@@ -251,8 +263,8 @@ other bots’ missions or share unrelated private conversation data.
 mode. `channel create --behavior MODE` sets it at creation. Smart is the new-channel
 default and selects relevant bots through a configured routing model; Directed only
 responds to mentions/replies; Everyone addresses all members. `@all` explicitly
-requests everyone regardless of mode. Use it for a full advisory panel. A plain
-message may select no bots. Native tools `bots_channel_behavior` and
+requests everyone regardless of mode. Use it for a full advisory panel. With multiple bots, a plain message may select no bots. A channel with just one
+eligible bot routes every message to it automatically. Native tools `bots_channel_behavior` and
 `bots_channel_retry_routing` provide the same channel controls.
 
 `channel request` reports routing state and errors as well as bot work. When routing
@@ -286,3 +298,42 @@ Images appear with your final answer; the tool does not create a duplicate messa
 or wake bots. Finish with a concise caption, or `[PASS]` to send only the images.
 You can publish up to ten images, each at most 8 MB. Failed or cancelled responses
 do not post images. Do not substitute local Markdown image paths for this tool.
+
+## Channel context, artifacts, and budgets
+
+Read `bots_channel_context` for the channel brief, decisions, memory, and reference
+files. To update decisions or memory, supply its current `version`. Keep knowledge
+specific to one channel here; use shared `MEMORY.md` only for facts appropriate to
+all the bot's channels. The owner can compare and restore revisions in the UI.
+
+Use `bots_publish_file` or `bb bots publish-file /absolute/workspace/report.csv`
+to add an artifact to the current final answer. The 8 MB file limit and workspace
+containment apply. Publishing stages a file; it becomes public when the response
+posts. It does not send a separate message or wake bots.
+
+The owner can edit schedules directly in the channel workbench or with
+`bb bots channel schedule-update CHANNEL AUTOMATION_ID --name NAME --text TEXT`
+and `--cron EXPR --timezone ZONE` or `--at ISO_TIME`. Editing keeps the schedule's
+current enabled state. History links dispatch to the actual response and work.
+
+Single-bot channels skip recipient selection. Busy Auto messages use the configured
+classifier to select steer, follow-up, or fork in every mode. There are no semantic
+keyword checks. Explicit send modes override action classification. Ambiguous work
+follows up. Bot and channel limits are editable in Usage; only started turns consume
+the hourly/daily budgets. Limits do not block reconciliation of existing work.
+
+
+## Classifier setup
+
+Jev is the default classifier for recipient selection, busy-session actions, and
+implicit delegation returns. Set the OpenCode Zen API key in Bots settings; it is
+stored as a secret. The server's `OPENCODE_API_KEY` is also supported. Never print
+or paste a credential into chat.
+
+`bb plugin config bots set jevModel jev-1.13` selects the Jev model.
+`jevTimeoutMs` controls the direct request deadline (default 5000 ms), and
+`jevActionConfidence` controls when steer/fork becomes a safer follow-up (default
+0.7). Classifier failures expose Retry routing; they never launch a slow agent
+fallback. Select `routingEngine providers` explicitly to use the legacy
+`routingProvider` / `routingModel` and fallback settings. Select `routingEngine
+jev` to restore direct classification.

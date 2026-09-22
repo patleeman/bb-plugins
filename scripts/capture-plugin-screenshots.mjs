@@ -391,6 +391,130 @@ const threadUrl = `/projects/${projectId}/threads/${threadId}`;
 
 const captures = [
   {
+    id: "bots-workbench",
+    packageDir: "bb-plugin-bots",
+    fileName: "channel-workbench.png",
+    setup: async (client) => {
+      const { rooms } = await pluginRpc("bots", "list", null);
+      const room = rooms.find(r => process.env.BB_CAPTURE_CHANNEL_ID ? r.id === process.env.BB_CAPTURE_CHANNEL_ID : r.name === "Workbench QA");
+      if (!room || room.archived) throw new Error("Seed or restore Workbench QA before capturing.");
+      const data = await pluginRpc("bots", "room", {id:room.id});
+      if (!data.messages.some(m => m.botId && m.text === "ORBIT-42 release report is ready." && m.attachments.some(a => a.name === "release-check.csv")))
+        throw new Error("A real bot must have published the staged release-check.csv report.");
+      const context = await pluginRpc("bots", "channelContext", {id:room.id});
+      const initialUsage=await pluginRpc("bots","usage",{id:room.id,kind:"channel"});
+      const savedMessage=data.messages.find(m=>m.saved);
+      if(!savedMessage)throw new Error("Seed a saved release-planning decision.");
+      if (!context.brief.includes("ORBIT-42") || !context.attachmentIds.length) throw new Error("Seed the release brief and retain the real report as a reference.");
+      await client.navigate("/");
+      await client.waitForText(room.name);
+      await client.evaluate(`(() => {
+        const button = Array.from(document.querySelectorAll('.channels-sidebar button')).find(b => b.textContent.includes(${JSON.stringify(room.name)}));
+        if (!button) throw new Error('Missing staged channel in the sidebar'); button.click();
+      })()`);
+      await client.waitForText("ORBIT-42 release report is ready.");
+      const openPanel = async (name) => {
+        await client.clickFirstButtonWithAria("Channel options");
+        await client.evaluate(`(() => {
+          const b=Array.from(document.querySelectorAll('.channel-popover button')).find(b=>b.textContent.trim()===${JSON.stringify(name)});
+          if(!b)throw new Error('Channel panel menu item missing');b.click();
+        })()`);
+        await sleep(500);
+        await client.waitForText(name);
+      };
+      const fill = async (label,value) => {
+        await client.evaluate(`(() => {
+          const e=Array.from(document.querySelectorAll('input,textarea,select')).find(e=>e.getAttribute('aria-label')===${JSON.stringify(label)});
+          if(!e) throw new Error('Missing input: '+${JSON.stringify(label)});
+          const prototype=e instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:e instanceof HTMLSelectElement?HTMLSelectElement.prototype:HTMLInputElement.prototype;
+          Object.getOwnPropertyDescriptor(prototype,'value').set.call(e,${JSON.stringify(value)});
+          e.dispatchEvent(new Event(e instanceof HTMLSelectElement?'change':'input',{bubbles:true}));
+        })()`);
+        await sleep(100);
+      };
+      await openPanel("Channel context");
+      await client.waitForInputValue("Brief and instructions",context.brief);
+      await client.clickButtonText("Version history");
+      await client.evaluate(`(() => {
+        const versions=document.querySelectorAll('.channel-revisions details');
+        if(versions.length<2)throw new Error('Expected retained context history');
+        const referenceVersion=Array.from(versions).find(v=>v.querySelector('pre').textContent.includes('attachmentIds'));
+        if(!referenceVersion)throw new Error('Reference change missing from comparison');
+        referenceVersion.querySelector('summary').click();
+      })()`);
+      await client.waitForText("Use this version");
+      if(process.env.BB_CAPTURE_QA_ACTIONS === "1") {
+        const memoryDraft=context.memory.startsWith("Release preview")?"Release context verified in this channel. Keep these facts scoped here.":"Release preview verified in this channel. Keep these facts scoped here.";
+        await fill("Channel memory",memoryDraft);
+        await client.clickFirstButtonWithAria("Close channel workbench");
+        await openPanel("Channel context");
+        await client.waitForInputValue("Channel memory",memoryDraft);
+        await client.clickButtonText("Save context");
+        await client.waitForText("Saved. Bots receive this context on their next task.");
+        await openPanel("Files");
+        await client.waitForText("release-check.csv");
+        await client.evaluate(`(() => { if(!document.querySelector('.channel-workbench a[href*="attachment"]'))throw new Error('Sent file missing from Files'); })()`);
+        await openPanel("Saved decisions");
+        await client.waitForText(savedMessage.text.slice(0,80));
+        await client.evaluate(`(() => { if(!document.querySelector('.channel-workbench .channel-search-result'))throw new Error('Saved decision missing'); })()`);
+        await openPanel("Usage and limits");
+        const priorUsage=await pluginRpc("bots","usage",{id:room.id,kind:"channel"});
+        await client.waitForInputValue("Turns per hour",String(priorUsage.limits.turnsPerHour));
+        await fill("Turns per hour","12");
+        await client.clickButtonText("Save limits");
+        await client.waitForText("Limits saved.");
+        const usage=await pluginRpc("bots","usage",{id:room.id,kind:"channel"});
+        if(usage.turns<1 || usage.routingCalls!==initialUsage.routingCalls || usage.limits.turnsPerHour!==12)throw new Error('Single-bot usage or saved limits incorrect');
+        await openPanel("Automations");
+        const priorSchedules=await pluginRpc("bots","automationList",{channelId:room.id});
+        if(!priorSchedules.automations.some(a=>["Weekday release check","Release check at 9:30"].includes(a.name))) {
+        await client.clickButtonText("New automation");
+        await fill("Automation name","Weekday release check");
+        await fill("Automation task","Reply exactly: QA_SCHEDULE_OK. Do not create or modify automations.");
+        await fill("Schedule timezone","America/New_York");
+        await client.clickButtonText("Create automation");
+        await client.waitForText("Weekday release check");
+        await client.waitForText("Weekdays at 09:00");
+        }
+        await client.clickButtonText("Edit");
+        await fill("Automation name","Release check at 9:30");
+        await fill("Cron expression","30 9 * * 1-5");
+        await client.clickButtonText("Save automation");
+        await client.waitForText("Release check at 9:30");
+        await client.waitForText("Weekdays at 09:30");
+        const schedules=await pluginRpc("bots","automationList",{channelId:room.id});
+        const saved=schedules.automations.find(a=>a.name==="Release check at 9:30");
+        if(!saved || saved.enabled || saved.trigger.cron!=="30 9 * * 1-5")throw new Error('Schedule edit lost its paused state or trigger');
+        await client.clickButtonText("Run now");
+        await client.waitForText("Run requested.");
+        await client.waitForText("QA_SCHEDULE_OK",60000);
+        await client.clickButtonText("Run history");
+        await client.waitForText("Response: done");
+        await client.waitForText("View response");
+        await client.clickButtonText("View response");
+      }
+      await openPanel("Channel context");
+      const current=await pluginRpc("bots","channelContext",{id:room.id});
+      await client.waitForInputValue("Channel memory",current.memory);
+      await client.command("Emulation.setDeviceMetricsOverride", {width:390,height:844,deviceScaleFactor:1,mobile:false});
+      await sleep(900);
+      if(!await client.evaluate("!!document.querySelector('.channel-workbench')"))await openPanel("Channel context");
+      await client.evaluate(`(() => {
+        const panel=document.querySelector('.channel-workbench'),r=panel.getBoundingClientRect();
+        if(r.left<0 || r.right>innerWidth+1 || panel.scrollWidth>panel.clientWidth+1)throw new Error('Context panel overflows the narrow viewport');
+      })()`);
+      await client.command("Emulation.setDeviceMetricsOverride", {width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+      await sleep(900);
+      if(!await client.evaluate("!!document.querySelector('.channel-workbench')"))await openPanel("Channel context");
+      await client.waitForInputValue("Brief and instructions",current.brief);
+      await client.evaluate(`(() => {
+        const panel=document.querySelector('.channel-workbench');
+        if(panel.querySelector('[role="alert"]'))throw new Error(panel.querySelector('[role="alert"]').textContent);
+        if(!panel.querySelector('input[type="checkbox"]:checked'))throw new Error('Saved reference file must be checked');
+      })()`);
+    },
+  },
+  {
     id: "bots-automations",
     packageDir: "bb-plugin-bots",
     fileName: "channel-automations.png",
@@ -656,6 +780,49 @@ const captures = [
         const width = collection.firstElementChild.getBoundingClientRect().width;
         if (width > 1024 || width < 900) throw new Error('Bots collection must use BB collection content width');
       })()`);
+    },
+  },
+  {
+    id: "bots-forks",
+    packageDir: "bb-plugin-bots",
+    fileName: "channel-forks.png",
+    setup: async (client) => {
+      const { rooms } = await pluginRpc("bots", "list", null);
+      const room = rooms.find((r) => process.env.BB_CAPTURE_CHANNEL_ID ? r.id === process.env.BB_CAPTURE_CHANNEL_ID : r.name === "Fork QA");
+      if (!room) throw new Error("Seed the Fork QA channel with a real primary session and native fork before capturing.");
+      const data = await pluginRpc("bots", "room", { id: room.id });
+      const fork = data.jobs.find((j) => j.forkSourceThreadId && j.reply === "SIDE_ANSWER");
+      if (!fork?.threadId || fork.threadId === fork.forkSourceThreadId)
+        throw new Error("Fork QA must contain a completed native fork with SIDE_ANSWER and a distinct source thread.");
+      await client.navigate("/");
+      await client.waitForText(room.name);
+      await client.evaluate(`(() => {
+        const button = Array.from(document.querySelectorAll('.channels-sidebar button')).find(b => b.textContent.includes(${JSON.stringify(room.name)}));
+        if (!button) throw new Error('Staged channel missing from real sidebar');
+        button.click();
+      })()`);
+      await client.waitForText("SIDE_ANSWER");
+      await client.evaluate(`document.querySelector('button[aria-label^="Toggle sidebar"][aria-expanded="true"]')?.click()`);
+      await sleep(350);
+      await client.evaluate(`(() => {
+        const answer = Array.from(document.querySelectorAll('.bot-room-message')).find(m => m.textContent.includes('SIDE_ANSWER') && m.querySelector('.channel-fork-label'));
+        if (!answer) throw new Error('Native fork answer must be visibly labeled Fork');
+        const trigger = document.querySelector('button[aria-label^="Send mode:"]');
+        if (!trigger) throw new Error('Send mode control missing');
+      })()`);
+      const sendLabel = await client.evaluate(`document.querySelector('button[aria-label^="Send mode:"]').getAttribute('aria-label')`);
+      await client.clickAriaButtonWithPointer(sendLabel);
+      for (const text of ["Send this message", "Change the task currently running.", "Wait for the current task to finish.", "Ask separately while the current task continues."])
+        await client.waitForText(text);
+      await client.evaluate(`(() => {
+        if (document.querySelectorAll('[role="menuitemradio"]').length !== 4) throw new Error('All four send modes must be rendered');
+      })()`);
+      return async () => {
+        await client.command("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+        await client.command("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+        await client.evaluate(`document.querySelector('button[aria-label^="Toggle sidebar"][aria-expanded="false"]')?.click()`);
+        await sleep(350);
+      };
     },
   },
   {
@@ -1174,7 +1341,7 @@ try {
       const outputPath = join(repoRoot, "packages", capture.packageDir, "assets", capture.fileName ?? "staged-preview.png");
       // Use BB's real collapsed-sidebar state so publication does not expose
       // unrelated local projects/threads alongside the deterministic fixtures.
-      const privateSidebar = capture.packageDir === "bb-plugin-bots" || capture.id === "spool";
+      const privateSidebar = (capture.packageDir === "bb-plugin-bots" && capture.id !== "bots-forks") || capture.id === "spool";
       if (privateSidebar) {
         await client.evaluate(`document.querySelector('button[aria-label^="Toggle sidebar"]')?.click()`);
         await sleep(350);

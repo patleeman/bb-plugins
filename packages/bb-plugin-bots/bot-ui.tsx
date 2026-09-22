@@ -1,3 +1,6 @@
+import { RevisionList, type Revision } from "./revision-list";
+import { MarkdownEditor } from "./markdown-editor";
+import { isForkConversation } from "./send-mode";
 import {
   useCallback,
   useEffect,
@@ -426,6 +429,29 @@ export function DocumentEditor({
 }) {
   const rpc = useRpc<typeof rpcContract>();
   const editorId = useId();
+  const [revisions, setRevisions] = useState<Revision[] | null>(null);
+  const historyBusy = useRef(false);
+  const [historyMore, setHistoryMore] = useState(false),
+    [historyPending, setHistoryPending] = useState(false);
+  const loadHistory = async (before?: number) => {
+    if (historyBusy.current) return;
+    historyBusy.current = true;
+    setHistoryPending(true);
+    try {
+      const page = await rpc.call("documentHistory", {
+        id: bot.id,
+        file,
+        ...(before !== undefined ? { before } : {}),
+      });
+      setRevisions((old) => (before ? [...(old ?? []), ...page] : page));
+      setHistoryMore(page.length === 20);
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      historyBusy.current = false;
+      setHistoryPending(false);
+    }
+  };
   const draftKey = `bb:bots:document:${bot.id}:${file}`;
   const [restored] = useState(() => readConfigDraft(draftKey, documentDraft));
   const initialLoad = useRef(true);
@@ -440,6 +466,7 @@ export function DocumentEditor({
     [saved, setSaved] = useState(false),
     [reloading, setReloading] = useState(false);
   const dirty = !!doc && text !== doc.text;
+  const tooLong = text.length > 64000;
   const load = useCallback(() => {
     setPending(true);
     setOperation("Loading…");
@@ -475,7 +502,7 @@ export function DocumentEditor({
     }
   }, [draftKey, text, doc, dirty]);
   const save = async () => {
-    if (!doc || pending || !dirty || remoteConflict) return;
+    if (!doc || pending || !dirty || remoteConflict || tooLong) return;
     setPending(true);
     setOperation("Saving…");
     try {
@@ -503,29 +530,29 @@ export function DocumentEditor({
           ? "The standing direction this bot reads at the start of every turn."
           : "Durable facts and decisions shared across this bot’s conversations. The bot can update this file."}
       </p>
-      <div className="space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <label htmlFor={editorId} className="text-sm font-medium">
-            {file}
-          </label>
-          <span className="text-xs text-muted-foreground">Markdown</span>
-        </div>
-        <Textarea
+      {doc ? (
+        <MarkdownEditor
           id={editorId}
-          aria-label={file}
-          className="bot-document-input font-mono font-normal leading-relaxed"
+          label={file}
           value={text}
-          disabled={!doc || pending}
-          maxLength={64000}
-          spellCheck={false}
-          onChange={(e) => {
-            setText(e.target.value);
+          disabled={pending}
+          onSave={() => void save()}
+          onChange={(value) => {
+            setText(value);
             setSaved(false);
           }}
         />
-      </div>
-      <ErrorMessage error={error} />
-      <div className="flex flex-wrap items-center gap-2">
+      ) : (
+        <p role="status">Loading {file}…</p>
+      )}
+      <ErrorMessage
+        error={
+          tooLong
+            ? "This file exceeds 64,000 characters. Shorten it before saving; your draft is preserved."
+            : error
+        }
+      />
+      <div className="bot-document-actions">
         <Button
           size="sm"
           variant="ghost"
@@ -537,7 +564,10 @@ export function DocumentEditor({
         >
           <Icon name="RotateCcw" /> Reload file
         </Button>
-        <span role="status" className="ml-auto text-xs text-muted-foreground">
+        <span
+          role="status"
+          className="bot-document-status text-xs text-muted-foreground"
+        >
           {pending
             ? operation
             : dirty
@@ -548,12 +578,37 @@ export function DocumentEditor({
         </span>
         <Button
           size="sm"
-          disabled={!doc || pending || !dirty || remoteConflict}
+          disabled={!doc || pending || !dirty || remoteConflict || tooLong}
           onClick={save}
         >
           Save {file === "MISSION.md" ? "mission" : "memory"}
         </Button>
       </div>
+      <Button
+        className="self-start"
+        size="sm"
+        variant="ghost"
+        onClick={() => void loadHistory()}
+      >
+        Version history
+      </Button>
+      {revisions && (
+        <RevisionList
+          revisions={revisions}
+          current={text}
+          morePending={historyPending}
+          onMore={
+            historyMore
+              ? () => void loadHistory(revisions.at(-1)!.id)
+              : undefined
+          }
+          onUse={(value) => {
+            if (pending) return;
+            setText(value);
+            setSaved(false);
+          }}
+        />
+      )}
       <Modal
         title="Discard unsaved changes?"
         open={reloading}
@@ -631,7 +686,9 @@ export function WorkList({
   jobs,
   bots,
   onCancel,
+  onJump,
 }: {
+  onJump?: (id: string) => void;
   jobs: Job[];
   bots: Bot[];
   onCancel: (id: string) => void;
@@ -663,6 +720,24 @@ export function WorkList({
                       ? "Waiting"
                       : j.status}
               </span>
+              {j.taskTitle && (
+                <button
+                  className="bot-message-reference"
+                  disabled={!onJump || !j.triggerMessageId}
+                  onClick={() =>
+                    j.triggerMessageId && onJump?.(j.triggerMessageId)
+                  }
+                >
+                  {j.taskTitle}
+                </button>
+              )}
+              <span className="text-xs text-muted-foreground">
+                {isForkConversation(j.conversationKey) ? "Fork" : "Primary"}
+                {j.queuePosition ? ` · Queue ${j.queuePosition}` : ""}
+              </span>
+              {j.queueReason && (
+                <p className="text-xs text-muted-foreground">{j.queueReason}</p>
+              )}
               {j.error && <ErrorMessage error={j.error} />}
               <time>
                 {new Intl.DateTimeFormat(undefined, {

@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState, useId, type ReactNode } from "react";
 import { experimental_Icon as Icon, useRpc } from "@get-bb/plugin-sdk/app";
-import type { Bot, RoomMessage, rpcContract } from "./contract";
+import type { Bot, Room, RoomMessage, rpcContract } from "./contract";
 import { Button } from "./components/ui/button";
-import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "./components/ui/coarse-pointer-sizing";
-import { BotOptions, matchingBots } from "./channel-controls";
+import { BotOptions, ChannelOptions, matchingBots } from "./channel-controls";
+import { channelReference, matchingChannels } from "./channel-references";
 import { ChannelAttachments } from "./channel-attachments";
-import { emptyDraft, readDraft, prepareSend, clearSentDraft } from "./draft";
+import {
+  emptyDraft,
+  readDraft,
+  prepareSend,
+  clearSentDraft,
+  type Draft,
+} from "./draft";
+import { SendModePicker } from "./send-mode-picker";
+import { parseSendMode, type SendMode } from "./send-mode";
 
 const errorText = (e: unknown) => {
   if (e instanceof DOMException && e.name === "NotAllowedError")
@@ -34,6 +42,7 @@ export function GroupComposer({
   onSent,
   bots,
   memberIds,
+  rooms,
   onCreateBot,
   footer,
 }: {
@@ -41,22 +50,39 @@ export function GroupComposer({
   autoFocus?: boolean;
   bots: Bot[];
   memberIds: string[];
+  rooms: Room[];
   onCreateBot: () => void;
   roomId: string;
   roomName: string;
   paused: boolean;
   reply: RoomMessage | null;
   onClearReply: () => void;
-  insertion: { text: string; nonce: number; replaceMention?: boolean } | null;
+  insertion: {
+    text: string;
+    nonce: number;
+    replaceMention?: boolean;
+    sendMode?: SendMode;
+    reply?: RoomMessage;
+  } | null;
   onInserted: () => void;
   onSent: () => void;
 }) {
   const rpc = useRpc<typeof rpcContract>(),
     key = `bb:bots:draft:${roomId}`;
-  const [draft, setDraft] = useState(() => readDraft(localStorage, key)),
+  const [draft, setDraftState] = useState(() => readDraft(localStorage, key)),
     [pending, setPending] = useState(false),
     [uploading, setUploading] = useState(false),
     [error, setError] = useState<string | null>(null);
+  const latestDraft = useRef(draft);
+  const setDraft = (update: Draft | ((draft: Draft) => Draft)) => {
+    const next =
+      typeof update === "function" ? update(latestDraft.current) : update;
+    latestDraft.current = next;
+    try {
+      localStorage.setItem(key, JSON.stringify(next));
+    } catch {}
+    setDraftState(next);
+  };
   const [voiceEnabled, setVoiceEnabled] = useState(false),
     [voice, setVoice] = useState<
       "idle" | "starting" | "recording" | "transcribing"
@@ -70,25 +96,52 @@ export function GroupComposer({
     timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listId = useId();
   const [mention, setMention] = useState<{
+      kind: "bot" | "channel";
       start: number;
       end: number;
       query: string;
     } | null>(null),
     [selection, setSelection] = useState(0);
   const creatingMention = useRef<{ start: number; end: number } | null>(null);
-  const options = mention ? matchingBots(bots, memberIds, mention.query) : [];
+  const options =
+    mention?.kind === "bot" ? matchingBots(bots, memberIds, mention.query) : [];
+  const channelOptions =
+    mention?.kind === "channel"
+      ? matchingChannels(rooms, roomId, mention.query)
+      : [];
+  const activeOptions = mention?.kind === "channel" ? channelOptions : options;
   const findMention = (text: string, caret: number) => {
-    const match = text.slice(0, caret).match(/(?:^|[\s(])@([a-z0-9_-]*)$/i);
+    const before = text.slice(0, caret);
+    const botMatch = before.match(/(?:^|[\s(])@([a-z0-9_-]*)$/i);
+    const channelMatch = before.match(/(?:^|[\s(])#([a-z0-9_-]*)$/i);
+    const match =
+      botMatch && channelMatch
+        ? (botMatch.index ?? 0) > (channelMatch.index ?? 0)
+          ? { kind: "bot" as const, match: botMatch }
+          : { kind: "channel" as const, match: channelMatch }
+        : botMatch
+          ? { kind: "bot" as const, match: botMatch }
+          : channelMatch
+            ? { kind: "channel" as const, match: channelMatch }
+            : null;
     setMention(
       match
-        ? { start: caret - match[1]!.length - 1, end: caret, query: match[1]! }
+        ? {
+            kind: match.kind,
+            start: caret - match.match[1]!.length - 1,
+            end: caret,
+            query: match.match[1]!,
+          }
         : null,
     );
     setSelection(0);
   };
-  const insertMention = (bot: Bot) => {
+  const insertMention = (item: Bot | Room) => {
     if (!mention) return;
-    const text = `@${bot.handle} `;
+    const text =
+      mention.kind === "bot"
+        ? `@${(item as Bot).handle} `
+        : `${channelReference(item as Room)} `;
     setDraft((d) => ({
       ...d,
       text: d.text.slice(0, mention.start) + text + d.text.slice(mention.end),
@@ -101,16 +154,13 @@ export function GroupComposer({
     });
   };
   const createMention = () => {
+    if (!mention || mention.kind !== "bot") return;
     creatingMention.current = mention;
     setMention(null);
     onCreateBot();
   };
-  const blocked = paused || pending || uploading || voice !== "idle";
-  useEffect(() => {
-    try {
-      localStorage.setItem(key, JSON.stringify(draft));
-    } catch {}
-  }, [key, draft]);
+  const editorBlocked = paused || uploading || voice !== "idle";
+  const blocked = editorBlocked || pending;
   useEffect(() => {
     alive.current = true;
     rpc.call("composer").then(
@@ -129,6 +179,8 @@ export function GroupComposer({
       const range = insertion.replaceMention ? creatingMention.current : null;
       setDraft((d) => ({
         ...d,
+        ...(insertion.sendMode ? { sendMode: insertion.sendMode } : {}),
+        ...(insertion.reply ? { reply: insertion.reply } : {}),
         text: range
           ? d.text.slice(0, range.start) +
             insertion.text +
@@ -196,7 +248,12 @@ export function GroupComposer({
     setPending(true);
     setError(null);
     try {
-      const prepared = prepareSend(localStorage, key, roomId, draft);
+      const prepared = prepareSend(
+        localStorage,
+        key,
+        roomId,
+        latestDraft.current,
+      );
       setDraft(prepared.draft);
       await rpc.call("send", prepared.payload);
       const cleared = clearSentDraft(localStorage, key, prepared.draft);
@@ -309,18 +366,30 @@ export function GroupComposer({
   };
   return (
     <div className="group-compose-wrap">
-      {mention && !blocked && (
+      {mention && !editorBlocked && (
         <div className="channel-mention-picker">
-          <BotOptions
-            bots={bots}
-            memberIds={memberIds}
-            query={mention.query}
-            selected={Math.min(selection, options.length)}
-            listId={listId}
-            onHover={setSelection}
-            onSelect={insertMention}
-            onCreate={createMention}
-          />
+          {mention.kind === "channel" ? (
+            <ChannelOptions
+              rooms={rooms}
+              currentRoomId={roomId}
+              query={mention.query}
+              selected={Math.min(selection, channelOptions.length)}
+              listId={listId}
+              onHover={setSelection}
+              onSelect={insertMention}
+            />
+          ) : (
+            <BotOptions
+              bots={bots}
+              memberIds={memberIds}
+              query={mention.query}
+              selected={Math.min(selection, options.length)}
+              listId={listId}
+              onHover={setSelection}
+              onSelect={insertMention}
+              onCreate={createMention}
+            />
+          )}
         </div>
       )}
       {error && (
@@ -389,17 +458,17 @@ export function GroupComposer({
           aria-label="Message channel"
           role="combobox"
           aria-autocomplete="list"
-          aria-expanded={!!mention && !blocked}
+          aria-expanded={!!mention && !editorBlocked}
           aria-controls={mention ? listId : undefined}
           aria-activedescendant={
             mention
-              ? `${listId}-${Math.min(selection, options.length)}`
+              ? `${listId}-${Math.min(selection, activeOptions.length)}`
               : undefined
           }
           placeholder={paused ? "Channel archived" : `Message #${roomName}…`}
           value={draft.text}
           maxLength={16000}
-          disabled={paused || pending}
+          disabled={editorBlocked}
           rows={1}
           onChange={(e) => {
             setDraft((d) => ({ ...d, text: e.target.value }));
@@ -433,7 +502,7 @@ export function GroupComposer({
           }}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
-            if (mention && !blocked) {
+            if (mention && !editorBlocked) {
               if (e.key === "Escape") {
                 e.preventDefault();
                 setMention(null);
@@ -443,16 +512,19 @@ export function GroupComposer({
                 e.preventDefault();
                 setSelection(
                   (value) =>
-                    (value + (e.key === "ArrowDown" ? 1 : options.length)) %
-                    (options.length + 1),
+                    (value +
+                      (e.key === "ArrowDown" ? 1 : activeOptions.length)) %
+                    (activeOptions.length + 1),
                 );
                 return;
               }
               if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
                 e.preventDefault();
-                const bot = options[Math.min(selection, options.length)];
-                if (bot) insertMention(bot);
-                else createMention();
+                const item =
+                  activeOptions[Math.min(selection, activeOptions.length)];
+                if (item) insertMention(item);
+                else if (mention.kind === "bot") createMention();
+                else setMention(null);
                 return;
               }
             }
@@ -489,15 +561,17 @@ export function GroupComposer({
             <Icon name="Plus" />
           </Button>
           <span className="group-compose-hint" role="status">
-            {uploading
-              ? "Uploading…"
-              : voice === "recording"
-                ? "Listening…"
-                : voice === "transcribing"
-                  ? "Transcribing…"
-                  : voice === "starting"
-                    ? "Opening microphone…"
-                    : ""}
+            {pending
+              ? "Sending…"
+              : uploading
+                ? "Uploading…"
+                : voice === "recording"
+                  ? "Listening…"
+                  : voice === "transcribing"
+                    ? "Transcribing…"
+                    : voice === "starting"
+                      ? "Opening microphone…"
+                      : ""}
           </span>
           <Button
             variant="ghost"
@@ -521,6 +595,23 @@ export function GroupComposer({
           >
             <Icon name={voice === "recording" ? "Square" : "Mic"} />
           </Button>
+          <SendModePicker
+            value={(() => {
+              try {
+                return parseSendMode(draft.text, draft.sendMode).mode;
+              } catch {
+                return draft.sendMode;
+              }
+            })()}
+            disabled={blocked}
+            onChange={(sendMode) =>
+              setDraft((d) => ({
+                ...d,
+                sendMode,
+                text: parseSendMode(d.text).text,
+              }))
+            }
+          />
           <Button
             size="icon"
             className="h-8 w-8 max-md:pointer-coarse:h-10 max-md:pointer-coarse:w-10"

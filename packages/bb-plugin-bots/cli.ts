@@ -13,6 +13,7 @@ import type { Store } from "./store";
 import type { ChannelAutomations } from "./channel-automations";
 import {
   channelAutomationCreate,
+  channelAutomationUpdate,
   channelAutomationList,
   channelAutomationAction,
 } from "./automation-contract";
@@ -38,6 +39,16 @@ const profileFlags = [
   "interval",
 ];
 const commands = [
+  [
+    "channel schedule-update",
+    "Edit a scheduled task",
+    "<channel> <automation-id> [--name NAME] [--text TEXT] [--cron EXPR --timezone ZONE | --at ISO_TIME]",
+  ],
+  [
+    "publish-file",
+    "Attach a local file to your active bot response",
+    "<absolute-path> [--alt TEXT]",
+  ],
   [
     "channel automations",
     "List scheduled work in this channel",
@@ -163,7 +174,7 @@ const commands = [
   [
     "channel send",
     "Send a message or reply; mentions invite bots",
-    "<channel> [--text TEXT | --file PATH] [--attach PATH ...] [--attachment ID ...] [--reply-to ID] [--request-id UUID]",
+    "<channel> [--text TEXT | --file PATH] [--mode auto|steer|followup|fork] [--attach PATH ...] [--attachment ID ...] [--reply-to ID] [--request-id UUID]",
   ],
   [
     "channel react",
@@ -297,6 +308,7 @@ export function registerCli(
     alt?: string,
   ) => Promise<unknown>,
   automations?: ChannelAutomations,
+  publishFile?: typeof publishImage,
 ) {
   // Both entry points execute exactly the same validated operations.
   async function call<K extends Method>(
@@ -503,6 +515,7 @@ export function registerCli(
           [
             "channel automations",
             "channel schedule",
+            "channel schedule-update",
             "channel automation",
           ].includes(command!)
         ) {
@@ -519,6 +532,49 @@ export function registerCli(
                   ...(a.has("offset")
                     ? { offset: Number(a.text("offset")) }
                     : {}),
+                }),
+                ctx.threadId,
+              ),
+            );
+          }
+          if (command === "channel schedule-update") {
+            const a = argumentsFor(rest, [
+              "name",
+              "text",
+              "cron",
+              "timezone",
+              "at",
+            ]);
+            const [selector, automationId] = a.positional(2);
+            if (a.has("at") && (a.has("cron") || a.has("timezone")))
+              throw new UsageError(
+                "Choose a recurring schedule or a one-time date.",
+              );
+            const at = a.text("at");
+            if (at && !/(Z|[+-]\d{2}:\d{2})$/i.test(at))
+              throw new UsageError(
+                "--at needs an ISO timestamp with a UTC offset.",
+              );
+            return emit(
+              await automations.update(
+                channelAutomationUpdate.parse({
+                  channelId: channel(selector!, ctx.threadId).id,
+                  automationId,
+                  ...(a.has("name") ? { name: a.required("name") } : {}),
+                  ...(a.has("text") ? { prompt: a.required("text") } : {}),
+                  ...(at
+                    ? {
+                        trigger: { triggerType: "once", runAt: Date.parse(at) },
+                      }
+                    : a.has("cron") || a.has("timezone")
+                      ? {
+                          trigger: {
+                            triggerType: "schedule",
+                            cron: a.required("cron"),
+                            timezone: a.required("timezone"),
+                          },
+                        }
+                      : {}),
                 }),
                 ctx.threadId,
               ),
@@ -592,14 +648,17 @@ export function registerCli(
             ),
           );
         }
-        if (command === "publish-image") {
+        if (command === "publish-image" || command === "publish-file") {
           const a = argumentsFor(rest, ["alt"]);
           const [path] = a.positional(1);
           if (!ctx.threadId)
             throw new UsageError(
               "Run this command from an active bot channel response.",
             );
-          return emit(await publishImage(ctx.threadId, path!, a.text("alt")));
+          const publish =
+            command === "publish-file" ? publishFile : publishImage;
+          if (!publish) throw new UsageError("File publishing is unavailable.");
+          return emit(await publish(ctx.threadId, path!, a.text("alt")));
         }
         if (caller?.botId && command === "create")
           throw new UsageError(
@@ -921,7 +980,15 @@ export function registerCli(
         if (command === "channel send") {
           const a = argumentsFor(
             rest,
-            ["text", "file", "machine", "reply-to", "request-id", "mime-type"],
+            [
+              "text",
+              "file",
+              "machine",
+              "reply-to",
+              "request-id",
+              "mime-type",
+              "mode",
+            ],
             [],
             ["attach", "attachment"],
           );
@@ -950,6 +1017,7 @@ export function registerCli(
                   requestId,
                   attachmentIds,
                   replyTo: a.text("reply-to"),
+                  sendMode: a.text("mode"),
                 }),
                 ctx.threadId,
               ),

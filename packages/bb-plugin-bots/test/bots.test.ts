@@ -64,7 +64,11 @@ const setup = () => {
             "BB requires nonempty first input",
           );
           if (args.origin === "sdk" && args.visibility === "hidden")
-            assert.equal(args.sendAt, undefined, "Title work should run immediately");
+            assert.equal(
+              args.sendAt,
+              undefined,
+              "Title work should run immediately",
+            );
           else
             assert.ok(
               args.sendAt! > Date.now(),
@@ -138,10 +142,7 @@ test("the first message gives a blank channel an agent-generated title", async (
     assert.equal(x.store.messages(blank.id).length, 1);
     const [spawn] = x.harness.inspection.sdk.callsTo("threads.spawn");
     assert.equal((spawn?.[0] as { origin?: string }).origin, "sdk");
-    assert.equal(
-      x.harness.inspection.sdk.callsTo("threads.delete").length,
-      1,
-    );
+    assert.equal(x.harness.inspection.sdk.callsTo("threads.delete").length, 1);
     assert.equal(x.harness.inspection.sdk.callsTo("threads.stop").length, 1);
   } finally {
     await x.close();
@@ -157,11 +158,18 @@ test("membership notices do not suppress the first channel title", async () => {
     x.harness.inspection.sdk.stub("threads.delete", async () => ({ ok: true }));
     const blank: Room = { ...x.room, id: randomUUID(), name: "New channel" };
     x.store.putRoom(blank);
-    x.runtime.postSystemMessage(blank, "Atlas joined the channel.", "bot_joined");
+    x.runtime.postSystemMessage(
+      blank,
+      "Atlas joined the channel.",
+      "bot_joined",
+    );
     x.runtime.send(blank, "Discuss the launch plan", randomUUID());
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(x.store.room(blank.id).name, "Launch room");
-    assert.equal(x.store.firstMessage(blank.id)?.text, "Discuss the launch plan");
+    assert.equal(
+      x.store.firstMessage(blank.id)?.text,
+      "Discuss the launch plan",
+    );
   } finally {
     await x.close();
   }
@@ -307,15 +315,16 @@ test("startup recovery reuses an in-flight title worker instead of spawning a du
     ]);
     x.harness.inspection.sdk.stub("threads.stop", async () => ({ ok: true }));
     x.harness.inspection.sdk.stub("threads.delete", async () => ({ ok: true }));
-    x.runtime.send(blank, "Recover this room title after a reload", randomUUID());
+    x.runtime.send(
+      blank,
+      "Recover this room title after a reload",
+      randomUUID(),
+    );
     await new Promise((resolve) => setTimeout(resolve, 15));
     recovered = new Runtime(x.bb, x.store);
     await recovered.recoverRoomTitles();
     await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(
-      x.harness.inspection.sdk.callsTo("threads.spawn").length,
-      1,
-    );
+    assert.equal(x.harness.inspection.sdk.callsTo("threads.spawn").length, 1);
     assert.equal(x.store.room(blank.id).name, "Recovered after reload");
   } finally {
     await recovered?.dispose();
@@ -370,7 +379,10 @@ test("startup recovery prefers an active title worker over a stale failed duplic
     const deleted = x.harness.inspection.sdk
       .callsTo("threads.delete")
       .map((call) => (call[0] as { threadId?: string }).threadId);
-    assert.deepEqual(new Set(deleted), new Set(["thr_title_stale", "thr_title_live"]));
+    assert.deepEqual(
+      new Set(deleted),
+      new Set(["thr_title_stale", "thr_title_live"]),
+    );
     await recovered.dispose();
   } finally {
     await x.close();
@@ -390,7 +402,11 @@ test("failed title work stops its hidden thread before falling back", async () =
     x.harness.inspection.sdk.stub("threads.delete", async () => ({ ok: true }));
     const blank: Room = { ...x.room, id: randomUUID(), name: "New channel" };
     x.store.putRoom(blank);
-    x.runtime.send(blank, "Fallback title after provider failure", randomUUID());
+    x.runtime.send(
+      blank,
+      "Fallback title after provider failure",
+      randomUUID(),
+    );
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(
       x.store.room(blank.id).name,
@@ -638,9 +654,49 @@ test("scheduled prompts stay out of the visible channel transcript", async () =>
     x.store.putMessage(reply);
     const room = (await x.harness.behavior.callRpc("room", {
       id: x.room.id,
-    })) as { messages: typeof reply[]; parents: typeof reply[] };
-    assert.deepEqual(room.messages.map((message) => message.id), [reply.id]);
+    })) as { messages: (typeof reply)[]; parents: (typeof reply)[] };
+    assert.deepEqual(
+      room.messages.map((message) => message.id),
+      [reply.id],
+    );
     assert.equal(room.parents.length, 0);
+  } finally {
+    await x.close();
+  }
+});
+
+test("channel room activity includes the latest hidden-thread progress line", async () => {
+  const x = setup();
+  await plugin(x.bb);
+  try {
+    x.runtime.send(x.room, "@atlas inspect the runtime", randomUUID());
+    await x.runtime.drive(x.a);
+    const job = x.store.work(x.a.id)[0]!;
+    x.harness.inspection.sdk.stub("threads.timeline", async () => ({
+      rows: [
+        {
+          id: "assistant-progress",
+          kind: "conversation",
+          role: "assistant",
+          sourceSeqEnd: 4,
+          text: "I’m checking the runtime before I change it.",
+        },
+        {
+          id: "command-progress",
+          kind: "work",
+          sourceSeqEnd: 5,
+          workKind: "command",
+          command: "git status --short --branch",
+        },
+      ],
+    }));
+    const data = (await x.harness.behavior.callRpc("room", {
+      id: x.room.id,
+    })) as { jobs: Array<{ id: string; activitySnippet?: string }> };
+    assert.equal(
+      data.jobs.find((candidate) => candidate.id === job.id)?.activitySnippet,
+      "Running git status --short --branch",
+    );
   } finally {
     await x.close();
   }
@@ -687,6 +743,7 @@ test("queued bot responses use current room context when they start", async () =
 test("mention follow-ups are bounded and PASS remains silent", async () => {
   const x = setup();
   try {
+    x.runtime.returnDecision = async () => true;
     const root = randomUUID();
     x.runtime.send(x.room, "@atlas begin", root);
     let count = 0;
@@ -700,6 +757,7 @@ test("mention follow-ups are bounded and PASS remains silent", async () => {
       x.store.putJob(job);
       count++;
       await x.runtime.driveRoom(x.room);
+      await new Promise((resolve) => setImmediate(resolve));
     }
     assert.equal(count, 3);
     assert.equal(x.store.runs(x.room.id)[0]!.status, "done");
@@ -773,6 +831,7 @@ test("unrelated threads cannot claim a bot identity using metadata", async () =>
     assert.deepEqual(await host.harness.behavior.callRpc("list", null), {
       bots: [],
       rooms: [],
+      activeRoomIds: [],
     });
   } finally {
     await host.harness.lifecycle.dispose();
@@ -836,7 +895,7 @@ test("removed members cannot publish completed but uncollected answers", async (
   }
 });
 
-test("fresh job threads prevent delayed events from settling the next task", async () => {
+test("persistent sessions reject a delayed answer from an earlier request", async () => {
   const x = setup();
   try {
     x.runtime.enqueue(x.a, {
@@ -854,8 +913,11 @@ test("fresh job threads prevent delayed events from settling the next task", asy
     });
     await x.runtime.drive(x.a);
     const second = x.store.job("two")!;
-    assert.notEqual(second.threadId, first.threadId);
-    x.runtime.complete(first.threadId!, "duplicate old answer");
+    assert.equal(second.threadId, first.threadId);
+    x.harness.inspection.sdk.stub("threads.timeline", async () => ({
+      rows: [{ kind: "conversation", role: "user", text: jobPrompt(first) }],
+    }));
+    await x.runtime.settleFromEvent(first.threadId!, "duplicate old answer");
     assert.equal(x.store.job("two")!.status, "running");
     assert.equal(x.store.job("two")!.reply, null);
   } finally {
@@ -1204,7 +1266,7 @@ test("hourly limits count dispatches that never became active", async () => {
     });
     await assert.rejects(
       x.runtime.drive(x.a),
-      /Hourly limit reached \(30 automatic turns\)/,
+      /Bot limit reached \(30 turns per hour\)/,
     );
     assert.equal(x.store.job("over-limit")!.status, "queued");
   } finally {
@@ -1714,13 +1776,73 @@ test("the working stub stops the running response rather than a newer queued req
     x.runtime.send(x.room, "@atlas first", randomUUID());
     await x.runtime.drive(x.a);
     const current = x.store.work(x.a.id)[0]!;
-    x.runtime.send(x.room, "@atlas next", randomUUID());
+    x.runtime.send(
+      x.room,
+      "@atlas next",
+      randomUUID(),
+      [],
+      null,
+      undefined,
+      undefined,
+      "followup",
+    );
     const visible = channelWork(x.store.roomJobs(x.room.id));
     assert.equal(visible[0]?.id, current.id);
     await x.harness.behavior.callRpc("cancelJob", { id: visible[0]!.id });
     assert.equal(x.store.job(current.id)?.status, "cancelled");
     assert.equal(x.store.work(x.a.id).length, 1);
     assert.equal(x.store.work(x.a.id)[0]?.status, "queued");
+  } finally {
+    await x.close();
+  }
+});
+
+test("an explicit steer changes the active thread and publishes under the new message", async () => {
+  const x = setup();
+  try {
+    x.runtime.send(x.room, "@atlas first", randomUUID());
+    await x.runtime.drive(x.a);
+    const current = x.store.work(x.a.id)[0]!;
+    const originalRun = x.store
+      .runs(x.room.id)
+      .find((run) => run.id === current.runId)!;
+    x.runtime.busy.set(x.a.id, { threadId: current.threadId!, at: Date.now() });
+    const followUp = x.runtime.send(
+      x.room,
+      "@atlas use the smaller scope",
+      randomUUID(),
+      [],
+      null,
+      undefined,
+      undefined,
+      "steer",
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const steered = x.store.job(current.id)!;
+    assert.equal(steered.runId, followUp.runId);
+    assert.equal(steered.triggerMessageId, followUp.id);
+    assert.equal(
+      x.store
+        .runs(x.room.id)
+        .find((run) => run.id === originalRun.id)
+        ?.pendingJobIds.includes(current.id),
+      false,
+    );
+    assert.equal(
+      (
+        x.harness.inspection.sdk.callsTo("threads.send").at(-1)?.[0] as {
+          mode?: string;
+        }
+      )?.mode,
+      "steer",
+    );
+    x.runtime.complete(current.threadId!, "Steered answer");
+    await x.runtime.driveRoom(x.store.room(x.room.id));
+    assert.equal(
+      x.store.messages(x.room.id).find((message) => message.id === current.id)
+        ?.replyTo,
+      followUp.id,
+    );
   } finally {
     await x.close();
   }
@@ -2775,6 +2897,310 @@ test("router validates model output and uses provider capabilities for both atte
     assert.equal(
       x.store.db.prepare("SELECT * FROM routing_sessions").all().length,
       0,
+    );
+  } finally {
+    await x.close();
+  }
+});
+
+test("dispatching responses can use channel tools while scheduled recursion remains blocked", async () => {
+  const x = setup();
+  await plugin(x.bb);
+  try {
+    const m = x.runtime.send(x.room, "@atlas Check", randomUUID());
+    await x.runtime.drive(x.a);
+    const job = x.store.work(x.a.id)[0]!;
+    x.store.putJob({ ...job, status: "dispatching" });
+    assert.equal(agentAuthor(x.store, job.threadId!).botId, x.a.id);
+    await x.harness.behavior.callAgentTool(
+      "bots_react",
+      { messageId: m.id, emoji: "👍", active: true },
+      { threadId: job.threadId! },
+    );
+    await x.harness.behavior.callAgentTool(
+      "bots_channel_read",
+      { id: x.room.id },
+      { threadId: job.threadId! },
+    );
+    x.store.putJob({ ...x.store.job(job.id)!, automationId: "auto_test" });
+    await assert.rejects(
+      x.harness.behavior.callAgentTool(
+        "bots_channel_automation_create",
+        {
+          name: "Recursive",
+          prompt: "Run again",
+          requestId: randomUUID(),
+          trigger: { triggerType: "once", runAt: Date.now() + 60000 },
+        },
+        { threadId: job.threadId! },
+      ),
+      /Scheduled channel work cannot/,
+    );
+  } finally {
+    await x.close();
+  }
+});
+
+test("channel context revisions reject stale saves and stay scoped across channels", async () => {
+  const x = setup();
+  await plugin(x.bb);
+  try {
+    const first = await x.harness.behavior.callRpc("channelContext", {
+      id: x.room.id,
+    });
+    assert.equal((first as { version: number }).version, 0);
+    await x.harness.behavior.callRpc("saveChannelContext", {
+      id: x.room.id,
+      version: 0,
+      brief: "Use SQLite",
+      decisions: "Ship Monday",
+      memory: "Channel private fact",
+      attachmentIds: [],
+    });
+    await assert.rejects(
+      x.harness.behavior.callRpc("saveChannelContext", {
+        id: x.room.id,
+        version: 0,
+        memory: "Stale overwrite",
+      }),
+      /changed/,
+    );
+    const other = { ...x.room, id: randomUUID() };
+    x.store.putRoom(other);
+    assert.equal(x.runtime.data.context(other.id).memory, "");
+    const revisions = x.runtime.data.revisions(`channel:${x.room.id}`);
+    assert.equal(revisions.length, 2);
+    x.runtime.send(x.room, "@atlas Check context", randomUUID());
+    await x.runtime.drive(x.a);
+    const job = x.store.work(x.a.id)[0]!;
+    assert.match(job.text, /Use SQLite/);
+    assert.match(job.text, /Ship Monday/);
+    assert.match(job.text, /Channel private fact/);
+    await x.harness.behavior.callAgentTool(
+      "bots_channel_context",
+      { channelId: x.room.id, version: 1, memory: "Updated fact" },
+      { threadId: job.threadId! },
+    );
+    assert.equal(x.runtime.data.context(x.room.id).brief, "Use SQLite");
+    assert.equal(x.runtime.data.context(x.room.id).memory, "Updated fact");
+    x.store.putRoom({ ...other, memberIds: [x.b.id] });
+    await assert.rejects(
+      x.harness.behavior.callAgentTool(
+        "bots_channel_context",
+        { channelId: other.id },
+        { threadId: job.threadId! },
+      ),
+      /invited/,
+    );
+  } finally {
+    await x.close();
+  }
+});
+
+test("general file publication becomes visible only when its response posts", async () => {
+  const x = setup();
+  await plugin(x.bb);
+  try {
+    const bytes = Buffer.from("name,value\nverified,42\n");
+    x.harness.inspection.sdk.stub("files.read", async () => ({
+      path: "/tmp/a/report.csv",
+      content: bytes.toString("base64"),
+      contentEncoding: "base64",
+      sizeBytes: bytes.length,
+    }));
+    const m = x.runtime.send(x.room, "@atlas Publish report", randomUUID());
+    await x.runtime.drive(x.a);
+    const job = x.store.requestJobs(m.id)[0]!;
+    x.store.putJob({ ...job, status: "dispatching" });
+    await x.harness.behavior.callAgentTool(
+      "bots_publish_file",
+      { path: "/tmp/a/report.csv" },
+      { threadId: job.threadId! },
+    );
+    assert.equal(x.runtime.data.files(x.room.id).files.length, 0);
+    assert.equal(x.store.job(job.id)?.outputAttachments[0]?.type, "localFile");
+    x.runtime.complete(job.threadId!, "Report ready");
+    await x.runtime.driveRoom(x.room);
+    assert.equal(x.runtime.data.files(x.room.id).files[0]?.name, "report.csv");
+    assert.equal(x.store.message(job.id)?.attachments.length, 1);
+  } finally {
+    await x.close();
+  }
+});
+
+test("message edits preserve retry identity and original queued tasks", async () => {
+  const x = setup();
+  await plugin(x.bb);
+  try {
+    const requestId = randomUUID(),
+      text = "@atlas Original request";
+    const m = x.runtime.send(x.room, text, requestId);
+    await x.harness.behavior.callRpc("editMessage", {
+      id: x.room.id,
+      messageId: m.id,
+      text: "Corrected transcript",
+      expectedText: text,
+    });
+    assert.equal(x.runtime.send(x.room, text, requestId).id, m.id);
+    assert.equal(x.store.requestJobs(m.id).length, 1);
+    await x.runtime.drive(x.a);
+    assert.match(
+      x.store.requestJobs(m.id)[0]!.text,
+      /Consider this message from You:\n@atlas Original request/,
+    );
+    await assert.rejects(
+      x.harness.behavior.callRpc("editMessage", {
+        id: x.room.id,
+        messageId: m.id,
+        text: "stale",
+        expectedText: text,
+      }),
+      /changed/,
+    );
+    await x.harness.behavior.callRpc("saveMessage", {
+      id: x.room.id,
+      messageId: m.id,
+      saved: true,
+    });
+    const saved = (await x.harness.behavior.callRpc("savedMessages", {
+      id: x.room.id,
+    })) as { text: string }[];
+    assert.equal(saved[0]?.text, "Corrected transcript");
+    x.runtime.complete(x.store.requestJobs(m.id)[0]!.threadId!, "Bot reply");
+    await x.runtime.driveRoom(x.room);
+    await assert.rejects(
+      x.harness.behavior.callRpc("editMessage", {
+        id: x.room.id,
+        messageId: x.store.requestJobs(m.id)[0]!.id,
+        text: "Forged",
+        expectedText: "Bot reply",
+      }),
+      /Only your own/,
+    );
+  } finally {
+    await x.close();
+  }
+});
+
+test("saved usage limits survive reload and enforce channel turn capacity", async () => {
+  const x = setup();
+  await plugin(x.bb);
+  try {
+    const limits = {
+      turnsPerHour: 1,
+      turnsPerDay: 2,
+      minutesPerTurn: 5,
+      concurrentForks: 1,
+    };
+    await x.harness.behavior.callRpc("saveLimits", {
+      kind: "channel",
+      id: x.room.id,
+      limits,
+    });
+    x.runtime.send(x.store.room(x.room.id), "@atlas First", randomUUID());
+    await x.runtime.drive(x.a);
+    const job = x.store.work(x.a.id)[0]!;
+    x.store.putJob({ ...job, status: "done", startedAt: Date.now() });
+    x.runtime.busy.clear();
+    x.runtime.send(x.store.room(x.room.id), "@atlas Second", randomUUID());
+    await assert.rejects(x.runtime.drive(x.a), /Channel limit reached/);
+    assert.equal(new Store(x.store.db).room(x.room.id).limits?.turnsPerHour, 1);
+    assert.equal(x.runtime.data.usage(x.room.id).turns, 1);
+    assert.equal(x.runtime.data.usage(x.room.id).active, 1);
+  } finally {
+    await x.close();
+  }
+});
+
+test("channel queries use indexes and bound run history before parsing", async () => {
+  const x = setup();
+  try {
+    for (const sql of [
+      "SELECT json FROM room_messages WHERE room_id=? ORDER BY rowid DESC LIMIT 200",
+      "SELECT json FROM room_runs WHERE room_id=? ORDER BY rowid DESC LIMIT 50",
+      "SELECT json FROM jobs WHERE json_extract(json,'$.roomId')=? ORDER BY created_at DESC LIMIT 100",
+    ]) {
+      const plan = x.store.db
+        .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+        .all(x.room.id) as { detail: string }[];
+      assert.ok(
+        plan.some((r) => r.detail.includes("USING INDEX")),
+        JSON.stringify(plan),
+      );
+      assert.ok(
+        !plan.some((r) => r.detail.startsWith("SCAN ")),
+        JSON.stringify(plan),
+      );
+    }
+    for (let i = 0; i < 80; i++)
+      x.runtime.send(x.room, `@atlas fixture ${i}`, randomUUID());
+    assert.equal(x.store.runs(x.room.id, 50).length, 50);
+  } finally {
+    await x.close();
+  }
+});
+
+test("saved reference files survive a full set of current uploads", async () => {
+  const x = setup();
+  try {
+    const references = Array.from({ length: 10 }, (_, i) => ({
+      id: randomUUID(),
+      roomId: x.room.id,
+      projectId: x.a.projectId,
+      path: `/tmp/ref-${i}.txt`,
+      name: `ref-${i}.txt`,
+      type: "localFile" as const,
+      sizeBytes: 1,
+    }));
+    const current = references.map((a, i) => ({
+      ...a,
+      id: randomUUID(),
+      name: `new-${i}.txt`,
+      path: `/tmp/new-${i}.txt`,
+    }));
+    for (const a of [...references, ...current]) x.store.putAttachment(a);
+    assert.throws(
+      () =>
+        x.runtime.data.saveContext(
+          x.room.id,
+          {
+            brief: "",
+            decisions: "",
+            memory: "",
+            attachmentIds: [references[0]!.id],
+          },
+          0,
+          "You",
+        ),
+      /sent file/,
+    );
+    x.runtime.send(
+      { ...x.room, memberIds: [] },
+      "Reference files",
+      randomUUID(),
+      references,
+    );
+    x.runtime.data.saveContext(
+      x.room.id,
+      {
+        brief: "",
+        decisions: "",
+        memory: "",
+        attachmentIds: references.map((a) => a.id),
+      },
+      0,
+      "You",
+    );
+    const m = x.runtime.send(
+      x.room,
+      "@atlas Read all references and uploads",
+      randomUUID(),
+      current,
+    );
+    await x.runtime.drive(x.a);
+    assert.deepEqual(
+      new Set(x.store.requestJobs(m.id)[0]!.attachments.map((a) => a.id)),
+      new Set([...references, ...current].map((a) => a.id)),
     );
   } finally {
     await x.close();

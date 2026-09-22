@@ -1,3 +1,7 @@
+import { linkChannelReferences } from "./channel-references";
+import { Delegations, type Delegation } from "./delegations";
+import { ChannelData } from "./channel-data";
+import { defaultLimits } from "./workspace-contract";
 import { createHash, randomUUID } from "node:crypto";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type {
@@ -12,6 +16,16 @@ import type {
 import { isAutomationTrigger } from "./contract";
 import { Store } from "./store";
 import { chatGuidance } from "./chat-guidance";
+import { activitySnippetFromTimeline } from "./activity";
+import { isExecuting } from "./job-state";
+import {
+  parseSendMode,
+  isForkConversation,
+  type SendMode,
+  type DispatchAction,
+  type RoutingDecision,
+  type RoutingTask,
+} from "./send-mode";
 export const errorText = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
 export const missingThread = (cause: unknown) =>
@@ -36,13 +50,56 @@ export function recipients(text: string, members: Bot[]) {
     : selected;
 }
 export const jobPrompt = (job: Job) =>
-  `Read MISSION.md and MEMORY.md before acting.\n\n${job.text}\n\nRequest: ${job.id}`;
+  `Read MISSION.md and MEMORY.md before acting.${isForkConversation(job.conversationKey) ? " This is a separate fork. Handle only the new request; do not resume inherited work. The primary session owns shared MEMORY.md; do not edit it from this fork. Include useful durable findings in your channel answer." : ""}\n\n${job.text}\n\nRequest: ${job.id}`;
+
+const jobInput = (job: Job) => [
+  { type: "text" as const, text: jobPrompt(job), mentions: [] },
+  ...job.attachments.map((attachment) =>
+    attachment.type === "localImage"
+      ? { type: "localImage" as const, path: attachment.path }
+      : {
+          type: "localFile" as const,
+          path: attachment.path,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+        },
+  ),
+];
+
+type TimelineRowLike = {
+  kind?: unknown;
+  role?: unknown;
+  text?: unknown;
+  children?: unknown;
+};
+
+function timelineRows(rows: unknown): TimelineRowLike[] {
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((row) => {
+    if (!row || typeof row !== "object") return [];
+    const value = row as TimelineRowLike;
+    return [value, ...timelineRows(value.children)];
+  });
+}
 
 const autoTitlePattern = /^New channel(?: \d+)?$/iu;
 const maxRoomTitleLength = 80;
 export const roomTitleThreadPrefix = "Bots channel title · ";
 type TitleWorker = { id: string; status: string; createdAt?: number };
 type TitleTask = { controller: AbortController; promise: Promise<void> };
+type SteerRequest = {
+  roomId: string;
+  jobId: string;
+  botId: string;
+  message: RoomMessage;
+  previous: {
+    runId: string;
+    triggerMessageId: string | null;
+    text: string;
+    attachments: Attachment[];
+  };
+};
 
 function titleWorkerPriority(status: string) {
   if (["active", "starting", "pending"].includes(status)) return 3;
@@ -93,6 +150,7 @@ export function fallbackRoomTitle(message: RoomMessage): string | null {
 }
 
 export type MessageAuthor = {
+  jobId?: string;
   automationId?: string;
   botId: string | null;
   speaker: string;
@@ -104,20 +162,30 @@ export class Runtime {
   private routing = new Map<string, Promise<void>>();
   private routingAborts = new Map<string, AbortController>();
   private titleTasks = new Map<string, TitleTask>();
+  private returnTasks = new Map<string, Promise<void>>();
+  returnDecision?: (group: Delegation, signal: AbortSignal) => Promise<boolean>;
+  readonly delegations: Delegations;
+  private steerTasks = new Map<string, Promise<void>>();
   route?: (
     message: RoomMessage,
     room: Room,
     members: Bot[],
     signal: AbortSignal,
-  ) => Promise<string[]>;
+    tasks?: RoutingTask[],
+    requiredBotIds?: string[],
+  ) => Promise<(string | RoutingDecision)[]>;
   readonly busy = new Map<string, { threadId: string; at: number }>();
   readonly abort = new AbortController();
+  readonly data: ChannelData;
   constructor(
     readonly bb: BbPluginApi,
     readonly store: Store,
-  ) {}
+  ) {
+    this.data = new ChannelData(store);
+    this.delegations = new Delegations(store);
+  }
   changed() {
-    this.bb.realtime.publish("changed", {});
+    this.bb.realtime.publish("changed", { revision: randomUUID() });
   }
   async locked<T>(id: string, work: () => Promise<T>): Promise<T> {
     const next = (this.locks.get(id) ?? Promise.resolve())
@@ -198,6 +266,84 @@ export class Runtime {
     this.changed();
     return c;
   }
+  private async forkConversation(bot: Bot, job: Job): Promise<Conversation> {
+    const sourceThreadId = job.forkSourceThreadId!;
+    // The dispatch hook holds the first input until both conversation and job are registered.
+    const thread = await this.bb.sdk.threads.fork({
+      sourceThreadId,
+      visibility: "hidden",
+      title: `${bot.name} · ${this.store.room(job.roomId!).name} · Fork`,
+      pluginMetadata: { botId: bot.id, conversationKey: job.conversationKey },
+      input: [
+        { type: "text", text: jobPrompt(job), mentions: [] },
+        ...job.attachments.map((a) =>
+          a.type === "localImage"
+            ? { type: "localImage" as const, path: a.path }
+            : {
+                type: "localFile" as const,
+                path: a.path,
+                name: a.name,
+                mimeType: a.mimeType,
+                sizeBytes: a.sizeBytes,
+              },
+        ),
+      ],
+    });
+    const c: Conversation = {
+      id: randomUUID(),
+      botId: bot.id,
+      key: job.conversationKey,
+      threadId: thread.id,
+      title: `${this.store.room(job.roomId!).name} · Fork`,
+      kind: "group",
+      createdAt: Date.now(),
+    };
+    this.store.putConversation(c);
+    return c;
+  }
+
+  async driveForks(bot: Bot) {
+    const first = new Map<string, Job>();
+    for (const job of this.store.work(bot.id))
+      if (
+        isForkConversation(job.conversationKey) &&
+        !first.has(job.conversationKey)
+      )
+        first.set(job.conversationKey, job);
+    // Reconcile active forks first, then fill available slots. A blocked dispatch
+    // must not prevent another fork from completing or being cleaned up.
+    let active = [...first.values()].filter(
+      (j) => j.status !== "queued",
+    ).length;
+    const failures: unknown[] = [];
+    const ordered = [...first.values()].sort(
+      (a, b) => Number(a.status === "queued") - Number(b.status === "queued"),
+    );
+    for (const job of ordered) {
+      if (
+        job.status === "queued" &&
+        active >= (bot.limits ?? defaultLimits).concurrentForks
+      )
+        continue;
+      const wasQueued = job.status === "queued";
+      try {
+        await this.drive(bot, job);
+      } catch (cause) {
+        failures.push(cause);
+      }
+      if (!wasQueued && !this.store.work(bot.id).some((j) => j.id === job.id))
+        active--;
+      if (
+        wasQueued &&
+        ["running", "dispatching"].includes(
+          this.store.job(job.id)?.status ?? "",
+        )
+      )
+        active++;
+    }
+    if (failures.length) throw failures[0];
+  }
+
   enqueue(
     bot: Bot,
     args: Partial<Job> & Pick<Job, "id" | "text" | "conversationKey">,
@@ -274,7 +420,11 @@ export class Runtime {
     replyTo: string | null = null,
     author?: MessageAuthor,
     scheduled?: { automationId: string; botId: string; name: string },
+    requestedMode: SendMode = "auto",
   ): RoomMessage {
+    const parsed = parseSendMode(text, requestedMode);
+    text = parsed.text;
+    const sendMode = scheduled ? "followup" : parsed.mode;
     const existing = this.store.message(requestId);
     if (existing) {
       if (
@@ -283,7 +433,8 @@ export class Runtime {
         existing.sourceThreadId !== author?.sourceThreadId ||
         existing.automationId !==
           (scheduled?.automationId ?? author?.automationId) ||
-        existing.text !== text ||
+        (existing.sentText ?? existing.text) !== text ||
+        (existing.sendMode ?? "auto") !== sendMode ||
         existing.replyTo !== replyTo ||
         JSON.stringify(existing.attachments.map((a) => a.id)) !==
           JSON.stringify(attachments.map((a) => a.id))
@@ -364,8 +515,15 @@ export class Runtime {
       ...((scheduled?.automationId ?? author?.automationId)
         ? { automationId: scheduled?.automationId ?? author?.automationId }
         : {}),
-      ...(author ? { sourceThreadId: author.sourceThreadId } : {}),
-      text,
+      ...(author
+        ? {
+            sourceThreadId: author.sourceThreadId,
+            ...(author.jobId ? { sourceJobId: author.jobId } : {}),
+          }
+        : {}),
+      text: linkChannelReferences(text, this.store.rooms()),
+      sentText: text,
+      ...(sendMode !== "auto" ? { sendMode } : {}),
       createdAt: now,
       attachments,
       replyTo,
@@ -374,41 +532,74 @@ export class Runtime {
       !isAutomationTrigger(m) &&
       isAutoTitlePlaceholder(room.name) &&
       !this.store.firstMessage(room.id);
+    const ancestors = this.messageAncestors(m);
     const members = room.memberIds
       .map((id) => this.store.get(id))
-      .filter((b) => !b.retired && b.id !== author?.botId);
+      .filter(
+        (b) => !b.retired && b.id !== author?.botId && !ancestors.has(b.id),
+      );
     const replyBot = replyTo ? this.store.message(replyTo)?.botId : null;
     const explicit = members
       .filter((b) => mentioned(text, b.handle) || b.id === replyBot)
       .map((b) => b.id);
     const all = mentioned(text, "all") || mentioned(text, "everyone");
+    const returnOnly =
+      !all &&
+      !explicit.length &&
+      [...ancestors].some(
+        (id) => id === replyBot || mentioned(text, this.store.get(id).handle),
+      );
     const mode = room.responseBehavior ?? "everyone";
-    const selected = scheduled
+    let selected = scheduled
       ? [scheduled.botId]
       : all
         ? members.map((b) => b.id)
         : explicit.length
           ? explicit
-          : mode === "everyone"
-            ? members.map((b) => b.id)
-            : [];
+          : members.length === 1
+            ? [members[0]!.id]
+            : mode === "everyone"
+              ? members.map((b) => b.id)
+              : [];
+    if (returnOnly) selected = [];
     if (
       !scheduled &&
-      !all &&
-      !explicit.length &&
-      mode === "smart" &&
-      members.length
+      !returnOnly &&
+      members.length &&
+      ((mode === "smart" &&
+        members.length > 1 &&
+        !all &&
+        !explicit.length &&
+        !(sendMode !== "auto" && selected.length)) ||
+        (sendMode === "auto" &&
+          this.routingTasks(m, members).some(
+            (task) => selected.includes(task.botId) && task.busy,
+          )))
     ) {
       run.routing = "pending";
       run.routingDepth = author?.depth ?? 0;
+      run.routingBotIds = selected;
+      selected = [];
     }
+    const steerRequests: SteerRequest[] = [];
     this.store.db.transaction(() => {
       this.store.putMessage(m);
       this.store.claimAttachments(attachments.map((a) => a.id));
-      for (const botId of selected)
-        if (botId !== author?.botId)
-          this.invite(room, run, m, botId, author?.depth ?? 0);
+      for (const botId of selected) {
+        if (botId === author?.botId) continue;
+        const action = sendMode === "auto" ? "followup" : sendMode;
+        const steer = this.dispatchMessage(
+          room,
+          run,
+          m,
+          botId,
+          author?.depth ?? 0,
+          action,
+        );
+        if (steer) steerRequests.push(steer);
+      }
       if (!run.pendingJobIds.length && !run.routing) run.status = "done";
+      this.trackDelegation(m, run, author?.sourceThreadId);
       this.store.putRun(run);
       if (!isAutomationTrigger(m))
         this.store.putRoom({ ...room, updatedAt: now });
@@ -420,8 +611,429 @@ export class Runtime {
         "bot_joined",
       );
     this.changed();
+    for (const request of steerRequests) this.startSteer(request);
     if (shouldAutoTitle) this.startRoomTitle(this.store.room(room.id), m);
     return m;
+  }
+
+  private sourceJobForMessage(message: RoomMessage) {
+    if (message.sourceJobId) return this.store.job(message.sourceJobId);
+    if (message.botId && message.sourceThreadId)
+      return (
+        this.store
+          .work(message.botId)
+          .find(
+            (job) =>
+              job.threadId === message.sourceThreadId && isExecuting(job),
+          ) ?? null
+      );
+    return this.store.job(message.id);
+  }
+  private messageAncestors(message: RoomMessage) {
+    const source = this.sourceJobForMessage(message);
+    return source ? this.delegations.ancestors(source) : new Set<string>();
+  }
+  private trackDelegation(
+    message: RoomMessage,
+    run: RoomRun,
+    sourceThreadId = message.sourceThreadId,
+    sourceJob: Job | null = null,
+  ) {
+    if (!message.botId) return;
+    sourceJob ??= message.sourceJobId
+      ? this.store.job(message.sourceJobId)
+      : null;
+    sourceJob ??= sourceThreadId
+      ? (this.store
+          .work(message.botId)
+          .find((job) => job.threadId === sourceThreadId && isExecuting(job)) ??
+        null)
+      : this.store.job(message.id);
+    const ancestors = sourceJob
+      ? this.delegations.ancestors(sourceJob)
+      : new Set<string>();
+    const replyBot = message.replyTo
+      ? this.store.message(message.replyTo)?.botId
+      : null;
+    const jobs = this.store
+      .requestJobs(run.id)
+      .filter(
+        (job) =>
+          job.triggerMessageId === message.id &&
+          job.botId !== message.botId &&
+          !ancestors.has(job.botId) &&
+          (mentioned(
+            message.sentText ?? message.text,
+            this.store.get(job.botId).handle,
+          ) ||
+            job.botId === replyBot ||
+            mentioned(message.text, "all") ||
+            mentioned(message.text, "everyone")),
+      );
+    this.delegations.track(message, run, jobs, sourceJob);
+  }
+  private startReturns(room: Room) {
+    for (const group of this.delegations.pending(room.id)) {
+      if (
+        this.returnTasks.has(group.id) ||
+        this.returnTasks.size >= 4 ||
+        group.retryAt > Date.now() ||
+        this.abort.signal.aborted
+      )
+        continue;
+      const task = this.resolveReturn(group)
+        .catch((cause) => {
+          const current = this.delegations.get(group.id);
+          if (current?.status === "waiting" && !this.abort.signal.aborted) {
+            current.retryAt = Date.now() + 30000;
+            current.error = errorText(cause);
+            this.delegations.put(current);
+          }
+        })
+        .finally(() => this.returnTasks.delete(group.id));
+      this.returnTasks.set(group.id, task);
+    }
+  }
+  private async timeoutDelegate(
+    job: Job,
+    deadlineGroupId: string,
+    seen = new Set<string>(),
+  ) {
+    if (
+      (this.delegations.get(deadlineGroupId)?.deadlineAt ?? Infinity) >
+      Date.now()
+    )
+      return;
+    if (seen.has(job.id)) return;
+    seen.add(job.id);
+    const nested = this.delegations.get(
+      `job:${this.delegations.rootJob(job).id}`,
+    );
+    if (nested?.status === "waiting") {
+      for (const result of this.delegations
+        .results(nested)
+        .filter((result) => result.status === "pending")) {
+        const child = this.store.job(result.jobId);
+        if (child) await this.timeoutDelegate(child, deadlineGroupId, seen);
+      }
+      if (
+        (this.delegations.get(deadlineGroupId)?.deadlineAt ?? Infinity) >
+        Date.now()
+      )
+        return;
+      this.delegations.put({ ...nested, status: "ignored" });
+    }
+    const reason = "Direct delegation timed out before all delegates settled.";
+    await this.locked(job.botId, async () => {
+      const current = this.store.job(job.id);
+      if (
+        !current ||
+        current.triggerMessageId !== job.triggerMessageId ||
+        (this.delegations.get(deadlineGroupId)?.deadlineAt ?? Infinity) >
+          Date.now()
+      )
+        return;
+      if (current.status === "done" && nested?.status === "waiting")
+        this.store.putJob({
+          ...current,
+          status: "cancelled",
+          timedOut: true,
+          error: reason,
+        });
+      else if (
+        !["done", "error", "cancelled"].includes(current.status) ||
+        current.cancellationPending
+      )
+        await this.cancel(current, reason, false, true);
+    });
+  }
+  private async resolveReturn(group: Delegation) {
+    const source = group.sourceJobId
+      ? this.delegations.attempt(group.sourceJobId)
+      : null;
+    if (source && ["queued", "dispatching", "running"].includes(source.status))
+      return;
+    let results = this.delegations.results(group);
+    if (results.some((result) => result.status === "pending")) {
+      if (Date.now() < group.deadlineAt) return;
+      for (const result of results.filter(
+        (result) => result.status === "pending",
+      )) {
+        const job = this.store.job(result.jobId);
+        if (job) await this.timeoutDelegate(job, group.id);
+      }
+      results = this.delegations.results(group);
+      if (results.some((result) => result.status === "pending")) return;
+    }
+    if (!this.returnDecision)
+      throw new Error("Delegation classifier is unavailable.");
+    const snapshot = JSON.stringify(results);
+    const shouldReturn =
+      source?.status !== "cancelled" &&
+      (await this.returnDecision(group, this.abort.signal));
+    if (this.abort.signal.aborted) return;
+    await this.locked(`room:${group.roomId}`, async () => {
+      const live = this.delegations.get(group.id);
+      if (
+        !live ||
+        live.status !== "waiting" ||
+        JSON.stringify(this.delegations.results(live)) !== snapshot
+      )
+        return;
+      const latestSource = live.sourceJobId
+        ? this.delegations.attempt(live.sourceJobId)
+        : null;
+      if (
+        latestSource?.id !== source?.id ||
+        latestSource?.status !== source?.status ||
+        latestSource?.triggerMessageId !== source?.triggerMessageId
+      )
+        return;
+      const room = this.store.findRoom(live.roomId);
+      const run = room
+        ? this.store
+            .runs(room.id)
+            .find((candidate) => candidate.id === live.runId)
+        : null;
+      const bot = this.store.get(live.requesterBotId);
+      this.store.db.transaction(() => {
+        live.status = "ignored";
+        if (
+          shouldReturn &&
+          latestSource?.status !== "cancelled" &&
+          room &&
+          !room.archived &&
+          room.memberIds.includes(bot.id) &&
+          !bot.retired &&
+          run &&
+          run.status !== "stopped" &&
+          run.pendingJobIds.length + run.settledJobIds.length < 32
+        ) {
+          const id = `return:${live.id}:${bot.id}`;
+          if (
+            this.enqueue(bot, {
+              id,
+              conversationKey: live.conversationKey,
+              roomId: room.id,
+              runId: run.id,
+              triggerMessageId: this.delegations.returnTrigger(live),
+              delegationId: source?.delegationId,
+              returnOf: live.id,
+              depth: 2,
+              text: this.delegations.prompt(live),
+              taskTitle: "Synthesize delegate results",
+            })
+          )
+            run.pendingJobIds.push(id);
+          live.status = "returned";
+          live.returnJobId = id;
+          run.status = "running";
+          this.store.putRun(run);
+        }
+        this.delegations.put(live);
+      })();
+      this.changed();
+    });
+  }
+
+  private targetKey(message: RoomMessage, botId: string) {
+    const primary = `group:${message.roomId}`;
+    const parent = message.replyTo ? this.store.message(message.replyTo) : null;
+    if (!parent || (parent.botId && parent.botId !== botId)) return primary;
+    const job = this.store.job(
+      parent.botId ? parent.id : `${parent.id}:${botId}`,
+    );
+    const key =
+      (parent.botId === botId ? parent.conversationKey : undefined) ??
+      job?.conversationKey;
+    return key === primary || key?.startsWith(`${primary}:fork:`)
+      ? key
+      : primary;
+  }
+
+  routingTasks(message: RoomMessage, members: Bot[]): RoutingTask[] {
+    return members.map((bot) => {
+      const key = this.targetKey(message, bot.id);
+      const active = this.store
+        .work(bot.id)
+        .find(
+          (job) =>
+            job.conversationKey === key &&
+            ["running", "dispatching"].includes(job.status),
+        );
+      const conversation = this.store
+        .conversations(bot.id)
+        .find((c) => c.key === key);
+      const trigger = active?.triggerMessageId
+        ? this.store.message(active.triggerMessageId)
+        : null;
+      return {
+        botId: bot.id,
+        threadId: active?.threadId ?? conversation?.threadId ?? null,
+        busy: !!active,
+        task: trigger?.text.slice(0, 2000) ?? "",
+        jobId: active?.id ?? null,
+      };
+    });
+  }
+
+  private dispatchMessage(
+    room: Room,
+    run: RoomRun,
+    message: RoomMessage,
+    botId: string,
+    depth: number,
+    action: DispatchAction,
+    snapshot?: RoutingTask,
+  ): SteerRequest | undefined {
+    const key = this.targetKey(message, botId);
+    const activeJob = this.store
+      .work(botId)
+      .find(
+        (job) =>
+          job.conversationKey === key &&
+          ["dispatching", "running"].includes(job.status),
+      );
+    // A slow classifier must never steer a different task that started meanwhile.
+    if (snapshot && snapshot.jobId !== activeJob?.id && action === "steer")
+      action = "followup";
+    const previousRun = activeJob?.runId
+      ? this.store.runs(room.id).find((r) => r.id === activeJob.runId)
+      : undefined;
+    if (action === "steer" && activeJob && previousRun) {
+      const previous = {
+        runId: previousRun.id,
+        triggerMessageId: activeJob.triggerMessageId,
+        text: activeJob.text,
+        attachments: [...activeJob.attachments],
+      };
+      previousRun.pendingJobIds = previousRun.pendingJobIds.filter(
+        (id) => id !== activeJob.id,
+      );
+      previousRun.status =
+        previousRun.pendingJobIds.length || previousRun.routing === "pending"
+          ? "running"
+          : "done";
+      this.store.putRun(previousRun);
+      activeJob.pendingSteer = {
+        priorPrompt:
+          activeJob.pendingSteer?.priorPrompt ?? jobPrompt(activeJob),
+      };
+      activeJob.requiresPromptMatch = true;
+      activeJob.runId = run.id;
+      activeJob.triggerMessageId = message.id;
+      activeJob.attachments = [...message.attachments];
+      activeJob.dispatchAction = "steer";
+      activeJob.taskTitle = message.text.slice(0, 240);
+      this.prepareGroup(activeJob, this.store.get(botId));
+      run.pendingJobIds.push(activeJob.id);
+      return { roomId: room.id, jobId: activeJob.id, botId, message, previous };
+    }
+    const source =
+      activeJob?.threadId ??
+      this.store.conversations(botId).find((c) => c.key === key)?.threadId;
+    // Automatic routing only forks existing sessions. Explicit requests fail visibly below.
+    if (action === "fork" && !source && message.sendMode !== "fork")
+      action = "followup";
+    this.invite(room, run, message, botId, depth, {
+      conversationKey:
+        action === "fork" ? `group:${room.id}:fork:${message.id}` : key,
+      dispatchAction: action,
+      ...(action === "fork" && source ? { forkSourceThreadId: source } : {}),
+      ...(action === "fork" && !source
+        ? {
+            status: "error" as const,
+            error:
+              "This bot has no session to fork yet. Send a regular message first.",
+          }
+        : {}),
+    });
+  }
+
+  private startSteer(request: Pick<SteerRequest, "jobId">): Promise<void> {
+    if (!this.store.job(request.jobId)?.threadId) return Promise.resolve();
+    const running = this.steerTasks.get(request.jobId);
+    if (running) return running;
+    const task = Promise.resolve()
+      .then(async () => {
+        const job = this.store.job(request.jobId);
+        if (
+          !job?.pendingSteer ||
+          !job.threadId ||
+          !["dispatching", "running"].includes(job.status)
+        )
+          return;
+        const prompt = jobPrompt(job);
+        const current = () => {
+          const live = this.store.job(job.id);
+          return live?.pendingSteer &&
+            live.triggerMessageId === job.triggerMessageId &&
+            ["running", "dispatching"].includes(live.status)
+            ? live
+            : null;
+        };
+        try {
+          if (job.pendingSteer.attemptedAt) {
+            const matches = await this.latestPromptMatches(
+              job.threadId,
+              prompt,
+            );
+            const queued = await this.bb.sdk.threads.queuedMessages.list({
+              threadId: job.threadId,
+            });
+            const delivered =
+              matches === true ||
+              queued.some((q) =>
+                q.content.some((b) => b.type === "text" && b.text === prompt),
+              );
+            const live = current();
+            if (!live) return;
+            if (delivered) {
+              delete live.pendingSteer;
+              live.error = null;
+              this.store.putJob(live);
+              return;
+            }
+            // Do not retry an uncertain send while the timeline is unavailable.
+            if (
+              matches === null ||
+              Date.now() - job.pendingSteer.attemptedAt < 3000
+            )
+              return;
+          }
+          const live = current();
+          if (!live) return;
+          live.pendingSteer!.attemptedAt = Date.now();
+          this.store.putJob(live);
+          await this.bb.sdk.threads.send({
+            threadId: job.threadId,
+            mode: "steer",
+            input: jobInput(job),
+          });
+          const accepted = current();
+          if (accepted) {
+            delete accepted.pendingSteer;
+            accepted.error = null;
+            this.store.putJob(accepted);
+          }
+        } catch (cause) {
+          const live = current();
+          if (live) {
+            live.error = `Checking correction delivery: ${errorText(cause)}`;
+            this.store.putJob(live);
+          }
+          this.bb.log.warn(
+            `Steering a channel response needs recovery: ${errorText(cause)}`,
+          );
+        }
+        this.changed();
+      })
+      .finally(() => {
+        if (this.steerTasks.get(request.jobId) === task)
+          this.steerTasks.delete(request.jobId);
+      });
+    this.steerTasks.set(request.jobId, task);
+    return task;
   }
 
   /** Retry title work for blank channels after a plugin/server restart. */
@@ -473,7 +1085,8 @@ export class Runtime {
     for (const [roomId, candidates] of found) {
       const [worker, ...duplicates] = [...candidates].sort(
         (left, right) =>
-          titleWorkerPriority(right.status) - titleWorkerPriority(left.status) ||
+          titleWorkerPriority(right.status) -
+            titleWorkerPriority(left.status) ||
           (right.createdAt ?? 0) - (left.createdAt ?? 0),
       );
       if (!worker) continue;
@@ -492,10 +1105,10 @@ export class Runtime {
     if (this.titleTasks.has(room.id)) return;
     const generator = existing
       ? null
-      : room.memberIds
+      : (room.memberIds
           .map((id) => this.store.get(id))
           .find((bot) => !bot.retired) ??
-        this.store.all().find((bot) => !bot.retired);
+        this.store.all().find((bot) => !bot.retired));
     if (!existing && !generator) {
       void this.applyRoomTitle(room.id, fallbackRoomTitle(message)).catch(
         () => {
@@ -595,8 +1208,7 @@ export class Runtime {
           signal,
         });
       title = sanitizeRoomTitle(
-        (await this.bb.sdk.threads.output({ threadId })).output ??
-          "",
+        (await this.bb.sdk.threads.output({ threadId })).output ?? "",
       );
     } finally {
       if (threadId) await this.cleanupTitleThread(threadId);
@@ -676,7 +1288,8 @@ export class Runtime {
     this.routingAborts.set(run.id, controller);
     const signal = AbortSignal.any([this.abort.signal, controller.signal]);
     const task = (async () => {
-      let selected: string[] = [],
+      let selected: (string | RoutingDecision)[] = [],
+        tasks: RoutingTask[] = [],
         error: string | undefined;
       try {
         const message = this.store.message(run.id);
@@ -685,13 +1298,20 @@ export class Runtime {
           throw new Error(
             "Smart routing is unavailable. Mention a bot directly.",
           );
+        const ancestors = this.messageAncestors(message);
+        const members = room.memberIds
+          .map((id) => this.store.get(id))
+          .filter(
+            (b) => !b.retired && b.id !== message.botId && !ancestors.has(b.id),
+          );
+        tasks = this.routingTasks(message, members);
         selected = await this.route(
           message,
           room,
-          room.memberIds
-            .map((id) => this.store.get(id))
-            .filter((b) => !b.retired && b.id !== message.botId),
+          members,
           signal,
+          tasks,
+          run.routingBotIds ?? [],
         );
       } catch (cause) {
         error = errorText(cause);
@@ -711,16 +1331,44 @@ export class Runtime {
           !message
         )
           return;
+        const steers: SteerRequest[] = [];
         this.store.db.transaction(() => {
           live.routing = error ? "error" : "done";
           live.routingError = error;
           if (!error)
-            for (const id of new Set(selected))
-              if (id !== message.botId && current.memberIds.includes(id))
-                this.invite(current, live, message, id, live.routingDepth ?? 0);
-          live.status = live.pendingJobIds.length ? "running" : "done";
+            for (const route of selected) {
+              const id = typeof route === "string" ? route : route.botId;
+              if (
+                id === message.botId ||
+                !current.memberIds.includes(id) ||
+                this.messageAncestors(message).has(id)
+              )
+                continue;
+              const action =
+                message.sendMode && message.sendMode !== "auto"
+                  ? message.sendMode
+                  : typeof route === "string"
+                    ? "followup"
+                    : route.action;
+              const steer = this.dispatchMessage(
+                current,
+                live,
+                message,
+                id,
+                live.routingDepth ?? 0,
+                action,
+                tasks.find((task) => task.botId === id),
+              );
+              if (steer) steers.push(steer);
+            }
+          this.trackDelegation(message, live);
+          live.status =
+            live.pendingJobIds.length || this.delegations.hasPending(live.id)
+              ? "running"
+              : "done";
           this.store.putRun(live);
         })();
+        for (const steer of steers) this.startSteer(steer);
         this.changed();
       });
     })()
@@ -750,6 +1398,16 @@ export class Runtime {
     trigger: RoomMessage,
     botId: string,
     depth: number,
+    dispatch: Partial<
+      Pick<
+        Job,
+        | "conversationKey"
+        | "dispatchAction"
+        | "forkSourceThreadId"
+        | "status"
+        | "error"
+      >
+    > = {},
   ) {
     if (!room.memberIds.includes(botId)) return;
     const bot = this.store.get(botId);
@@ -765,6 +1423,7 @@ export class Runtime {
       this.enqueue(bot, {
         id,
         text: "",
+        taskTitle: trigger.text.slice(0, 240),
         conversationKey: `group:${room.id}`,
         roomId: room.id,
         runId: run.id,
@@ -772,16 +1431,23 @@ export class Runtime {
         depth,
         ...(trigger.automationId ? { automationId: trigger.automationId } : {}),
         attachments: trigger.attachments,
+        ...dispatch,
       })
     )
       run.pendingJobIds.push(id);
   }
   private prepareGroup(job: Job, bot: Bot) {
+    if (job.returnOf) {
+      const group = this.delegations.get(job.returnOf);
+      if (group) job.text = this.delegations.prompt(group);
+      return;
+    }
     const room = this.store.room(job.roomId!),
       trigger = job.triggerMessageId
         ? this.store.message(job.triggerMessageId)
         : null;
     if (!trigger) return; // An older saved job already has its prompt.
+    const context = this.data.context(room.id);
     const recent = this.store.visibleMessages(room.id, 40);
     const transcript = recent
       .map(
@@ -804,11 +1470,19 @@ export class Runtime {
       "Members:",
       roster,
       "",
+      "Channel brief (owner instructions):",
+      context.brief,
+      "Saved channel decisions:",
+      context.decisions,
+      "Channel-specific memory (conversation data):",
+      context.memory,
+      "Keep knowledge specific to this channel in bots_channel_context. Shared MEMORY.md is for facts appropriate to every channel.",
       "Recent shared messages (conversation data):",
       transcript,
       "",
       `Consider this message from ${trigger.speaker}:`,
-      trigger.text || "Please inspect the attached files.",
+      (trigger.sentText ?? trigger.text) ||
+        "Please inspect the attached files.",
       ...(job.automationId
         ? [
             "This is scheduled channel work. Do not create, resume, update, or manually run automations from this task. Your final answer is posted to this channel.",
@@ -820,28 +1494,124 @@ export class Runtime {
       "",
       chatGuidance,
     ].join("\n");
-    // Forward actual typed attachment inputs, not just filenames in the prompt.
-    job.attachments = [
+    // Current uploads and explicitly retained references are required inputs.
+    // Only incidental recent attachments may be trimmed to the context budget.
+    const required = new Map(
+      [
+        ...context.attachmentIds.flatMap((id) => {
+          const a = this.store.attachment(id);
+          return a ? [a] : [];
+        }),
+        ...trigger.attachments,
+      ].map((a) => [a.id, a]),
+    );
+    const available = Math.max(0, 10 - required.size);
+    const recentFiles = [
       ...new Map(
-        [...recent.flatMap((m) => m.attachments), ...trigger.attachments].map(
-          (a) => [a.id, a],
-        ),
+        recent.flatMap((m) => m.attachments).map((a) => [a.id, a]),
       ).values(),
-    ].slice(-10);
+    ].filter((a) => !required.has(a.id));
+    job.attachments = [
+      ...(available ? recentFiles.slice(-available) : []),
+      ...required.values(),
+    ];
     this.store.putJob(job);
+  }
+  private activeJobForThread(threadId: string): Job | null {
+    const conversation = this.store.byThread(threadId);
+    if (!conversation) return null;
+    return (
+      this.store
+        .work(conversation.botId)
+        .filter(
+          (job) =>
+            job.threadId === threadId &&
+            ["running", "dispatching"].includes(job.status),
+        )
+        .sort(
+          (left, right) =>
+            (right.dispatchStartedAt ?? right.updatedAt) -
+            (left.dispatchStartedAt ?? left.updatedAt),
+        )[0] ?? null
+    );
+  }
+  /**
+   * A persistent thread can contain several turns. Only settle recovery work
+   * when its latest user input is the request we registered for this job.
+   * A reused or forked session must have positive attribution before we use
+   * its output, since it can still contain an earlier request's answer.
+   */
+  private async latestPromptMatches(
+    threadId: string,
+    expected: string,
+  ): Promise<boolean | null> {
+    try {
+      const timeline = await this.bb.sdk.threads.timeline({
+        threadId,
+        includeNestedRows: "true",
+        segmentLimit: "100",
+      });
+      const prompts = timelineRows(timeline?.rows).filter(
+        (row) =>
+          row.kind === "conversation" &&
+          row.role === "user" &&
+          typeof row.text === "string",
+      );
+      if (!prompts.length) return null;
+      return prompts.at(-1)?.text === expected;
+    } catch (cause) {
+      if (!missingThread(cause))
+        this.bb.log.debug(
+          `Persistent bot turn verification failed: ${errorText(cause)}`,
+        );
+      return null;
+    }
+  }
+  /**
+   * Thread events do not carry the plugin job ID. Re-check the current thread
+   * before accepting an idle/error event so a late event from an earlier turn
+   * cannot settle a newer request on the shared conversation.
+   */
+  async settleFromEvent(threadId: string, text: string | null, error?: string) {
+    const job = this.activeJobForThread(threadId);
+    if (!job) {
+      this.complete(threadId, text, error);
+      return;
+    }
+    try {
+      const thread = await this.bb.sdk.threads.get({ threadId });
+      if (error ? thread.status !== "error" : thread.status !== "idle") return;
+      const matches = await this.latestPromptMatches(threadId, jobPrompt(job));
+      if (matches === false || (job.requiresPromptMatch && matches !== true))
+        return;
+      if (!error && text?.trim()) {
+        const output = (await this.bb.sdk.threads.output({ threadId })).output;
+        if (output?.trim() && output.trim() !== text.trim()) return;
+      }
+    } catch (cause) {
+      if (missingThread(cause)) {
+        this.complete(threadId, null, "The work conversation was deleted.");
+        return;
+      }
+      this.bb.log.debug(
+        `Persistent bot event verification failed: ${errorText(cause)}`,
+      );
+      return;
+    }
+    const current = this.activeJobForThread(threadId);
+    if (
+      current?.id !== job.id ||
+      current.triggerMessageId !== job.triggerMessageId
+    )
+      return;
+    this.complete(threadId, text, error);
   }
   complete(threadId: string, text: string | null, error?: string) {
     const c = this.store.byThread(threadId);
     if (!c) return;
     if (this.busy.get(c.botId)?.threadId === threadId)
       this.busy.delete(c.botId);
-    const job = this.store
-      .work(c.botId)
-      .find(
-        (j) =>
-          j.threadId === threadId &&
-          ["running", "dispatching"].includes(j.status),
-      );
+    const job = this.activeJobForThread(threadId);
     if (!job) return;
     if (error || (!text?.trim() && !job.outputAttachments.length)) {
       job.status = "error";
@@ -855,12 +1625,18 @@ export class Runtime {
     this.store.putJob(job);
     this.changed();
   }
-  async cancel(job: Job, reason: string, requireStopped = false) {
+  async cancel(
+    job: Job,
+    reason: string,
+    requireStopped = false,
+    timedOut = false,
+  ) {
     job.cancellationPending =
       !!job.threadId ||
       job.status === "dispatching" ||
       !!job.cancellationPending;
     job.status = "cancelled";
+    job.timedOut ||= timedOut;
     job.error = reason;
     this.store.putJob(job);
     if (job.threadId) {
@@ -998,6 +1774,10 @@ export class Runtime {
         this.enqueue(bot, {
           id: retryId,
           retryOf: id,
+          delegationId: job.delegationId,
+          returnOf: job.returnOf,
+          dispatchAction: job.dispatchAction,
+          forkSourceThreadId: job.forkSourceThreadId,
           ...(job.automationId ? { automationId: job.automationId } : {}),
           text: job.text,
           conversationKey: job.conversationKey,
@@ -1007,6 +1787,16 @@ export class Runtime {
           depth: job.depth,
           attachments: job.attachments,
         });
+        if (job.delegationId) {
+          const group = this.delegations.get(job.delegationId);
+          if (group?.status === "waiting") {
+            group.deadlineAt = Math.max(
+              group.deadlineAt,
+              Date.now() + (bot.limits ?? defaultLimits).minutesPerTurn * 60000,
+            );
+            this.delegations.put(group);
+          }
+        }
         this.store.putRun({
           ...run,
           status: "running",
@@ -1045,18 +1835,81 @@ export class Runtime {
               "Still locating a cancelled response. Try deleting again after cleanup finishes.",
             );
         }
-        const deleted = this.store.deleteRoom(id);
+        const deleted = this.store.db.transaction(() => {
+          this.store.db
+            .prepare("DELETE FROM channel_notifications WHERE room_id=?")
+            .run(id);
+          this.store.db
+            .prepare("DELETE FROM delegations WHERE room_id=?")
+            .run(id);
+          this.store.db
+            .prepare("DELETE FROM channel_context WHERE room_id=?")
+            .run(id);
+          this.store.db
+            .prepare("DELETE FROM document_revisions WHERE scope=?")
+            .run(`channel:${id}`);
+          this.store.db
+            .prepare("DELETE FROM routing_usage WHERE room_id=?")
+            .run(id);
+          return this.store.deleteRoom(id);
+        })();
         this.changed();
         return deleted;
       };
       return remove(0);
     });
   }
+  async roomJobsWithActivity(roomId: string): Promise<Job[]> {
+    const jobs = this.store.roomJobs(roomId).map((job) => {
+      const title =
+        job.taskTitle ??
+        (job.triggerMessageId
+          ? this.store.message(job.triggerMessageId)?.text.slice(0, 240)
+          : undefined);
+      if (job.status !== "queued") return { ...job, taskTitle: title };
+      const pending = this.store
+        .work(job.botId)
+        .filter(
+          (j) =>
+            isForkConversation(j.conversationKey) ===
+            isForkConversation(job.conversationKey),
+        );
+      return {
+        ...job,
+        taskTitle: title,
+        queuePosition: pending.findIndex((j) => j.id === job.id) + 1,
+        queueReason:
+          this.store.get(job.botId).error ??
+          (isForkConversation(job.conversationKey)
+            ? "Waiting for a fork slot"
+            : "Waiting for this bot's earlier work"),
+      };
+    });
+    return Promise.all(
+      jobs.map(async (job) => {
+        if (!job.threadId || !["dispatching", "running"].includes(job.status))
+          return job;
+        try {
+          const timeline = await this.bb.sdk.threads.timeline({
+            threadId: job.threadId,
+            includeNestedRows: "true",
+            segmentLimit: "100",
+          });
+          const activitySnippet = activitySnippetFromTimeline(timeline);
+          return activitySnippet ? { ...job, activitySnippet } : job;
+        } catch (cause) {
+          if (!missingThread(cause))
+            this.bb.log.debug(
+              `Channel activity refresh failed: ${errorText(cause)}`,
+            );
+          return job;
+        }
+      }),
+    );
+  }
   async driveRoom(room: Room) {
     if (room.archived) return;
-    const runs = this.store
-      .runs(room.id)
-      .filter((r) => r.status === "queued" || r.status === "running");
+    const runs = this.store.runs(room.id, -1, true);
     let changed = false;
     this.store.db.transaction(() => {
       for (const run of runs) {
@@ -1105,6 +1958,7 @@ export class Runtime {
           roomId: room.id,
           runId: run.id,
           botId: bot.id,
+          conversationKey: job.conversationKey,
           speaker: bot.name,
           ...(job.automationId ? { automationId: job.automationId } : {}),
           text: job.reply?.trim() === "[PASS]" ? "" : (job.reply ?? ""),
@@ -1121,17 +1975,23 @@ export class Runtime {
           if (isAutoTitlePlaceholder(currentRoom.name))
             this.startRoomTitle(currentRoom, reply);
         }
-        if (job.depth < 2)
+        if (job.depth < 2 && !job.returnOf) {
+          const ancestors = this.delegations.ancestors(job);
           for (const id of room.memberIds)
             if (
               id !== bot.id &&
+              !ancestors.has(id) &&
               mentioned(reply.text, this.store.get(id).handle)
             )
               this.invite(room, run, reply, id, job.depth + 1);
+          this.trackDelegation(reply, run, undefined, job);
+        }
       }
       for (const run of runs) {
         run.status =
-          run.pendingJobIds.length || run.routing === "pending"
+          run.pendingJobIds.length ||
+          run.routing === "pending" ||
+          this.delegations.hasPending(run.id)
             ? "running"
             : "done";
         this.store.putRun(run);
@@ -1140,6 +2000,7 @@ export class Runtime {
     if (changed) this.changed();
     for (const run of runs)
       if (run.routing === "pending") this.startRouting(room, run);
+    this.startReturns(room);
   }
   async reconcileBusy(bot: Bot) {
     const busy = this.busy.get(bot.id);
@@ -1151,7 +2012,11 @@ export class Runtime {
         .map((c) => c.threadId),
       ...this.store
         .work(bot.id)
-        .flatMap((j) => (j.threadId ? [j.threadId] : [])),
+        .flatMap((j) =>
+          j.threadId && !isForkConversation(j.conversationKey)
+            ? [j.threadId]
+            : [],
+        ),
     ]);
     for (const threadId of threadIds) {
       let thread;
@@ -1160,9 +2025,7 @@ export class Runtime {
       } catch (cause) {
         if (!missingThread(cause)) throw cause;
         this.complete(threadId, null, "The work conversation was deleted.");
-        this.store.db
-          .prepare("DELETE FROM conversations WHERE thread_id=?")
-          .run(threadId);
+        this.store.deleteConversation(threadId);
         continue;
       }
       if (thread.status === "active") {
@@ -1172,11 +2035,36 @@ export class Runtime {
     }
     this.busy.delete(bot.id);
   }
-  async drive(bot: Bot) {
-    const job = this.store
-      .work(bot.id)
-      .find((job) => job.cancellationPending || !bot.paused || !!job.roomId);
+  async drive(bot: Bot, forkJob?: Job) {
+    const job =
+      forkJob ??
+      this.store
+        .work(bot.id)
+        .find(
+          (job) =>
+            !isForkConversation(job.conversationKey) &&
+            (job.cancellationPending || !bot.paused || !!job.roomId),
+        );
     if (!job) return;
+    if (job.pendingSteer && job.threadId && !job.cancellationPending) {
+      await this.startSteer({ jobId: job.id });
+      if (this.store.job(job.id)?.pendingSteer) {
+        if (
+          Date.now() -
+            (job.startedAt ?? job.dispatchStartedAt ?? job.updatedAt) >
+          (bot.limits ?? defaultLimits).minutesPerTurn * 60000
+        )
+          await this.cancel(
+            this.store.job(job.id)!,
+            "Correction delivery timed out. Inspect the conversation before retrying.",
+            false,
+            true,
+          );
+        return;
+      }
+      // Re-read the cleared marker before normal reconciliation on the next tick.
+      return;
+    }
     if (job.cancellationPending && job.threadId) {
       await this.cancel(job, job.error ?? "Cancelled by the owner.");
       return;
@@ -1185,9 +2073,22 @@ export class Runtime {
       (job.status === "dispatching" || job.status === "running") &&
       job.threadId
     ) {
-      const thread = await this.bb.sdk.threads.get({ threadId: job.threadId });
-      // Every automatic job has its own thread. Its output cannot
-      // belong to an earlier job, even if an active/idle event was missed.
+      let thread;
+      try {
+        thread = await this.bb.sdk.threads.get({ threadId: job.threadId });
+      } catch (cause) {
+        if (!missingThread(cause)) throw cause;
+        const current = this.store.job(job.id);
+        if (current && isExecuting(current)) {
+          current.status = "error";
+          current.error =
+            "The work conversation was deleted. Retry this response to start again.";
+          this.store.putJob(current);
+        }
+        this.store.deleteConversation(job.threadId);
+        this.changed();
+        return;
+      }
       const queued = await this.bb.sdk.threads.queuedMessages.list({
         threadId: job.threadId,
       });
@@ -1196,32 +2097,53 @@ export class Runtime {
       current.dispatchStartedAt ??= current.updatedAt;
       const matching = queued.some((entry) =>
         entry.content.some(
-          (block) => block.type === "text" && block.text === jobPrompt(job),
+          (block) => block.type === "text" && block.text === jobPrompt(current),
         ),
       );
-      if (thread.status === "error")
-        this.complete(
+      if (thread.status === "error") {
+        const matches = await this.latestPromptMatches(
           job.threadId,
-          null,
-          "The agent turn failed. Inspect the conversation.",
+          jobPrompt(current),
         );
-      else if (thread.status === "active" || matching) {
+        if (
+          matches === true ||
+          (!current.requiresPromptMatch && matches !== false)
+        )
+          this.complete(
+            job.threadId,
+            null,
+            "The agent turn failed. Inspect the conversation.",
+          );
+      } else if (thread.status === "active" || matching) {
         current.status = "running";
         if (thread.status === "active" && !current.startedAt)
           current.startedAt = Date.now();
         this.store.putJob(current);
       } else if (thread.status === "idle") {
+        const matches = await this.latestPromptMatches(
+          job.threadId,
+          jobPrompt(current),
+        );
         const output = (
           await this.bb.sdk.threads.output({ threadId: job.threadId })
         ).output;
-        if (output?.trim()) this.complete(job.threadId, output);
-        else
+        if (
+          matches !== false &&
+          (!current.requiresPromptMatch || matches === true) &&
+          output?.trim()
+        )
+          this.complete(job.threadId, output);
+        else if (
+          matches === false ||
+          !current.requiresPromptMatch ||
+          matches === true
+        )
           this.complete(
             job.threadId,
             null,
             "Dispatch outcome is unknown. Inspect the conversation before sending again.",
           );
-      } else if (job.status === "dispatching")
+      } else if (current.status === "dispatching")
         this.complete(
           job.threadId,
           null,
@@ -1232,11 +2154,13 @@ export class Runtime {
         ["dispatching", "running"].includes(latest.status) &&
         Date.now() -
           (latest.startedAt ?? latest.dispatchStartedAt ?? latest.updatedAt) >
-          20 * 60000
+          (bot.limits ?? defaultLimits).minutesPerTurn * 60000
       )
         await this.cancel(
           latest,
-          "Turn timed out after 20 minutes. Inspect the conversation before retrying.",
+          `Turn timed out after ${(bot.limits ?? defaultLimits).minutesPerTurn} minutes. Inspect the conversation before retrying.`,
+          false,
+          true,
         );
       return;
     }
@@ -1253,16 +2177,21 @@ export class Runtime {
           const metadata = await this.bb.sdk.threads.getPluginMetadata({
             threadId: thread.id,
           });
+          const keys = new Set([
+            job.conversationKey,
+            `${job.conversationKey}:${job.id}`,
+          ]);
           if (
             metadata.botId !== bot.id ||
-            metadata.conversationKey !== `${job.conversationKey}:${job.id}`
+            typeof metadata.conversationKey !== "string" ||
+            !keys.has(metadata.conversationKey)
           )
             continue;
           if (!this.store.byThread(thread.id))
             this.store.putConversation({
               id: randomUUID(),
               botId: bot.id,
-              key: `${job.conversationKey}:${job.id}`,
+              key: metadata.conversationKey!,
               threadId: thread.id,
               title: job.roomId ? this.store.room(job.roomId).name : "Mission",
               kind: job.roomId ? "group" : "mission",
@@ -1299,42 +2228,113 @@ export class Runtime {
       }
       return;
     }
-    if (this.busy.has(bot.id)) return;
-    const recent = this.store.db
-      .prepare(
-        "SELECT count(*) AS n FROM jobs WHERE bot_id=? AND COALESCE(json_extract(json,'$.startedAt'), json_extract(json,'$.dispatchStartedAt'))>?",
-      )
-      .get(bot.id, Date.now() - 3600000) as { n: number };
-    if (recent.n >= 30)
-      throw new Error(
-        "Hourly limit reached (30 automatic turns). Queued work will resume later.",
-      );
+    if (!forkJob && this.busy.has(bot.id)) return;
+    if (
+      job.forkSourceThreadId &&
+      !this.store
+        .conversations(bot.id)
+        .some((c) => c.key === job.conversationKey)
+    ) {
+      const provider = (
+        await this.bb.sdk.providers.list({ hostId: bot.hostId })
+      ).find((p) => p.id === bot.providerId);
+      if (!provider?.capabilities.supportsFork) {
+        job.status = "error";
+        job.error = `Provider ${bot.providerId} does not support session forks. Choose Follow-up or use a fork-capable provider.`;
+        this.store.putJob(job);
+        this.changed();
+        return;
+      }
+    }
+    for (const scope of [
+      { botId: bot.id, limits: bot.limits ?? defaultLimits },
+      ...(job.roomId
+        ? [
+            {
+              roomId: job.roomId,
+              limits: this.store.room(job.roomId).limits ?? defaultLimits,
+            },
+          ]
+        : []),
+    ]) {
+      const filter =
+        "botId" in scope ? "bot_id=?" : "json_extract(json,'$.roomId')=?";
+      const scopeId = "botId" in scope ? scope.botId : scope.roomId;
+      for (const [window, maximum, label] of [
+        [3600000, scope.limits.turnsPerHour, "hour"],
+        [86400000, scope.limits.turnsPerDay, "day"],
+      ] as const) {
+        const count = this.store.db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM jobs WHERE ${filter} AND COALESCE(json_extract(json,'$.startedAt'),json_extract(json,'$.dispatchStartedAt'))>?`,
+          )
+          .get(scopeId, Date.now() - window) as { n: number };
+        if (count.n >= maximum)
+          throw new Error(
+            `${"botId" in scope ? "Bot" : "Channel"} limit reached (${maximum} turns per ${label}). Queued work resumes when capacity is available.`,
+          );
+      }
+    }
     if (job.roomId) this.prepareGroup(job, bot);
+    job.requiresPromptMatch =
+      !!job.forkSourceThreadId ||
+      this.store
+        .conversations(bot.id)
+        .some((c) => c.key === job.conversationKey);
     job.status = "dispatching";
     job.dispatchStartedAt = Date.now();
     this.store.putJob(job);
     try {
-      const c = await this.conversation(
-        bot,
-        `${job.conversationKey}:${job.id}`,
-        job.roomId ? "group" : "mission",
-        job.roomId ? this.store.room(job.roomId).name : "Mission",
-        jobPrompt(job),
-        job.attachments,
-      );
+      let c = this.store
+        .conversations(bot.id)
+        .find((candidate) => candidate.key === job.conversationKey);
+      if (c) {
+        try {
+          await this.bb.sdk.threads.get({ threadId: c.threadId });
+        } catch (cause) {
+          if (!missingThread(cause)) throw cause;
+          this.store.deleteConversation(c.threadId);
+          c = undefined;
+        }
+      }
+      if (!c)
+        c = job.forkSourceThreadId
+          ? await this.forkConversation(bot, job)
+          : await this.conversation(
+              bot,
+              job.conversationKey,
+              job.roomId ? "group" : "mission",
+              job.roomId ? this.store.room(job.roomId).name : "Mission",
+              jobPrompt(job),
+              job.attachments,
+            );
+      else {
+        // The dispatch hook runs during send and must already see this job.
+        const pending = this.store.job(job.id)!;
+        if (pending.status === "cancelled") return;
+        pending.threadId = c.threadId;
+        this.store.putJob(pending);
+        await this.bb.sdk.threads.send({
+          threadId: c.threadId,
+          mode: "queue-if-active",
+          input: jobInput(job),
+        });
+      }
       const current = this.store.job(job.id)!;
       current.threadId = c.threadId;
       if (current.status === "dispatching") current.status = "running";
       this.store.putJob(current);
       if (current.status === "cancelled")
         await this.cancel(current, current.error ?? "Cancelled by the owner.");
+      else if (current.pendingSteer)
+        await this.startSteer({ jobId: current.id });
     } catch (cause) {
       const current = this.store.job(job.id)!;
       if (current.status === "dispatching") {
         current.error = `Checking dispatch after: ${errorText(cause)}`;
         this.store.putJob(current);
       }
-      this.busy.delete(bot.id);
+      if (!forkJob) this.busy.delete(bot.id);
     }
     this.changed();
   }
@@ -1357,7 +2357,11 @@ export class Runtime {
             Date.now() - bot.lastWakeAt >= bot.intervalMinutes * 60000
           )
             this.wake(bot);
-          await this.drive(bot);
+          try {
+            await this.drive(bot);
+          } finally {
+            await this.driveForks(bot);
+          }
           if (bot.error) {
             this.store.put({ ...this.store.get(bot.id), error: null });
             this.changed();
@@ -1379,6 +2383,8 @@ export class Runtime {
       [...this.titleTasks.values()].map((task) => task.promise),
     );
     await Promise.allSettled(this.routing.values());
+    await Promise.allSettled(this.steerTasks.values());
+    await Promise.allSettled(this.returnTasks.values());
     await Promise.allSettled(this.locks.values());
   }
 }

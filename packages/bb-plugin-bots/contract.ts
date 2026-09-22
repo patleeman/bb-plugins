@@ -1,5 +1,14 @@
+import {
+  channelContext,
+  contextContent,
+  revisionSchema,
+  usageLimits,
+  usageSummary,
+} from "./workspace-contract";
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { sendModes } from "./send-mode";
+export const sendModeSchema = z.enum(sendModes);
 import {
   channelAutomationCreate,
   channelAutomationList,
@@ -11,6 +20,7 @@ import {
 } from "./automation-contract";
 export const idSchema = z.string().regex(/^bot_[a-f0-9]{16}$/);
 export const profileInput = z.object({
+  limits: usageLimits.optional(),
   name: z.string().trim().min(1).max(80),
   description: z.string().max(500).default(""),
   avatar: z.string().max(16).default("🤖"),
@@ -54,6 +64,7 @@ export type Bot = z.infer<typeof botSchema>;
 export type ProfileInput = z.infer<typeof profileInput>;
 // Creation defaults must never reset fields omitted from a partial update.
 const profilePatch = z.object({
+  limits: usageLimits.optional(),
   name: profileInput.shape.name.optional(),
   description: profileInput.shape.description.removeDefault().optional(),
   avatar: profileInput.shape.avatar.removeDefault().optional(),
@@ -88,6 +99,18 @@ export const attachmentSchema = z.object({
 });
 export type Attachment = z.infer<typeof attachmentSchema>;
 export const jobSchema = z.object({
+  delegationId: z.string().optional(),
+  returnOf: z.string().optional(),
+  timedOut: z.boolean().optional(),
+  taskTitle: z.string().optional(),
+  queueReason: z.string().optional(),
+  queuePosition: z.number().optional(),
+  dispatchAction: z.enum(["steer", "followup", "fork"]).optional(),
+  forkSourceThreadId: z.string().optional(),
+  requiresPromptMatch: z.boolean().optional(),
+  pendingSteer: z
+    .object({ priorPrompt: z.string(), attemptedAt: z.number().optional() })
+    .optional(),
   automationId: z.string().optional(),
   id: z.string(),
   botId: idSchema,
@@ -103,6 +126,7 @@ export const jobSchema = z.object({
     "cancelled",
   ]),
   cancellationPending: z.boolean().optional(),
+  activitySnippet: z.string().max(240).optional(),
   retryOf: z.string().optional(),
   reply: z.string().nullable(),
   error: z.string().nullable(),
@@ -142,6 +166,7 @@ export const reactionSchema = z.object({
 export type Reaction = z.infer<typeof reactionSchema>;
 export const responseBehavior = z.enum(["smart", "directed", "everyone"]);
 export const roomSchema = z.object({
+  limits: usageLimits.optional(),
   id: z.string().uuid(),
   name: z.string().trim().min(1).max(80),
   memberIds: z.array(idSchema).max(16),
@@ -155,6 +180,11 @@ export const roomSchema = z.object({
 });
 export type Room = z.infer<typeof roomSchema>;
 export const messageSchema = z.object({
+  saved: z.boolean().optional(),
+  editedAt: z.number().optional(),
+  sentText: z.string().optional(),
+  sendMode: sendModeSchema.optional(),
+  conversationKey: z.string().optional(),
   automationId: z.string().optional(),
   id: z.string(),
   roomId: z.string(),
@@ -163,6 +193,7 @@ export const messageSchema = z.object({
   speaker: z.string(),
   system: z.enum(["bot_joined"]).optional(),
   sourceThreadId: z.string().optional(),
+  sourceJobId: z.string().optional(),
   replyTo: z.string().nullable().default(null),
   attachments: z.array(attachmentSchema).default([]),
   text: z.string(),
@@ -189,6 +220,7 @@ export const runSchema = z.object({
   routing: z.enum(["pending", "done", "error"]).optional(),
   routingError: z.string().optional(),
   routingDepth: z.number().optional(),
+  routingBotIds: z.array(idSchema).optional(),
 });
 export type RoomRun = z.infer<typeof runSchema>;
 const roomInput = z.object({
@@ -197,6 +229,73 @@ const roomInput = z.object({
   memberIds: z.array(idSchema).max(16),
 });
 export const rpcContract = defineRpcContract({
+  channelContext: {
+    input: z.object({ id: z.string().uuid() }),
+    output: channelContext,
+  },
+  saveChannelContext: {
+    input: contextContent.extend({
+      id: z.string().uuid(),
+      version: z.number().int(),
+    }),
+    output: channelContext,
+  },
+  contextHistory: {
+    input: z.object({ id: z.string().uuid(), before: z.number().optional() }),
+    output: z.array(revisionSchema),
+  },
+  documentHistory: {
+    input: z.object({
+      id: idSchema,
+      file: z.enum(["MISSION.md", "MEMORY.md"]),
+      before: z.number().optional(),
+    }),
+    output: z.array(revisionSchema),
+  },
+  channelFiles: {
+    input: z.object({
+      id: z.string().uuid(),
+      before: z.string().uuid().optional(),
+    }),
+    output: z.object({
+      files: z.array(attachmentSchema),
+      nextBefore: z.string().nullable(),
+    }),
+  },
+  usage: {
+    input: z.object({ id: z.string(), kind: z.enum(["bot", "channel"]) }),
+    output: usageSummary,
+  },
+  saveLimits: {
+    input: z.object({
+      id: z.string(),
+      kind: z.enum(["bot", "channel"]),
+      limits: usageLimits,
+    }),
+    output: usageSummary,
+  },
+  editMessage: {
+    input: z.object({
+      id: z.string().uuid(),
+      messageId: z.string(),
+      text: z.string().trim().min(1).max(16000),
+      expectedText: z.string(),
+    }),
+    output: messageSchema,
+  },
+  saveMessage: {
+    input: z.object({
+      id: z.string().uuid(),
+      messageId: z.string(),
+      saved: z.boolean(),
+    }),
+    output: messageSchema,
+  },
+  savedMessages: {
+    input: z.object({ id: z.string().uuid(), before: z.string().optional() }),
+    output: z.array(messageSchema),
+  },
+
   automationRuns: {
     input: channelAutomationRuns,
     output: channelAutomationRunPage,
@@ -222,7 +321,11 @@ export const rpcContract = defineRpcContract({
   },
   list: {
     input: z.null(),
-    output: z.object({ bots: z.array(botSchema), rooms: z.array(roomSchema) }),
+    output: z.object({
+      bots: z.array(botSchema),
+      rooms: z.array(roomSchema),
+      activeRoomIds: z.array(z.string()),
+    }),
   },
   create: {
     input: profileInput.extend({
@@ -349,6 +452,7 @@ export const rpcContract = defineRpcContract({
   },
   send: {
     input: z.object({
+      sendMode: sendModeSchema.optional(),
       id: z.string().uuid(),
       text: z.string().trim().max(16000),
       attachmentIds: z.array(z.string().uuid()).max(10).default([]),
