@@ -459,6 +459,52 @@ const captures = [
     },
   },
   {
+    id: "bots-rail",
+    packageDir: "bb-plugin-bot-teams",
+    fileName: "channel-rail.png",
+    setup: async (client) => {
+      const { rooms } = await pluginRpc("bot-teams", "list", null);
+      const room = rooms.find(r => process.env.BB_CAPTURE_RAIL_CHANNEL_ID ? r.id === process.env.BB_CAPTURE_RAIL_CHANNEL_ID : r.name === "Rail QA");
+      if (!room || room.archived) throw new Error("Seed or restore the Rail QA channel before capturing.");
+      if (!room.memberIds.length) throw new Error("Rail QA must have a member bot so the rail's roster is real.");
+      const data = await pluginRpc("bot-teams", "room", { id: room.id });
+      if (!data.messages.some(m => m.attachments.some(a => a.name === "rail-check.csv")))
+        throw new Error("Seed the staged rail-check.csv attachment so the Output section is real.");
+      const { automations } = await pluginRpc("bot-teams", "automationList", { channelId: room.id, limit: 50, offset: 0 });
+      if (!automations.some(a => a.enabled && a.nextRunAt))
+        throw new Error("Seed an enabled Rail QA automation so the countdown is real.");
+      const attention = await pluginRpc("bot-teams", "attentionList", { status: "open", channelId: room.id });
+      if (!attention.items.some(item => item.reason === "decision"))
+        throw new Error(
+          "Seed an open decision request in Rail QA before capture:\n" +
+            "  bb bots channel notify 'Rail QA' --reason decision --text '...'",
+        );
+      await client.navigate(`/plugins/bot-teams/channels/${room.id}`);
+      await client.waitForText("Rail QA");
+      // The rail shares the channel with BB's own right panel; the capture
+      // shows the channel at full width, which is when the rail is meant to show.
+      await client.evaluate(`document.querySelector('button[aria-label^="Hide right panel"]')?.click()`);
+      await sleep(600);
+      for (const text of ["Decision needed", "Threads", "Members", "Next automation", "Output", "Usage"])
+        await client.waitForText(text);
+      await client.evaluate(`(() => {
+        const rail = document.querySelector('.channel-rail');
+        if (!rail?.checkVisibility()) throw new Error('The channel rail must be visible');
+        const sections = [...rail.querySelectorAll('.channel-rail-section')].map(s => s.dataset.section);
+        for (const required of ['attention', 'threads', 'members', 'automation', 'output', 'usage'])
+          if (!sections.includes(required)) throw new Error('The rail is missing its ' + required + ' section');
+        if (!rail.querySelector('[data-section="members"] .channel-rail-state'))
+          throw new Error('Member rows must show a live state');
+        if (!/\\d+ \\/ \\d+ turns today/.test(rail.querySelector('.channel-rail-usage')?.innerText ?? ''))
+          throw new Error('The usage meter must show real turn counts');
+        if (/in \\d/.test(rail.querySelector('[data-section="automation"]')?.innerText ?? '') === false)
+          throw new Error('The automation countdown must be rendered');
+        const main = document.querySelector('.bot-room-main').getBoundingClientRect().width;
+        if (main < 480) throw new Error('The rail must not crush the transcript');
+      })()`);
+    },
+  },
+  {
     id: "bots-native-tabs",
     packageDir: "bb-plugin-bot-teams",
     fileName: "channel-workbench.png",

@@ -370,6 +370,15 @@ export class Store {
         this.queueNotification(`error:${j.id}`, j.roomId, "error", j.id);
     })();
   }
+  replaceGenericJobError(id: string, detail: string): Job | null {
+    const job = this.job(id);
+    if (job?.status !== "error" || job.error !== "Agent turn failed.") return null;
+    job.error = detail;
+    this.db
+      .prepare("UPDATE jobs SET json=? WHERE id=?")
+      .run(JSON.stringify(job), id);
+    return job;
+  }
   rooms(): Room[] {
     return (
       this.db.prepare("SELECT json FROM rooms ORDER BY rowid DESC").all() as {

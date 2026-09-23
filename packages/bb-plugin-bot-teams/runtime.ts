@@ -171,6 +171,7 @@ export class Runtime {
   private routing = new Map<string, Promise<void>>();
   private routingAborts = new Map<string, AbortController>();
   private titleTasks = new Map<string, TitleTask>();
+  private failureLookups = new Map<string, Promise<string>>();
   private returnTasks = new Map<string, Promise<void>>();
   returnDecision?: (group: Delegation, signal: AbortSignal) => Promise<boolean>;
   readonly delegations: Delegations;
@@ -1717,19 +1718,49 @@ export class Runtime {
    * before accepting an idle/error event so a late event from an earlier turn
    * cannot settle a newer request on the shared conversation.
    */
-  async settleFromEvent(threadId: string, text: string | null, error?: string) {
+  private async failureFromThread(
+    threadId: string,
+    job: Job,
+    beforeAt = Infinity,
+  ): Promise<string> {
+    try {
+      const events = await this.bb.sdk.threads.events.list({
+        threadId,
+        types: ["provider/error", "system/error", "client/turn/rejected"],
+        order: "desc",
+        limit: "20",
+      });
+      const startedAt = job.dispatchStartedAt ?? job.createdAt;
+      for (const event of events) {
+        if (event.createdAt < startedAt || event.createdAt > beforeAt) continue;
+        const data = event.data as { detail?: unknown; message?: unknown };
+        const detail = typeof data.detail === "string" ? data.detail.trim() : "";
+        const summary = typeof data.message === "string" ? data.message.trim() : "";
+        const reason = detail || summary;
+        if (reason) return reason.slice(0, 1000);
+      }
+    } catch (cause) {
+      this.bb.log.debug(`Bot failure detail unavailable: ${errorText(cause)}`);
+    }
+    return "Agent turn failed.";
+  }
+  async settleFromEvent(
+    threadId: string,
+    text: string | null,
+    error?: string | null,
+  ) {
     const job = this.activeJobForThread(threadId);
     if (!job) {
-      this.complete(threadId, text, error);
+      this.complete(threadId, text, error ?? undefined);
       return;
     }
     try {
       const thread = await this.bb.sdk.threads.get({ threadId });
-      if (error ? thread.status !== "error" : thread.status !== "idle") return;
+      if (error !== undefined ? thread.status !== "error" : thread.status !== "idle") return;
       const matches = await this.latestPromptMatches(threadId, jobPrompt(job));
       if (matches === false || (job.requiresPromptMatch && matches !== true))
         return;
-      if (!error && text?.trim()) {
+      if (error === undefined && text?.trim()) {
         const output = (await this.bb.sdk.threads.output({ threadId })).output;
         if (output?.trim() && output.trim() !== text.trim()) return;
       }
@@ -1749,7 +1780,13 @@ export class Runtime {
       current.triggerMessageId !== job.triggerMessageId
     )
       return;
-    this.complete(threadId, text, error);
+    this.complete(
+      threadId,
+      text,
+      error === undefined
+        ? undefined
+        : error?.trim() || (await this.failureFromThread(threadId, job)),
+    );
   }
   complete(threadId: string, text: string | null, error?: string) {
     const c = this.store.byThread(threadId);
@@ -2080,6 +2117,26 @@ export class Runtime {
     });
     return Promise.all(
       jobs.map(async (job) => {
+        if (
+          job.status === "error" &&
+          job.error === "Agent turn failed." &&
+          job.threadId
+        ) {
+          let lookup = this.failureLookups.get(job.id);
+          if (!lookup) {
+            lookup = this.failureFromThread(job.threadId, job, job.updatedAt + 1000);
+            this.failureLookups.set(job.id, lookup);
+          }
+          const detail = await lookup;
+          if (detail !== job.error) {
+            const updated = this.store.replaceGenericJobError(job.id, detail);
+            if (updated) {
+              this.failureLookups.delete(job.id);
+              this.changed();
+              return { ...updated, taskTitle: job.taskTitle };
+            }
+          }
+        }
         if (!job.threadId || !["dispatching", "running"].includes(job.status))
           return job;
         const current = await this.refreshJobActivity(job);
@@ -2602,6 +2659,7 @@ export class Runtime {
     await Promise.allSettled(this.routing.values());
     await Promise.allSettled(this.steerTasks.values());
     await Promise.allSettled(this.returnTasks.values());
+    await Promise.allSettled(this.failureLookups.values());
     await Promise.allSettled(this.locks.values());
   }
 }

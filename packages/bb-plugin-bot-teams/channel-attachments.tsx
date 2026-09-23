@@ -5,8 +5,9 @@ import type { Attachment } from "./contract";
 import { inlineImage } from "./image-format";
 import { Button } from "./components/ui/button";
 
-const url = (a: Attachment, inline = false) =>
+export const attachmentUrl = (a: Attachment, inline = false) =>
   `/api/v1/plugins/bot-teams/http/attachment?id=${encodeURIComponent(a.id)}${inline ? "&inline=1" : ""}`;
+const url = attachmentUrl;
 
 export function ChannelAttachments({
   attachments,

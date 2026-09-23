@@ -1378,11 +1378,7 @@ export default async function plugin(bb: BbPluginApi) {
   });
   bb.events.on("thread.failed", async ({ thread, error }) => {
     if (!store.byThread(thread.id)) return;
-    await runtime.settleFromEvent(
-      thread.id,
-      null,
-      error ?? "Agent turn failed.",
-    );
+    await runtime.settleFromEvent(thread.id, null, error);
     await bb.experimental_hooks.recheck("message.dispatch");
   });
   bb.background.service("rooms", {

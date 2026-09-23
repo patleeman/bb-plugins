@@ -54,7 +54,9 @@ import {
   openWorkThread,
   useExpandedChannels,
 } from "./channel-threads";
-import { channelQueues, channelWork, channelWorkActivity } from "./channel-work";
+import { channelQueues, channelResponseFailures, channelWork, channelWorkActivity } from "./channel-work";
+import { ChannelRail, useChannelRail } from "./channel-rail-view";
+import { railHasLiveWork } from "./channel-rail";
 import {
   ChannelApprovalDeck,
   approvalFor,
@@ -973,6 +975,7 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
   const rpc = useRpc<typeof rpcContract>(),
     navigate = useBbNavigate();
   const [searchOpen, setSearchOpen] = useState(false);
+  const rail = useChannelRail();
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false),
     [inviteOpen, setInviteOpen] = useState(false),
@@ -1149,6 +1152,20 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
         onClick={() => setSearchOpen(true)}
       >
         <Icon name="Search" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="channel-rail-toggle"
+        aria-label={rail.open ? "Hide channel details" : "Show channel details"}
+        aria-pressed={rail.open}
+        onClick={rail.toggle}
+      >
+        <Icon name="ListTree" />
+        {!rail.open &&
+          railHasLiveWork(data.jobs, data.runs, data.approvals, 0) && (
+            <i className="channel-rail-toggle-dot" aria-hidden />
+          )}
       </Button>
       <ChannelSearch
         id={room.id}
@@ -1352,6 +1369,8 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
     }
   }, [messageId]);
   const [retrying, setRetrying] = useState<string | null>(null);
+  const rail = useChannelRail();
+  const [showAllResponseErrors, setShowAllResponseErrors] = useState(false);
   const [mobileActionsMessage, setMobileActionsMessage] = useState<
     string | null
   >(null);
@@ -1605,11 +1624,10 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
     setJumpTarget(messageId);
   };
   const queues = channelQueues(jobs);
-  const responseErrors = jobs.filter(
-    (j) =>
-      (j.status === "error" || (j.status === "cancelled" && j.timedOut)) &&
-      !jobs.some((r) => r.retryOf === j.id),
-  );
+  const responseErrors = channelResponseFailures(jobs, jobs.length);
+  const visibleResponseErrors = showAllResponseErrors
+    ? responseErrors
+    : responseErrors.slice(-5);
   return (
     <div className="bot-room">
       {(failure || error) && (
@@ -2125,56 +2143,81 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                 </Button>
               </div>
             )}
-            {responseErrors.slice(0, 5).map((j) => (
-              <div key={j.id} className="channel-response-error" role="status">
-                <strong>
-                  {bots.find((b) => b.id === j.botId)?.name ?? "Bot"}{" "}
-                  {j.timedOut
-                    ? "timed out · task incomplete"
-                    : "couldn’t finish"}
-                </strong>
-                <span>{j.error}</span>
-                {(!room.memberIds.includes(j.botId) ||
-                  !bots.some((b) => b.id === j.botId && !b.retired)) && (
-                  <span>Restore and invite this bot to retry.</span>
-                )}
-                <div className="flex gap-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={
-                      !!retrying ||
-                      !!j.cancellationPending ||
-                      !!room.archived ||
-                      !room.memberIds.includes(j.botId) ||
-                      !bots.some((b) => b.id === j.botId && !b.retired)
-                    }
-                    onClick={async () => {
-                      setRetrying(j.id);
-                      try {
-                        await rpc.call("retryJob", { id: j.id });
-                        load();
-                      } catch (e) {
-                        setFailure(message(e));
-                      } finally {
-                        setRetrying(null);
-                      }
-                    }}
-                  >
-                    {j.cancellationPending
-                      ? "Stopping…"
-                      : j.timedOut
-                        ? "Resume response"
-                        : "Retry response"}
-                  </Button>
+            {visibleResponseErrors.map((j) => {
+              const bot = bots.find((b) => b.id === j.botId);
+              const canRetry =
+                !room.archived &&
+                room.memberIds.includes(j.botId) &&
+                !!bot &&
+                !bot.retired;
+              return (
+                <div key={j.id} className="channel-response-error" role="status">
+                  <span className="channel-response-error-icon" aria-hidden>
+                    {bot?.avatar ?? <Icon name="Bot" />}
+                  </span>
+                  <div className="channel-response-error-body">
+                    <strong>
+                      {bot?.name ?? "Bot"}{" "}
+                      {j.timedOut ? "timed out" : "couldn’t finish"}
+                    </strong>
+                    {j.error && <p>{j.error}</p>}
+                    {!canRetry && (
+                      <p>
+                        {room.archived
+                          ? "Restore this channel to retry."
+                          : "Restore and invite this bot to retry."}
+                      </p>
+                    )}
+                    <div className="channel-response-error-actions">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={!!retrying || !!j.cancellationPending || !canRetry}
+                        onClick={async () => {
+                          setRetrying(j.id);
+                          try {
+                            await rpc.call("retryJob", { id: j.id });
+                            load();
+                          } catch (e) {
+                            setFailure(message(e));
+                          } finally {
+                            setRetrying(null);
+                          }
+                        }}
+                      >
+                        {j.cancellationPending
+                          ? "Stopping…"
+                          : j.timedOut
+                            ? "Resume response"
+                            : "Retry response"}
+                      </Button>
+                      {j.threadId && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openWorkThread(navigate, j.threadId!, id)}
+                        >
+                          View work
+                        </Button>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             {responseErrors.length > 5 && (
-              <p className="channel-response-overflow" role="status">
-                {responseErrors.length - 5} more response
-                {responseErrors.length - 5 === 1 ? "" : "s"} need attention.
-              </p>
+              <div className="channel-response-overflow">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-expanded={showAllResponseErrors}
+                  onClick={() => setShowAllResponseErrors((shown) => !shown)}
+                >
+                  {showAllResponseErrors
+                    ? "Show recent failures"
+                    : `Show ${responseErrors.length - 5} earlier failed ${responseErrors.length - 5 === 1 ? "response" : "responses"}`}
+                </Button>
+              </div>
             )}
             {data.runs.some(
               (r) => r.routing === "pending" && r.status === "running",
@@ -2192,25 +2235,33 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                   className="channel-response-error"
                   role="status"
                 >
-                  <span>{r.routingError}</span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={!!room.archived || !!retrying}
-                    onClick={async () => {
-                      setRetrying(r.id);
-                      try {
-                        await rpc.call("retryRouting", { id, requestId: r.id });
-                        load();
-                      } catch (e) {
-                        setFailure(message(e));
-                      } finally {
-                        setRetrying(null);
-                      }
-                    }}
-                  >
-                    Retry routing
-                  </Button>
+                  <span className="channel-response-error-icon" aria-hidden>
+                    <Icon name="TriangleAlert" />
+                  </span>
+                  <div className="channel-response-error-body">
+                    <strong>Couldn’t choose recipients</strong>
+                    {r.routingError && <p>{r.routingError}</p>}
+                    <div className="channel-response-error-actions">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={!!room.archived || !!retrying}
+                        onClick={async () => {
+                          setRetrying(r.id);
+                          try {
+                            await rpc.call("retryRouting", { id, requestId: r.id });
+                            load();
+                          } catch (e) {
+                            setFailure(message(e));
+                          } finally {
+                            setRetrying(null);
+                          }
+                        }}
+                      >
+                        Retry routing
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               ))}
             <ChannelApprovalDeck
@@ -2378,6 +2429,18 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
             }}
           />
         </div>
+        {rail.open && (
+          <ChannelRail
+            room={room}
+            bots={bots}
+            jobs={jobs}
+            runs={data.runs}
+            approvals={data.approvals}
+            messageIds={messages.map((m) => m.id)}
+            onChanged={load}
+            onClose={rail.close}
+          />
+        )}
       </div>
       <Modal
         title="Edit message"

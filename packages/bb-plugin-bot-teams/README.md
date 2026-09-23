@@ -89,6 +89,34 @@ its workbench drawer.
 - Activity shows each task, queue position or blocking reason, and **View work**.
   Reading marks messages seen only while the channel is focused and at the bottom.
 
+## Channel rail
+
+The rail beside the transcript answers "what is true in this channel right
+now". The workbench tabs stay for what is configured and what already
+happened; the rail holds live state and collapses to almost nothing when the
+channel is quiet.
+
+- **Live now** lists each working bot with its elapsed time, current activity,
+  anything queued behind it, and a **Stop** button. It also shows the routing
+  step, so the gap between sending a message and a bot appearing is visible
+  rather than silent.
+- **Needs you** collects the channel's open decisions and the requests a bot is
+  blocked on, so they can be answered without leaving the channel.
+- **Threads** lists the bot work threads this channel spawned. Click to open
+  one, or ⌘-click (drag) to open it in a split.
+- **Members** shows every bot in the channel and what it is doing: working,
+  queued, needs attention, paused, or idle.
+- **Next automation** counts down to the soonest scheduled run and can pause it.
+- **Output** collects the files bots published here.
+- **Usage** shows turns used today against the channel's limit.
+
+Sections with nothing to report are hidden, and each one collapses and
+remembers its state per device. Use the header's **Show channel details**
+control to hide or show the rail; while it is hidden, that control carries a
+dot when the channel has live work. Because the rail shares the channel with
+BB's right workbench, it steps aside automatically when the channel is too
+narrow for both.
+
 ## Parallel questions and tasks
 
 Use the composer’s **Send mode** menu for the next message:
@@ -313,6 +341,14 @@ The running BB app shows the setup instructions in its standard new-thread compo
 The renamed Bot Teams collection in BB, filtered to the staged Atlas research
 bot. Atlas has mission schedules off; the capture restores its prior retirement
 state afterward.
+
+![The channel rail beside a staged channel transcript](assets/channel-rail.png)
+
+The running BB application shows the rail beside the staged Rail QA channel:
+an open decision under **Needs you**, the bot's work thread, the member roster
+with its live state, a scheduled digest counting down, the published
+`rail-check.csv`, and the channel's turns used today. Live now is absent here
+because no bot is working at capture time.
 
 ![Channel context and six native workbench tabs](assets/channel-workbench.png)
 

@@ -13,7 +13,7 @@ import {
 } from "@get-bb/plugin-sdk/testing";
 import plugin from "../server";
 import { agentAuthor, requestStatus } from "../agent-channels";
-import { channelWork } from "../channel-work";
+import { channelResponseFailures, channelWork } from "../channel-work";
 import { Store, document, saveDocument } from "../store";
 import { Runtime, jobPrompt, mentioned, recipients } from "../runtime";
 import { profileInput, roomSchema, type Bot, type Room } from "../contract";
@@ -2320,6 +2320,114 @@ test("retrying a failed response is idempotent and preserves the original messag
     assert.notEqual((await x.runtime.retryJob(a.id)).id, a.id);
     x.store.putRoom({ ...x.room, archived: true });
     await assert.rejects(x.runtime.retryJob(original.id), /Restore/);
+  } finally {
+    await x.close();
+  }
+});
+
+test("one failed bot leaves another bot's answer visible and its own response retryable", async () => {
+  const x = setup();
+  try {
+    const message = x.runtime.send(x.room, "Review this together", randomUUID());
+    const [first, second] = x.store.requestJobs(message.id);
+    assert.ok(first && second);
+    await x.runtime.drive(x.a);
+    await x.runtime.drive(x.b);
+    x.runtime.complete(x.store.job(first.id)!.threadId!, null, "Provider unavailable");
+    await x.runtime.driveRoom(x.room);
+    assert.equal(x.store.runs(x.room.id).find((run) => run.id === message.id)?.status, "running");
+    x.runtime.complete(x.store.job(second.id)!.threadId!, "Review complete");
+    await x.runtime.driveRoom(x.room);
+    assert.equal(x.store.runs(x.room.id).find((run) => run.id === message.id)?.status, "done");
+    assert.deepEqual(
+      x.store.messages(x.room.id).filter((entry) => entry.botId).map((entry) => entry.text),
+      ["Review complete"],
+    );
+    assert.deepEqual(channelResponseFailures(x.store.roomJobs(x.room.id)).map((job) => job.id), [first.id]);
+    const retry = await x.runtime.retryJob(first.id);
+    assert.equal(retry.retryOf, first.id);
+    assert.deepEqual(channelResponseFailures(x.store.roomJobs(x.room.id)), []);
+    assert.equal(x.store.messages(x.room.id).filter((entry) => entry.botId).length, 1);
+  } finally {
+    await x.close();
+  }
+});
+
+test("a failed bot reports the provider's current error detail", async () => {
+  const x = setup();
+  try {
+    const message = x.runtime.send(x.room, "@atlas Review", randomUUID());
+    await x.runtime.drive(x.a);
+    const job = x.store.requestJobs(message.id)[0]!;
+    x.harness.inspection.sdk.stub("threads.get", async ({ threadId }) =>
+      makeThreadResponse({ id: threadId, status: "error" }),
+    );
+    x.harness.inspection.sdk.stub("threads.timeline", async () => ({
+      rows: [{ kind: "conversation", role: "user", text: jobPrompt(job) }],
+    }));
+    x.harness.inspection.sdk.stub("threads.events.list", async () => [
+      {
+        id: "current-failure",
+        scope: { kind: "thread" },
+        threadId: job.threadId!,
+        seq: 2,
+        createdAt: Date.now(),
+        type: "provider/error",
+        data: {
+          providerThreadId: "provider",
+          message: "Provider error",
+          detail: "Session limit reached; resets at 1:30am.",
+        },
+      },
+      {
+        id: "old-failure",
+        scope: { kind: "thread" },
+        threadId: job.threadId!,
+        seq: 1,
+        createdAt: (job.dispatchStartedAt ?? job.createdAt) - 1,
+        type: "provider/error",
+        data: { providerThreadId: "provider", message: "Old error", detail: "Old detail" },
+      },
+    ]);
+    await x.runtime.settleFromEvent(job.threadId!, null, null);
+    assert.equal(x.store.job(job.id)?.error, "Session limit reached; resets at 1:30am.");
+  } finally {
+    await x.close();
+  }
+});
+
+test("an older generic channel failure recovers its own provider detail", async () => {
+  const x = setup();
+  try {
+    const message = x.runtime.send(x.room, "@atlas Review", randomUUID());
+    await x.runtime.drive(x.a);
+    const job = x.store.requestJobs(message.id)[0]!;
+    x.runtime.complete(job.threadId!, null, "Agent turn failed.");
+    const failed = x.store.job(job.id)!;
+    x.harness.inspection.sdk.stub("threads.events.list", async () => [
+      {
+        id: "later-failure",
+        scope: { kind: "thread" },
+        threadId: job.threadId!,
+        seq: 3,
+        createdAt: failed.updatedAt + 2000,
+        type: "provider/error",
+        data: { providerThreadId: "provider", message: "Later failure" },
+      },
+      {
+        id: "original-failure",
+        scope: { kind: "thread" },
+        threadId: job.threadId!,
+        seq: 2,
+        createdAt: failed.updatedAt,
+        type: "provider/error",
+        data: { providerThreadId: "provider", message: "Provider error", detail: "Session limit reached" },
+      },
+    ]);
+    const visible = await x.runtime.roomJobsWithActivity(x.room.id);
+    assert.equal(visible.find((entry) => entry.id === job.id)?.error, "Session limit reached");
+    assert.equal(x.store.job(job.id)?.error, "Session limit reached");
+    assert.equal(x.store.job(job.id)?.updatedAt, failed.updatedAt);
   } finally {
     await x.close();
   }

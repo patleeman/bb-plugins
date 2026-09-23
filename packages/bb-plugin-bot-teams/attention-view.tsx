@@ -76,11 +76,12 @@ export function useAttention(
   return { data, error, load };
 }
 
-const reasons = {
+export const attentionReasons = {
   decision: "Decision needed",
   blocker: "Blocked",
   update: "Important update",
 };
+const reasons = attentionReasons;
 
 export function MessageAttention({ id, status }: { id: string; status?: Attention["status"] }) {
   const rpc = useRpc<typeof rpcContract>();

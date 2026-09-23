@@ -56,3 +56,19 @@ export function channelQueues(jobs: Job[]): { head: Job; queued: Job[] }[] {
       .sort((a, b) => a.createdAt - b.createdAt),
   }));
 }
+
+/** Keep the most recent unresolved failures visible when a channel has a long history. */
+export function channelResponseFailures(jobs: Job[], limit = 5): Job[] {
+  const superseded = new Set(
+    jobs.flatMap((job) => (job.retryOf ? [job.retryOf] : [])),
+  );
+  return jobs
+    .filter(
+      (job) =>
+        (job.status === "error" || (job.status === "cancelled" && job.timedOut)) &&
+        !superseded.has(job.id),
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)
+    .slice(0, limit)
+    .reverse();
+}
