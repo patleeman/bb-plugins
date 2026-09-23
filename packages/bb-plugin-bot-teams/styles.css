@@ -1035,6 +1035,12 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+.channel-nav-archived {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+  font-weight: 400;
+}
 .channel-sidebar-row {
   position: relative;
   border-radius: calc(var(--radius, 8px) - 2px);
@@ -1165,16 +1171,27 @@
   color: var(--muted-foreground);
   font-size: var(--text-xs);
 }
-.channels-sidebar > header > span {
+.channels-sidebar-heading {
   flex: 1;
-}
-.channels-sidebar > header > button:first-child {
-  cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
 }
-.channels-sidebar > header button:not(:first-child) {
+.channels-sidebar > header button {
   width: 24px;
   height: 24px;
+  flex-shrink: 0;
+}
+.channels-sidebar > header button[aria-pressed="true"] {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+}
+.channels-search-scope {
+  margin: 4px 8px;
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
 }
 .channels-sidebar input {
   margin: 4px 0;

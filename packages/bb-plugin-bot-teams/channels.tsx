@@ -663,11 +663,12 @@ export function ChannelsSidebar({
     navigate.toPluginPanel("channels", { subPath: id });
     onNavigate();
   };
+  const query = search.trim().toLowerCase();
   const list = rooms
     .filter(
       (r) =>
-        !!r.archived === archived &&
-        r.name.toLowerCase().includes(search.toLowerCase()),
+        (query ? true : !!r.archived === archived) &&
+        r.name.toLowerCase().includes(query),
     )
     .sort(
       (a, b) =>
@@ -677,15 +678,34 @@ export function ChannelsSidebar({
     <>
       <section className="channels-sidebar" aria-label="Channels">
         <header>
-          <button onClick={() => setArchived(!archived)}>
+          <span className="channels-sidebar-heading">
             {archived ? "Archived channels" : "Channels"}
-          </button>
-          <span />
+          </span>
+          <IconActionTooltip
+            label={archived ? "Show active channels" : "Show archived channels"}
+          >
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={archived ? "Show active channels" : "Show archived channels"}
+              aria-pressed={archived}
+              onClick={() => {
+                setArchived(!archived);
+                setSearch("");
+              }}
+            >
+              <Icon name={archived ? "ListView" : "Archive"} />
+            </Button>
+          </IconActionTooltip>
           <Button
             variant="ghost"
             size="icon"
             aria-label="Search channels"
-            onClick={() => setSearching(!searching)}
+            aria-expanded={searching}
+            onClick={() => {
+              setSearching(!searching);
+              setSearch("");
+            }}
           >
             <Icon name="Search" />
           </Button>
@@ -701,11 +721,16 @@ export function ChannelsSidebar({
         {searching && (
           <Input
             autoFocus
-            aria-label="Filter channels"
-            placeholder="Find a channel…"
+            aria-label="Search all channels"
+            placeholder="Search all channels…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+        )}
+        {query && (
+          <p className="channels-search-scope">
+            Searching active and archived channels
+          </p>
         )}
         {error && <ErrorMessage error={error} />}
         <ErrorMessage error={failure} />
@@ -723,8 +748,14 @@ export function ChannelsSidebar({
             onDelete={() => setDeleting(r)}
           />
         ))}
-        {!list.length && searching && (
-          <p className="channel-menu-label">No matching channels</p>
+        {!list.length && (
+          <p className="channel-menu-label">
+            {query
+              ? "No matching channels"
+              : archived
+                ? "No archived channels"
+                : "No active channels"}
+          </p>
         )}
       </section>
       {renaming && (

@@ -76,6 +76,7 @@ export function ChannelSidebarRow({
               </span>
             )}
             <span className="channel-nav-name">{room.name}</span>
+            {room.archived && <span className="channel-nav-archived">Archived</span>}
             {(working || unread) && (
               <span className="channel-nav-status">
                 {working ? (

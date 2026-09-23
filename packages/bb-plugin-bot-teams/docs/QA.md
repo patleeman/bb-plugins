@@ -436,3 +436,23 @@ excluded from this fix's commit.
 - Held real history responses in the browser to reproduce sending and jumping to latest during an outstanding page request. In both cases, latest content appeared immediately and another page could load before releasing the superseded response. Late responses did not replace the current window.
 - Repeat the browser regression with an open Browser Automation session and the staged fixture described in `scripts/qa-bot-teams-transcript.mjs`: `BB_TRANSCRIPT_QA_SESSION=<session> BB_TRANSCRIPT_QA_CHANNEL=<fixture-uuid> node scripts/qa-bot-teams-transcript.mjs`. The script refuses channels with bots, another name, or an archived state; it sends only to the empty test channel. Restore the archived fixture before rerunning.
 - All **213 tests**, package typecheck/build, and focused read-only review pass. New regressions cover bounded bidirectional windows, associated-data eviction, direct seeks, cross-channel/hidden/missing cursor rejection, historical refreshes, reactions, and indexed query plans.
+
+## Channel archive discovery — 22 September 2026
+
+Replaced the hidden Channels-heading toggle with an archive icon beside search.
+In the archived view, a list icon returns to active channels.
+The heading shows Channels or Archived channels, and the button has a matching
+tooltip, accessible action label, and pressed state. Searching includes both
+active and archived channels and labels archived results. Clearing or closing
+search restores the selected view; toggling the archive view clears the query.
+
+Verified in the running BB app at 1440 px desktop and 390 px touch widths:
+keyboard activation, both view directions, searching from either view, mixed-case
+and padded queries, no matches, whitespace and closing search, archived result
+Restore/Delete actions, delete cancellation, and the empty archive state. The
+mobile regression waits for the host drawer overlay to stop covering the button
+before tapping. Temporary bot-free channels are deleted after each run.
+
+Repeat with `BB_CHANNEL_QA_SESSION=<browser-automation session> node
+scripts/qa-bot-teams-channel-discovery.mjs`. Package typecheck/build, the focused
+read-only review, marketplace schema/index checks, and `git diff --check` passed.
