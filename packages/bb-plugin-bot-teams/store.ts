@@ -642,6 +642,16 @@ export class Store {
       return inserted;
     })();
   }
+  setClassifierActions(
+    messageId: string,
+    actions: NonNullable<RoomMessage["classifierActions"]>,
+  ) {
+    const current = this.message(messageId);
+    if (!current) return;
+    this.db
+      .prepare("UPDATE room_messages SET json=? WHERE id=?")
+      .run(JSON.stringify({ ...current, classifierActions: actions }), messageId);
+  }
   reactions(roomId: string, messageIds?: string[]): Reaction[] {
     if (messageIds && !messageIds.length) return [];
     return this.db
@@ -711,6 +721,25 @@ export class Store {
         )
         .all(roomId, limit) as { json: string }[]
     ).map((r) => jobSchema.parse(JSON.parse(r.json)));
+  }
+  latestDeliveredJob(
+    botId: string,
+    conversationKey: string,
+    threadId: string,
+    exceptId: string,
+  ): Job | null {
+    const row = this.db
+      .prepare(
+        `SELECT json FROM jobs WHERE bot_id=? AND status='done' AND id<>?
+         AND json_extract(json,'$.conversationKey')=?
+         AND json_extract(json,'$.threadId')=?
+         AND json_extract(json,'$.contextMessageId') IS NOT NULL
+         ORDER BY created_at DESC,rowid DESC LIMIT 1`,
+      )
+      .get(botId, exceptId, conversationKey, threadId) as
+      | { json: string }
+      | undefined;
+    return row ? jobSchema.parse(JSON.parse(row.json)) : null;
   }
   activity(
     botId: string | undefined,

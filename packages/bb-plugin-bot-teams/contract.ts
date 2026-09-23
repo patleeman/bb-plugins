@@ -150,6 +150,9 @@ export const attachmentSchema = z.object({
 });
 export type Attachment = z.infer<typeof attachmentSchema>;
 export const jobSchema = z.object({
+  contextMessageId: z.string().optional(),
+  contextVersion: z.number().optional(),
+  rosterVersion: z.string().optional(),
   delegationId: z.string().optional(),
   returnOf: z.string().optional(),
   timedOut: z.boolean().optional(),
@@ -242,6 +245,11 @@ export const messageSchema = z.object({
   editedAt: z.number().optional(),
   sentText: z.string().optional(),
   sendMode: sendModeSchema.optional(),
+  classifierActions: z.array(z.object({
+    botId: idSchema,
+    action: z.enum(["steer", "followup", "fork"]),
+    suggestedAction: z.enum(["steer", "followup", "fork"]).optional(),
+  })).max(16).optional(),
   conversationKey: z.string().optional(),
   automationId: z.string().optional(),
   id: z.string(),

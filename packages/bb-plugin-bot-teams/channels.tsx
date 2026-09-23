@@ -69,6 +69,7 @@ import {
   ReactionPicker,
 } from "./channel-controls";
 import { isForkConversation, type SendMode } from "./send-mode";
+import { classifierActionAnnotation } from "./classifier-action";
 
 const uuid = /^[a-f0-9-]{36}$/;
 const channelId = (subPath: string) =>
@@ -1695,6 +1696,10 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                     data.parents.find((x) => x.id === m.replyTo))
                   : null,
                 job = jobs.find((j) => j.id === m.id);
+              const classifierAnnotation = classifierActionAnnotation(
+                m.classifierActions,
+                bots,
+              );
               const grouped = [
                 ...new Set(
                   reactions
@@ -1826,7 +1831,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                               </span>
                             )}
                             <div className="bot-message-body">
-                              {(!compact || isUser) && (
+                              {(!compact || isUser || classifierAnnotation) && (
                                 <header>
                                   <strong
                                     className={isUser ? "sr-only" : undefined}
@@ -1846,6 +1851,17 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                                       minute: "2-digit",
                                     }).format(m.createdAt)}
                                   </time>
+                                  {classifierAnnotation && (
+                                    <IconActionTooltip label={classifierAnnotation.description}>
+                                      <span
+                                        className="channel-classifier-action"
+                                        tabIndex={0}
+                                        aria-label={classifierAnnotation.description}
+                                      >
+                                        {classifierAnnotation.label}
+                                      </span>
+                                    </IconActionTooltip>
+                                  )}
                                 </header>
                               )}
                               <div className="bot-message-content">

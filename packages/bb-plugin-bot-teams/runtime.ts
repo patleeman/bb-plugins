@@ -44,12 +44,20 @@ export function recipients(text: string, members: Bot[]) {
 }
 export const jobPrompt = (job: Job) => {
   const forkNote = isForkConversation(job.conversationKey)
-    ? " This is a separate fork. Handle only the new request; do not resume inherited work. The primary session owns shared MEMORY.md; do not edit it from this fork. Include useful durable findings in your channel answer."
+    ? "This is a separate fork. Handle only the new request; do not resume inherited work. The primary session owns shared MEMORY.md; do not edit it from this fork. Include useful durable findings in your channel answer."
     : "";
   const wrapUpNote = job.wrapUpRequestedAt
-    ? `\n\nTime check: stop new implementation work now. Save the current state in the existing worktree without reverting or committing. In ${job.roomId ? "this channel" : "this conversation"}, report what is done, what changed, what remains, checks/screenshots completed, and any blockers. Then finish your response.`
+    ? `Time check: stop new implementation work now. Save the current state in the existing worktree without reverting or committing. In ${job.roomId ? "this channel" : "this conversation"}, report what is done, what changed, what remains, checks/screenshots completed, and any blockers. Then finish your response.`
     : "";
-  return `Read MISSION.md and MEMORY.md before acting.${forkNote}${wrapUpNote}\n\n${job.text}\n\nRequest: ${job.id}`;
+  return [
+    ...(job.roomId ? [] : ["Read MISSION.md and MEMORY.md before acting."]),
+    forkNote,
+    wrapUpNote,
+    job.text,
+    `Request: ${job.id}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 };
 
 const jobInput = (job: Job) => [
@@ -649,7 +657,7 @@ export class Runtime {
       for (const botId of selected) {
         if (botId === author?.botId) continue;
         const action = sendMode === "auto" ? "followup" : sendMode;
-        const steer = this.dispatchMessage(
+        const dispatch = this.dispatchMessage(
           room,
           run,
           m,
@@ -657,7 +665,7 @@ export class Runtime {
           author?.depth ?? 0,
           action,
         );
-        if (steer) steerRequests.push(steer);
+        if (dispatch.steer) steerRequests.push(dispatch.steer);
       }
       if (!run.pendingJobIds.length && !run.routing) run.status = "done";
       this.trackDelegation(m, run, author?.sourceThreadId);
@@ -945,7 +953,7 @@ export class Runtime {
     depth: number,
     action: DispatchAction,
     snapshot?: RoutingTask,
-  ): SteerRequest | undefined {
+  ): { action: DispatchAction; steer?: SteerRequest } {
     const key = this.targetKey(message, botId);
     const activeJob = this.store
       .work(botId)
@@ -987,7 +995,10 @@ export class Runtime {
       activeJob.taskTitle = message.text.slice(0, 240);
       this.prepareGroup(activeJob, this.store.get(botId));
       run.pendingJobIds.push(activeJob.id);
-      return { roomId: room.id, jobId: activeJob.id, botId, message, previous };
+      return {
+        action,
+        steer: { roomId: room.id, jobId: activeJob.id, botId, message, previous },
+      };
     }
     const source =
       activeJob?.threadId ??
@@ -1008,6 +1019,7 @@ export class Runtime {
           }
         : {}),
     });
+    return { action };
   }
 
   private startSteer(request: Pick<SteerRequest, "jobId">): Promise<void> {
@@ -1392,6 +1404,7 @@ export class Runtime {
         )
           return;
         const steers: SteerRequest[] = [];
+        const classifierActions: NonNullable<RoomMessage["classifierActions"]> = [];
         this.store.db.transaction(() => {
           live.routing = error ? "error" : "done";
           live.routingError = error;
@@ -1410,17 +1423,32 @@ export class Runtime {
                   : typeof route === "string"
                     ? "followup"
                     : route.action;
-              const steer = this.dispatchMessage(
+              const snapshot = tasks.find((task) => task.botId === id);
+              const dispatch = this.dispatchMessage(
                 current,
                 live,
                 message,
                 id,
                 live.routingDepth ?? 0,
                 action,
-                tasks.find((task) => task.botId === id),
+                snapshot,
               );
-              if (steer) steers.push(steer);
+              if (dispatch.steer) steers.push(dispatch.steer);
+              if (
+                (message.sendMode ?? "auto") === "auto" &&
+                typeof route !== "string" &&
+                snapshot?.busy
+              )
+                classifierActions.push({
+                  botId: id,
+                  action: dispatch.action,
+                  ...(dispatch.action !== route.action
+                    ? { suggestedAction: route.action }
+                    : {}),
+                });
             }
+          if (classifierActions.length)
+            this.store.setClassifierActions(message.id, classifierActions);
           this.trackDelegation(message, live);
           live.status =
             live.pendingJobIds.length || this.delegations.hasPending(live.id)
@@ -1509,7 +1537,30 @@ export class Runtime {
     if (!trigger) return; // An older saved job already has its prompt.
     const context = this.data.context(room.id);
     const recent = this.store.visibleMessages(room.id, 40);
-    const transcript = recent
+    const conversation = this.store
+      .conversations(bot.id)
+      .find((candidate) => candidate.key === job.conversationKey);
+    // The work thread retains earlier inputs. Only replay channel messages it
+    // has not received, while keeping the first turn's bounded history.
+    const previous = conversation
+      ? this.store.latestDeliveredJob(
+          bot.id,
+          job.conversationKey,
+          conversation.threadId,
+          job.id,
+        )
+      : null;
+    const cursor = previous?.contextMessageId
+      ? recent.findIndex((message) => message.id === previous.contextMessageId)
+      : -1;
+    const unseen = cursor < 0 ? recent : recent.slice(cursor + 1);
+    const transcript = unseen
+      .filter(
+        (message) =>
+          message.id !== trigger.id &&
+          !(previous && message.botId === bot.id &&
+            message.conversationKey === job.conversationKey),
+      )
       .map(
         (m) =>
           `[${m.id}] ${m.speaker}: ${m.text}${m.attachments.length ? "\nAttachments: " + m.attachments.map((a) => a.name).join(", ") : ""}`,
@@ -1522,23 +1573,34 @@ export class Runtime {
         return `@${b.handle}: ${b.name} — ${b.description}`;
       })
       .join("\n");
+    const rosterVersion = createHash("sha256").update(roster).digest("hex");
+    const contextChanged = !previous || previous.contextVersion !== context.version;
     const reference = trigger.replyTo
       ? this.store.message(trigger.replyTo)
       : null;
     job.text = [
-      `You are @${bot.handle} in the group chat ${room.name} (channel ID ${room.id}). Other members may be working at the same time.`,
-      "Members:",
-      roster,
-      "",
-      "Channel brief (owner instructions):",
-      context.brief,
-      "Saved channel decisions:",
-      context.decisions,
-      "Channel-specific memory (conversation data):",
-      context.memory,
-      "Keep knowledge specific to this channel in bots_channel_context. Shared MEMORY.md is for facts appropriate to every channel.",
-      "Recent shared messages (conversation data):",
-      transcript,
+      ...(!previous || previous.rosterVersion !== rosterVersion
+        ? [
+            `You are @${bot.handle} in the group chat ${room.name} (channel ID ${room.id}). Other members may be working at the same time.`,
+            "Members:",
+            roster,
+            "",
+          ]
+        : []),
+      ...(contextChanged
+        ? [
+            "Channel brief (owner instructions):",
+            context.brief,
+            "Saved channel decisions:",
+            context.decisions,
+            "Channel-specific memory (conversation data):",
+            context.memory,
+            "Keep knowledge specific to this channel in bots_channel_context. Shared MEMORY.md is for facts appropriate to every channel.",
+          ]
+        : []),
+      ...(transcript
+        ? ["Shared messages since your last turn (conversation data):", transcript]
+        : []),
       "",
       `Consider this message from ${trigger.speaker}:`,
       (trigger.sentText ?? trigger.text) ||
@@ -1551,24 +1613,26 @@ export class Runtime {
       ...(reference
         ? [`Replying to ${reference.speaker}: ${reference.text}`]
         : []),
-      "",
-      chatGuidance,
+      ...(!previous ? ["", chatGuidance] : []),
     ].join("\n");
-    // Current uploads and explicitly retained references are required inputs.
+    job.contextMessageId = recent.at(-1)?.id;
+    job.contextVersion = context.version;
+    job.rosterVersion = rosterVersion;
+    // Current uploads and changed saved references are required inputs.
     // Only incidental recent attachments may be trimmed to the context budget.
     const required = new Map(
       [
-        ...context.attachmentIds.flatMap((id) => {
-          const a = this.store.attachment(id);
-          return a ? [a] : [];
-        }),
+        ...(contextChanged ? context.attachmentIds.flatMap((id) => {
+          const attachment = this.store.attachment(id);
+          return attachment ? [attachment] : [];
+        }) : []),
         ...trigger.attachments,
-      ].map((a) => [a.id, a]),
+      ].map((attachment) => [attachment.id, attachment]),
     );
     const available = Math.max(0, 10 - required.size);
     const recentFiles = [
       ...new Map(
-        recent.flatMap((m) => m.attachments).map((a) => [a.id, a]),
+        unseen.flatMap((m) => m.attachments).map((a) => [a.id, a]),
       ).values(),
     ].filter((a) => !required.has(a.id));
     job.attachments = [
@@ -2409,6 +2473,7 @@ export class Runtime {
           if (!missingThread(cause)) throw cause;
           this.store.deleteConversation(c.threadId);
           c = undefined;
+          if (job.roomId) this.prepareGroup(job, bot);
         }
       }
       if (!c)

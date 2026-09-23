@@ -123,6 +123,72 @@ test("mentions select known identities, while ordinary messages and @all address
   assert.deepEqual(recipients("@atlas @all weigh in", [a, b]), [a.id, b.id]);
 });
 
+test("persistent channel turns receive only new messages", async () => {
+  const x = setup();
+  try {
+    const file = {
+      id: randomUUID(),
+      roomId: x.room.id,
+      projectId: x.a.projectId,
+      path: "/project/Attachments/brief.txt",
+      name: "brief.txt",
+      mimeType: "text/plain",
+      type: "localFile" as const,
+      sizeBytes: 42,
+    };
+    x.store.putAttachment(file);
+    x.runtime.send(x.room, "@atlas First question", randomUUID(), [file]);
+    await x.runtime.drive(x.a);
+    const first = x.store.work(x.a.id)[0]!;
+    assert.match(first.text, /Members:/);
+    assert.equal(first.attachments.length, 1);
+    x.runtime.complete(first.threadId!, "First answer");
+    await x.runtime.driveRoom(x.room);
+
+    x.runtime.send(x.room, "@scribe Intervening update", randomUUID());
+    x.runtime.send(x.room, "@atlas Second question", randomUUID());
+    await x.runtime.drive(x.a);
+    const second = x.store.work(x.a.id)[0]!;
+    assert.match(second.text, /Intervening update/);
+    assert.match(second.text, /Second question/);
+    assert.doesNotMatch(second.text, /Members:|First question|First answer/);
+    assert.deepEqual(second.attachments, []);
+    assert.equal(
+      (x.harness.inspection.sdk.callsTo("threads.send").at(-1)?.[0] as {
+        input: Array<{ type: string; text?: string }>;
+      }).input[0]?.text,
+      jobPrompt(second),
+    );
+  } finally {
+    await x.close();
+  }
+});
+
+test("a recreated work thread receives the full channel history", async () => {
+  const x = setup();
+  try {
+    x.runtime.send(x.room, "@atlas First question", randomUUID());
+    await x.runtime.drive(x.a);
+    const first = x.store.work(x.a.id)[0]!;
+    x.runtime.complete(first.threadId!, "First answer");
+    await x.runtime.driveRoom(x.room);
+    x.harness.inspection.sdk.stub("threads.get", async ({ threadId }) => {
+      if (threadId === first.threadId) throw new Error("Thread not found");
+      return makeThreadResponse({ id: threadId, status: "idle" });
+    });
+
+    x.runtime.send(x.room, "@atlas Second question", randomUUID());
+    await x.runtime.drive(x.a);
+    const second = x.store.work(x.a.id)[0]!;
+    assert.notEqual(second.threadId, first.threadId);
+    assert.match(second.text, /First question/);
+    assert.match(second.text, /First answer/);
+    assert.match(second.text, /Members:/);
+  } finally {
+    await x.close();
+  }
+});
+
 test("the first message gives a blank channel an agent-generated title", async () => {
   const x = setup();
   try {

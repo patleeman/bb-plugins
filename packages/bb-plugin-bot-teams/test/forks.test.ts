@@ -268,15 +268,20 @@ test("Smart can fork a mentioned question; explicit modes bypass classification"
       x.store.job(`${question.id}:${x.bot.id}`)?.dispatchAction,
       "fork",
     );
+    assert.deepEqual(x.store.message(question.id)?.classifierActions, [
+      { botId: x.bot.id, action: "fork" },
+    ]);
     assert.equal(x.store.job(main.id)?.status, "running");
     const queued = x.send("@atlas Actually use WAL later", "followup");
     await x.runtime.driveRoom(x.store.room(x.room.id));
     await flush();
     assert.equal(calls, 1);
     assert.equal(x.store.job(`${queued.id}:${x.bot.id}`)?.status, "queued");
+    assert.equal(x.store.message(queued.id)?.classifierActions, undefined);
     const correction = x.send("@atlas Use WAL now", "steer");
     await flush();
     assert.equal(x.store.job(main.id)?.triggerMessageId, correction.id);
+    assert.equal(x.store.message(correction.id)?.classifierActions, undefined);
     assert.equal(calls, 1);
   } finally {
     await x.close();
@@ -306,6 +311,9 @@ test("a slow router cannot steer a replacement task", async () => {
       next.id,
     );
     assert.equal(x.store.job(`${correction.id}:${x.bot.id}`)?.status, "queued");
+    assert.deepEqual(x.store.message(correction.id)?.classifierActions, [
+      { botId: x.bot.id, action: "followup", suggestedAction: "steer" },
+    ]);
   } finally {
     await x.close();
   }

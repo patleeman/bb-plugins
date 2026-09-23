@@ -2318,6 +2318,21 @@
   font-size: var(--text-xs);
   margin-inline-end: 6px;
 }
+.channel-classifier-action {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  cursor: help;
+  font-size: var(--text-2xs, 10px);
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.channel-classifier-action:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
 .channels-thread-list button,
 .channels-thread-list a {
   min-height: var(--bb-sidebar-row-height, 28px);
