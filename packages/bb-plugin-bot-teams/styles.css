@@ -1470,7 +1470,7 @@
 }
 .channel-sidebar-row:where(:hover, :focus-within, [data-state="open"])
   .channel-nav-row {
-  padding-right: 94px;
+  padding-right: 62px;
 }
 .channel-sidebar-row:where(:hover, :focus-within, [data-state="open"])
   .channel-nav-status {
@@ -1490,7 +1490,7 @@
   }
   .channel-sidebar-row .channel-nav-row {
     min-height: 36px;
-    padding-right: 76px;
+    padding-right: 40px;
   }
   .channel-sidebar-row .channel-nav-status {
     display: inline-flex;
@@ -1824,6 +1824,20 @@
   width: 14px;
   height: 14px;
   flex-shrink: 0;
+}
+.channel-system-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--foreground);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.channel-system-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 .channel-timeout-message {
   justify-content: flex-start;
@@ -2946,16 +2960,7 @@
   background: var(--border);
 }
 
-/* Bot threads nested under a channel. */
-.channel-nav-expand [data-icon-root] {
-  transition: transform 120ms ease;
-}
-.channel-nav-expand[aria-expanded="true"] {
-  background: transparent;
-}
-.channel-nav-expand[aria-expanded="true"] [data-icon-root] {
-  transform: rotate(90deg);
-}
+/* Bot threads nested under the selected channel. */
 .channel-thread-list {
   margin: 0 0 2px;
   padding: 0;
@@ -3034,8 +3039,16 @@
     padding-right: 228px;
   }
 }
-/* Only below a readable transcript does the rail stand down. */
-@container channel (max-width: 600px) {
+@container channel (max-width: 640px) {
+  .channel-rail {
+    width: 184px;
+  }
+  .bot-room[data-rail="open"] .bot-room-main {
+    padding-right: 200px;
+  }
+}
+/* Only when the transcript would be squeezed to nothing does the rail go. */
+@container channel (max-width: 440px) {
   .channel-rail {
     display: none;
   }
@@ -3049,6 +3062,13 @@
   justify-content: flex-end;
   height: 18px;
   flex-shrink: 0;
+  user-select: none;
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+.channel-rail-header button {
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
 }
 .channel-rail-close {
   width: 18px;
