@@ -403,10 +403,10 @@ export function ChannelRail({
   return (
     <aside className="channel-rail" aria-label={`#${room.name} details`}>
       <div className="channel-rail-header">
-        <h2 className="channel-rail-heading">Channel</h2>
         <Button
           variant="ghost"
           size="sm"
+          className="channel-rail-close"
           aria-label="Hide channel details"
           onClick={onClose}
         >
@@ -617,23 +617,10 @@ export function ChannelRail({
             collapsed={isCollapsed("usage")}
             onToggle={toggle}
           >
-            <div className="channel-rail-usage">
-              <p className="channel-rail-activity">
-                {usage.turns} / {usage.limits.turnsPerDay} turns today
-                {usage.errors > 0 && ` · ${usage.errors} failed`}
-              </p>
-              <div
-                className="channel-rail-meter"
-                role="img"
-                aria-label={`${usage.turns} of ${usage.limits.turnsPerDay} turns used today`}
-              >
-                <span
-                  style={{
-                    width: `${Math.min(100, Math.round((usage.turns / Math.max(1, usage.limits.turnsPerDay)) * 100))}%`,
-                  }}
-                />
-              </div>
-            </div>
+            <p className="channel-rail-usage">
+              {usage.turns} / {usage.limits.turnsPerDay} turns today
+              {usage.errors > 0 && ` · ${usage.errors} failed`}
+            </p>
           </RailSection>
         )}
       </div>

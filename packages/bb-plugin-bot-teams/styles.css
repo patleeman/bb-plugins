@@ -2986,23 +2986,28 @@
 
 /* Channel rail: ambient state for the open channel, beside the transcript. */
 /*
- * A card floating in the transcript's right gutter: it sits over the channel
- * rather than taking a column out of it, and it is only as tall as it needs
- * to be, so a quiet channel leaves almost nothing on screen.
+ * A quiet card floating in the transcript's right gutter. It sits over the
+ * channel rather than taking a column out of it, is only as tall as its
+ * content, and carries no rules or heavy chrome: everything sizes from the
+ * card's own type scale so nothing drifts out of step with the transcript.
  */
 .channel-rail {
   position: absolute;
   z-index: 2;
-  top: 8px;
-  right: 10px;
-  width: 268px;
-  max-height: calc(100% - 18px);
+  top: 10px;
+  right: 12px;
+  width: 232px;
+  max-height: calc(100% - 20px);
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: calc(var(--radius, 8px) + 2px);
-  background: var(--card, var(--background));
-  box-shadow: 0 8px 30px #0003;
+  padding: 2px;
+  border: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--card, var(--background)) 88%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 2px 12px #0000001f;
+  font-size: 11.5px;
+  line-height: 1.35;
   overflow: hidden;
 }
 .bot-room-layout {
@@ -3010,25 +3015,23 @@
 }
 /*
  * The transcript centres itself, so on a wide channel the card lands in empty
- * gutter. Below that, hold the column and the composer clear of the card
- * instead of letting it cover them.
+ * gutter. Below that, hold the column and the composer clear of it.
  */
 @container channel (max-width: 1080px) {
   .bot-room[data-rail="open"] .bot-room-main {
-    padding-right: 288px;
+    padding-right: 256px;
   }
 }
 /*
- * The rail stays put wherever it fits, including alongside BB's right
- * workbench. On a tight channel it gives up width of its own before it gives
- * up the transcript's.
+ * The rail stays wherever it fits, including beside BB's right workbench. On a
+ * tight channel it gives up its own width before the transcript's.
  */
 @container channel (max-width: 820px) {
   .channel-rail {
-    width: 232px;
+    width: 208px;
   }
   .bot-room[data-rail="open"] .bot-room-main {
-    padding-right: 252px;
+    padding-right: 228px;
   }
 }
 /* Only below a readable transcript does the rail stand down. */
@@ -3040,37 +3043,45 @@
     padding-right: 0;
   }
 }
+/* No panel title: the section labels already say what each group is. */
 .channel-rail-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 6px 6px 12px;
+  justify-content: flex-end;
+  height: 18px;
+  flex-shrink: 0;
 }
-.channel-rail-heading {
-  margin: 0;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.channel-rail-close {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  opacity: 0;
   color: var(--muted-foreground);
+  transition: opacity 120ms ease;
+}
+.channel-rail:hover .channel-rail-close,
+.channel-rail:focus-within .channel-rail-close {
+  opacity: 0.75;
+}
+.channel-rail-close:hover {
+  opacity: 1;
+}
+.channel-rail-close svg {
+  width: 11px;
+  height: 11px;
 }
 .channel-rail-scroll {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 6px 8px 16px;
+  padding: 0 4px 6px;
   scrollbar-width: thin;
 }
 .channel-rail-error {
-  margin: 4px 4px 8px;
-  font-size: var(--text-xs);
+  margin: 0 4px 6px;
   color: var(--destructive);
 }
 .channel-rail-section + .channel-rail-section {
-  margin-top: 10px;
-  border-top: 1px solid var(--border);
-  padding-top: 10px;
+  margin-top: 7px;
 }
 .channel-rail-section-header {
   display: flex;
@@ -3081,23 +3092,28 @@
   display: flex;
   flex: 1;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
-  padding: 2px 4px;
-  border-radius: calc(var(--radius, 8px) - 4px);
+  padding: 1px 4px;
+  border-radius: 5px;
   background: none;
   border: 0;
   cursor: pointer;
   color: var(--muted-foreground);
-  font-size: var(--text-xs);
+  font-size: 10.5px;
   font-weight: 600;
+  letter-spacing: 0.02em;
 }
 .channel-rail-section-toggle:hover {
-  background: var(--state-hover);
+  color: var(--foreground);
 }
 .channel-rail-chevron {
   display: inline-flex;
-  opacity: 0.7;
+  opacity: 0.55;
+}
+.channel-rail-chevron svg {
+  width: 11px;
+  height: 11px;
 }
 .channel-rail-section-title {
   overflow: hidden;
@@ -3106,33 +3122,31 @@
 }
 .channel-rail-count {
   margin-left: auto;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--muted);
   color: var(--muted-foreground);
-  font-size: var(--text-xs);
+  font-size: 10.5px;
   font-weight: 500;
+  opacity: 0.7;
 }
 .channel-rail-section-body {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  margin-top: 2px;
+  margin-top: 1px;
 }
 .channel-rail-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   width: 100%;
   min-width: 0;
-  padding: 4px 6px;
+  padding: 3px 5px;
   border: 0;
-  border-radius: calc(var(--radius, 8px) - 4px);
+  border-radius: 5px;
   background: none;
   color: inherit;
   cursor: pointer;
   text-align: left;
-  font-size: var(--text-xs);
+  font-size: inherit;
+  line-height: inherit;
   text-decoration: none;
 }
 .channel-rail-row:hover:not(:disabled) {
@@ -3148,14 +3162,18 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
+  width: 15px;
   flex-shrink: 0;
-  font-size: var(--text-xs);
+  font-size: 11px;
+}
+.channel-rail-avatar svg {
+  width: 12px;
+  height: 12px;
 }
 .channel-rail-name {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3165,16 +3183,14 @@
 .channel-rail-live {
   display: flex;
   align-items: flex-start;
-  gap: 2px;
+  gap: 1px;
 }
 .channel-rail-live-open {
   align-items: flex-start;
-  padding-block: 5px;
 }
 .channel-rail-live-text {
   display: flex;
   flex-direction: column;
-  gap: 1px;
   min-width: 0;
   flex: 1;
 }
@@ -3190,7 +3206,7 @@
 }
 .channel-rail-elapsed {
   font-variant-numeric: tabular-nums;
-  font-size: var(--text-xs);
+  opacity: 0.8;
 }
 .channel-rail-queued {
   font-style: italic;
@@ -3198,27 +3214,43 @@
 .channel-rail-state {
   margin-left: auto;
   flex-shrink: 0;
-  font-size: var(--text-xs);
+  opacity: 0.8;
 }
 .channel-rail-state[data-state="working"] {
   color: var(--primary, var(--foreground));
+  opacity: 1;
 }
 .channel-rail-state[data-state="attention"] {
   color: var(--destructive);
+  opacity: 1;
 }
 .channel-rail-stop {
   flex-shrink: 0;
-  height: 24px;
-  width: 24px;
+  height: 20px;
+  width: 20px;
   padding: 0;
+  opacity: 0.6;
+}
+.channel-rail-stop:hover:not(:disabled) {
+  opacity: 1;
+}
+.channel-rail-stop svg,
+.channel-rail-automation .bot-button svg {
+  width: 11px;
+  height: 11px;
+}
+.channel-rail-working svg,
+.channel-rail-row .channel-working svg {
+  width: 12px;
+  height: 12px;
 }
 .channel-rail-routing {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 6px;
+  gap: 5px;
+  padding: 3px 5px;
+  margin: 0;
   color: var(--muted-foreground);
-  font-size: var(--text-xs);
 }
 .channel-rail-attention .channel-rail-activity {
   white-space: normal;
@@ -3229,31 +3261,13 @@
 .channel-rail-automation {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
 }
-.channel-rail-empty {
-  margin: 2px 6px;
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
-}
+.channel-rail-empty,
 .channel-rail-usage {
-  padding: 2px 6px 0;
-}
-.channel-rail-meter {
-  height: 3px;
-  /* Inset, so a barely-used channel reads as a meter and not a section rule. */
-  max-width: 140px;
-  margin-top: 5px;
-  border-radius: 999px;
-  background: var(--border);
-  overflow: hidden;
-}
-.channel-rail-meter > span {
-  display: block;
-  height: 100%;
-  min-width: 2px;
-  border-radius: 999px;
-  background: var(--muted-foreground);
+  margin: 0;
+  padding: 2px 5px;
+  color: var(--muted-foreground);
 }
 .channel-rail-toggle {
   position: relative;
@@ -3262,8 +3276,8 @@
   position: absolute;
   top: 5px;
   right: 5px;
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: var(--primary, var(--foreground));
 }
