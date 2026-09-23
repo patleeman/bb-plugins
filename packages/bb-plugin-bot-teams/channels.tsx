@@ -1623,7 +1623,9 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
   };
   const working = channelWork(jobs);
   const responseErrors = jobs.filter(
-    (j) => j.status === "error" && !jobs.some((r) => r.retryOf === j.id),
+    (j) =>
+      (j.status === "error" || (j.status === "cancelled" && j.timedOut)) &&
+      !jobs.some((r) => r.retryOf === j.id),
   );
   return (
     <div className="bot-room">
@@ -1721,7 +1723,8 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
                     .map((r) => r.emoji),
                 ),
               ];
-              if (m.system === "bot_joined") {
+              if (m.system === "bot_joined" || m.system === "bot_timeout") {
+                const timedOut = m.system === "bot_timeout";
                 return (
                   <div key={m.id} data-channel-message={m.id}>
                     {newDay && (
@@ -1735,10 +1738,12 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
                     )}
                     <div
                       id={`channel-message-${m.id}`}
-                      className="channel-system-message"
+                      className={`channel-system-message${
+                        timedOut ? " channel-timeout-message" : ""
+                      }`}
                       role="status"
                     >
-                      <Icon name="UserRoundPlus" />
+                      <Icon name={timedOut ? "Clock" : "UserRoundPlus"} />
                       <span>{m.text}</span>
                     </div>
                   </div>
@@ -2142,8 +2147,10 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
             {responseErrors.slice(0, 5).map((j) => (
               <div key={j.id} className="channel-response-error" role="status">
                 <strong>
-                  {bots.find((b) => b.id === j.botId)?.name ?? "Bot"} couldn’t
-                  finish
+                  {bots.find((b) => b.id === j.botId)?.name ?? "Bot"}{" "}
+                  {j.timedOut
+                    ? "timed out · task incomplete"
+                    : "couldn’t finish"}
                 </strong>
                 <span>{j.error}</span>
                 {(!room.memberIds.includes(j.botId) ||
@@ -2156,6 +2163,7 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
                     size="sm"
                     disabled={
                       !!retrying ||
+                      !!j.cancellationPending ||
                       !!room.archived ||
                       !room.memberIds.includes(j.botId) ||
                       !bots.some((b) => b.id === j.botId && !b.retired)
@@ -2172,7 +2180,11 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
                       }
                     }}
                   >
-                    Retry response
+                    {j.cancellationPending
+                      ? "Stopping…"
+                      : j.timedOut
+                        ? "Resume response"
+                        : "Retry response"}
                   </Button>
                 </div>
               </div>

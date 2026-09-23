@@ -53,9 +53,53 @@ export class ChannelNotifications {
       .get(id) as Notice | undefined;
     if (!n || n.created_at < Date.now() - 86400000) return null;
     const room = this.store.findRoom(n.room_id);
-    if (!room || room.archived || (room.lastReadAt ?? 0) >= n.created_at)
-      return null;
+    if (!room || room.archived) return null;
     const path = `/plugins/bot-teams/channels/${room.id}`;
+    if (n.kind === "attention") {
+      const m = this.store.message(n.subject_id);
+      if (
+        !m?.attentionReason ||
+        m.system ||
+        !m.botId ||
+        !room.memberIds.includes(m.botId)
+      )
+        return null;
+      const bot = this.store.get(m.botId);
+      if (bot.retired) return null;
+      return {
+        coalesceKey: `attention:${m.id}`,
+        title: `#${room.name} needs you · ${bot.name}`,
+        body: m.text,
+        kind: "turn-finished",
+        threadId: m.sourceThreadId ?? null,
+        projectId: bot.projectId,
+        path: `${path}/message/${encodeURIComponent(m.id)}`,
+      };
+    }
+    if (n.kind === "timeout") {
+      const job = this.store.job(n.subject_id);
+      if (
+        !job?.timedOut ||
+        job.status !== "cancelled" ||
+        job.roomId !== room.id ||
+        !room.memberIds.includes(job.botId)
+      )
+        return null;
+      const bot = this.store.get(job.botId);
+      if (bot.retired) return null;
+      return {
+        coalesceKey: `timeout:${job.id}`,
+        title: `#${room.name} · ${bot.name} needs a check-in`,
+        body: job.activitySnippet
+          ? `Stopped before final report. Last progress: ${job.activitySnippet}`
+          : job.error ?? "The response timed out.",
+        kind: "thread-error",
+        threadId: job.threadId,
+        projectId: bot.projectId,
+        path: `${path}/message/${encodeURIComponent(`system:timeout:${job.id}`)}`,
+      };
+    }
+    if ((room.lastReadAt ?? 0) >= n.created_at) return null;
     if (n.kind === "reply") {
       const m = this.store.message(n.subject_id);
       if (!m?.botId || m.system || !room.memberIds.includes(m.botId))

@@ -7,7 +7,7 @@ import type {
   ChannelAutomationRunPage,
 } from "./automation-contract";
 import { Button } from "./components/ui/button";
-import { ErrorMessage, message } from "./bot-ui";
+import { EmptyState, ErrorMessage, message, StatusBadge } from "./bot-ui";
 import { Modal } from "./channel-controls";
 
 export function ChannelAutomationsView({
@@ -184,21 +184,24 @@ export function ChannelAutomationsView({
           New automation
         </Button>
       )}
-      <p className="channel-automation-hint">
-        Ask a bot to schedule a task here, including the time and timezone. For
-        example: “Every weekday at 9am New York time, summarize our open
-        questions.”
-      </p>
-      <div
-        className="channel-automation-list"
-        aria-label="Channel automations"
-        aria-busy={loading}
-      >
+      {!editing && <>
+        <p className="channel-automation-hint">
+          Schedule a task with its time and timezone. Example: “Every weekday
+          at 9am New York time, summarize our open questions.”
+        </p>
+        <div
+          className="channel-automation-list"
+          aria-label="Channel automations"
+          aria-busy={loading}
+        >
         {items.map((a) => (
           <article className="channel-automation" key={a.id}>
             <div className="channel-automation-title">
               <strong>{a.name}</strong>
-              <span>{a.enabled ? "Enabled" : "Paused"}</span>
+              <StatusBadge
+                status={a.enabled ? "ready" : "paused"}
+                label={a.enabled ? "Enabled" : "Paused"}
+              />
             </div>
             <p>
               {bots.find((b) => b.id === a.botId)?.name ?? "Unavailable bot"} ·{" "}
@@ -233,7 +236,7 @@ export function ChannelAutomationsView({
                 Edit
               </Button>
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 disabled={!!pending}
                 onClick={() => void act(a, a.enabled ? "pause" : "resume")}
@@ -241,7 +244,7 @@ export function ChannelAutomationsView({
                 {a.enabled ? "Pause" : "Resume"}
               </Button>
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 disabled={!!pending}
                 onClick={() => void act(a, "run")}
@@ -279,6 +282,7 @@ export function ChannelAutomationsView({
                 <Button
                   variant="ghost"
                   size="sm"
+                  className="channel-automation-destructive"
                   disabled={!!pending}
                   onClick={() => setDeleting(a.id)}
                 >
@@ -292,7 +296,9 @@ export function ChannelAutomationsView({
                 className="channel-automation-history"
               >
                 <p>Dispatch and response history</p>
-                {!history.runs.length && <p>No runs yet.</p>}
+                {!history.runs.length && (
+                  <EmptyState title="No runs yet" />
+                )}
                 {history.runs.map((run) => (
                   <div key={run.id}>
                     <p>
@@ -360,24 +366,28 @@ export function ChannelAutomationsView({
           </article>
         ))}
         {!items.length && !loading && !error && (
-          <p>No automations in this channel yet.</p>
+          <EmptyState
+            title="No automations yet"
+            description="Create a schedule to give a channel bot recurring work."
+          />
         )}
-        {loading && <p role="status">Loading automations…</p>}
+        {loading && <p role="status" className="bot-empty-state">Loading automations…</p>}
         {offset !== null && (
           <Button
-            variant="outline"
+            variant="ghost"
             disabled={loading || !!pending}
             onClick={() => void load(offset)}
           >
             Load more
           </Button>
         )}
-      </div>
-      {notice && <p role="status">{notice}</p>}
+        </div>
+      </>}
+      {notice && <p role="status" className="channel-workbench-intro">{notice}</p>}
       <ErrorMessage error={error} />
       {error && (
         <Button
-          variant="outline"
+          variant="ghost"
           disabled={loading || !!pending}
           onClick={() => void load()}
         >

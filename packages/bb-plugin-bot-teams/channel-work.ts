@@ -9,9 +9,11 @@ export function channelWorkActivity(
     | "queueReason"
     | "queuePosition"
     | "activitySnippet"
+    | "wrapUpRequestedAt"
   >,
 ) {
   if (job.cancellationPending) return "Stopping…";
+  if (job.wrapUpRequestedAt) return "Wrap-up requested · preparing final update…";
   if (job.status === "queued")
     return job.queueReason
       ? `${job.queueReason}${job.queuePosition ? ` · Position ${job.queuePosition}` : ""}`

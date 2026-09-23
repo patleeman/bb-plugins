@@ -8,10 +8,12 @@ export function ResourceToolbar({
   value,
   onChange,
   controls,
+  placeholder = "Search",
 }: {
   value: string;
   onChange: (value: string) => void;
   controls?: ReactNode;
+  placeholder?: string;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -24,7 +26,7 @@ export function ResourceToolbar({
         <Input
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="Search bots"
+          placeholder={placeholder}
           aria-label="Search bots"
           className="h-8 pl-8"
         />
@@ -63,7 +65,7 @@ export function ResourceRow({
   return (
     <div
       data-resource-row
-      className="group grid min-w-0 cursor-pointer grid-cols-[1.5rem_minmax(0,1fr)_auto] items-center gap-3 bg-transparent py-3 text-left"
+      className="group grid min-w-0 cursor-pointer grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-3 bg-transparent py-3 text-left"
       onClick={(event) => {
         if (event.target instanceof Element && event.target.closest("button"))
           return;
@@ -71,7 +73,7 @@ export function ResourceRow({
       }}
     >
       <span
-        className="flex size-6 shrink-0 items-center justify-center text-xl"
+        className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-xl"
         aria-hidden
       >
         {leading}

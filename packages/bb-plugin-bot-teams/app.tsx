@@ -5,12 +5,10 @@ import {
   useRpc,
   useRealtime,
   useBbNavigate,
-  experimental_Icon as Icon,
   type PluginNavPanelProps,
 } from "@get-bb/plugin-sdk/app";
-import type { Bot, Conversation, Job, Room, rpcContract } from "./contract";
+import type { Bot, BotListItem, Conversation, Job, Room, rpcContract } from "./contract";
 import { Button } from "./components/ui/button";
-import { COARSE_POINTER_HEADER_ICON_BUTTON_CLASS } from "./components/ui/coarse-pointer-sizing";
 import {
   BackButton,
   TabBar,
@@ -18,6 +16,7 @@ import {
   DocumentEditor,
   WorkList,
   ErrorMessage,
+  StatusBadge,
   message,
 } from "./bot-ui";
 import {
@@ -86,6 +85,25 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
       </div>
     );
   const { bot, jobs } = data;
+  const activeWork = jobs.some((job) =>
+    ["queued", "dispatching", "running"].includes(job.status),
+  );
+  const botStatus = bot.error
+    ? "error"
+    : activeWork
+      ? "working"
+      : bot.paused || bot.retired
+        ? "paused"
+        : "ready";
+  const statusLabel = bot.retired
+    ? "Retired"
+    : bot.error
+      ? "Failing"
+      : botStatus === "paused"
+        ? "Paused"
+        : botStatus === "working"
+          ? "Working"
+          : "Ready";
   return (
     <div className="bot-detail">
       <header className="bot-thread-bar">
@@ -103,41 +121,19 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
           }
         />
         <div className="bot-bar-actions">
-          <span className="bot-status">
-            {bot.retired
-              ? "Retired"
-              : bot.paused
-                ? "Mission paused"
-                : bot.error
-                  ? "Needs attention"
-                  : ""}
-          </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            className={COARSE_POINTER_HEADER_ICON_BUTTON_CLASS}
-            aria-label={
-              bot.paused ? "Resume mission work" : "Pause mission work"
-            }
-            disabled={pending || bot.retired}
-            onClick={() =>
-              action(() => rpc.call("pause", { id, paused: !bot.paused }))
-            }
-          >
-            <Icon name={bot.paused ? "Play" : "Pause"} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={pending}
-            onClick={() =>
-              bot.retired
-                ? action(() => rpc.call("retire", { id, retired: false }))
-                : setRetireOpen(true)
-            }
-          >
-            {bot.retired ? "Restore bot" : "Retire bot"}
-          </Button>
+          <StatusBadge status={botStatus} label={statusLabel} />
+          {!bot.retired && (
+            <Button
+              variant={bot.paused ? "default" : "ghost"}
+              size="sm"
+              disabled={pending}
+              onClick={() =>
+                action(() => rpc.call("pause", { id, paused: !bot.paused }))
+              }
+            >
+              {bot.paused ? "Resume" : "Pause"}
+            </Button>
+          )}
         </div>
       </header>
       <Modal
@@ -160,6 +156,7 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
             Cancel
           </Button>
           <Button
+            variant="destructive"
             size="sm"
             disabled={pending}
             onClick={() =>
@@ -183,7 +180,18 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
         <div className="bot-section">
           <div className="bot-config-content">
             {tab === "profile" && (
-              <ProfileForm key={bot.id} bot={bot} onSaved={load} />
+              <ProfileForm
+                key={bot.id}
+                bot={bot}
+                onSaved={load}
+                onRetire={() => {
+                  if (bot.retired) {
+                    void action(() => rpc.call("retire", { id, retired: false }));
+                  } else {
+                    setRetireOpen(true);
+                  }
+                }}
+              />
             )}
             {(tab === "mission" || tab === "memory") && (
               <DocumentEditor
@@ -229,7 +237,7 @@ function BotsPage({ subPath }: PluginNavPanelProps) {
   const rpc = useRpc<typeof rpcContract>(),
     navigate = useBbNavigate();
   const [data, setData] = useState<{
-      bots: Bot[];
+      bots: BotListItem[];
       rooms: Room[];
       botCreateRequests: import("./contract").BotCreateRequestView[];
     } | null>(null),

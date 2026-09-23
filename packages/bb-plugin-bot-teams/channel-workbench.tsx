@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { Attachment, RoomMessage, rpcContract } from "./contract";
 import {
@@ -7,9 +7,18 @@ import {
   type ChannelContext,
 } from "./workspace-contract";
 import { Button } from "./components/ui/button";
+import { experimental_Icon as Icon } from "@get-bb/plugin-sdk/app";
+import { IconActionTooltip } from "./channel-controls";
 import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
-import { ErrorMessage, message } from "./bot-ui";
+import {
+  ActionBar,
+  EmptyState,
+  ErrorMessage,
+  FormRow,
+  message,
+  Section,
+} from "./bot-ui";
 import { ChannelAttachments } from "./channel-attachments";
 
 export type WorkbenchPanel =
@@ -22,15 +31,16 @@ export type WorkbenchPanel =
 export const workbenchLabels: Record<WorkbenchPanel, string> = {
   automations: "Automations",
   activity: "Activity",
-  context: "Channel context",
+  context: "Context",
   files: "Files",
-  usage: "Usage and limits",
-  saved: "Saved decisions",
+  usage: "Usage",
+  saved: "Decisions",
 };
 import { RevisionList, type Revision } from "./revision-list";
 
 export function ContextPanel({ id }: { id: string }) {
   const rpc = useRpc<typeof rpcContract>();
+  const controlId = useId();
   const key = `bb:bots:context:${id}`;
   const [draft, setDraft] = useState<ChannelContext | null>(null),
     [baseline, setBaseline] = useState<ChannelContext | null>(null);
@@ -61,7 +71,7 @@ export function ContextPanel({ id }: { id: string }) {
       setDraft(restored ?? d);
       if (restored && restored.version !== d.version)
         setError(
-          "Channel context changed. Your draft is preserved. Copy your edits or reload the latest version.",
+        "Channel context changed. Your draft is preserved. Copy your edits or reload the latest version.",
         );
     } catch (e) {
       setError(message(e));
@@ -141,65 +151,74 @@ export function ContextPanel({ id }: { id: string }) {
     return (
       <div className="channel-workbench-panel">
         <ErrorMessage error={error} />
-        <p>Loading context…</p>
+        <p role="status" className="bot-empty-state">Loading context…</p>
       </div>
     );
   return (
     <div className="channel-workbench-panel channel-context-form">
-      <p className="text-sm text-muted-foreground">
-        Standing context for every bot in this channel. Bot-wide knowledge stays
-        in each bot’s memory.
+      <p className="channel-workbench-intro">
+        Shared guidance that every bot in this channel receives.
       </p>
-      {(
-        [
-          ["brief", "Brief and instructions"],
-          ["decisions", "Decisions"],
-          ["memory", "Channel memory"],
-        ] as const
-      ).map(([field, label]) => (
-        <label key={field}>
-          {label}
-          <Textarea
-            aria-label={label}
-            value={draft[field]}
-            maxLength={16000}
-            disabled={pending}
-            onChange={(e) => {
-              setDraft({ ...draft, [field]: e.target.value });
-              setNotice("");
-            }}
-          />
-        </label>
-      ))}
-      <fieldset>
-        <legend>Reference files</legend>
+      <Section title="Channel guidance">
+        {(
+          [
+            ["brief", "Brief and instructions", "What bots should know before working here."],
+            ["decisions", "Decisions", "Settled choices and conventions for this channel."],
+            ["memory", "Channel memory", "Durable facts shared across the channel."],
+          ] as const
+        ).map(([field, label, placeholder]) => (
+          <FormRow
+            key={field}
+            label={label}
+            htmlFor={`${controlId}-${field}`}
+            className={field === "memory" ? "channel-memory-row" : ""}
+          >
+            <Textarea
+              id={`${controlId}-${field}`}
+              rows={field === "memory" ? 7 : 3}
+              value={draft[field]}
+              placeholder={placeholder}
+              maxLength={16000}
+              disabled={pending}
+              onChange={(e) => {
+                setDraft({ ...draft, [field]: e.target.value });
+                setNotice("");
+              }}
+            />
+          </FormRow>
+        ))}
+      </Section>
+      <Section title="Reference files">
         {files.length ? (
-          files.map((a) => (
-            <label className="channel-reference-file" key={a.id}>
-              <input
-                type="checkbox"
-                checked={draft.attachmentIds.includes(a.id)}
-                disabled={
-                  pending ||
-                  (!draft.attachmentIds.includes(a.id) &&
-                    draft.attachmentIds.length >= 10)
-                }
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    attachmentIds: e.target.checked
-                      ? [...draft.attachmentIds, a.id]
-                      : draft.attachmentIds.filter((x) => x !== a.id),
-                  })
-                }
-              />
-              {a.name}
-            </label>
-          ))
+          <div className="channel-reference-files">
+            {files.map((a) => (
+              <label className="channel-reference-file" key={a.id}>
+                <input
+                  type="checkbox"
+                  checked={draft.attachmentIds.includes(a.id)}
+                  disabled={
+                    pending ||
+                    (!draft.attachmentIds.includes(a.id) &&
+                      draft.attachmentIds.length >= 10)
+                  }
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      attachmentIds: e.target.checked
+                        ? [...draft.attachmentIds, a.id]
+                        : draft.attachmentIds.filter((x) => x !== a.id),
+                    })
+                  }
+                />
+                {a.name}
+              </label>
+            ))}
+          </div>
         ) : (
-          <p className="text-sm text-muted-foreground">
-            Send a file in the channel to keep it as a reference.
-          </p>
+          <EmptyState
+            title="No reference files"
+            description="Send a file in the channel to keep it here."
+          />
         )}
         {fileCursor && (
           <Button
@@ -211,45 +230,49 @@ export function ContextPanel({ id }: { id: string }) {
             More files
           </Button>
         )}
-      </fieldset>
+      </Section>
       <ErrorMessage error={error} />
-      <p role="status">
-        {notice || (dirty ? "Unsaved changes · draft saved" : "")}
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          size="sm"
-          disabled={pending || !dirty || draft.version !== baseline?.version}
-          onClick={() => void save()}
-        >
-          Save context
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={pending}
-          onClick={() => {
-            if (
-              !dirty ||
-              window.confirm("Discard your context draft and reload?")
-            ) {
-              localStorage.removeItem(key);
-              void load();
-              setError(null);
-            }
-          }}
-        >
-          Reload
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={historyPending}
-          onClick={() => void history()}
-        >
-          Version history
-        </Button>
-      </div>
+      <ActionBar
+        status={notice || (dirty ? "Unsaved changes · draft saved" : "")}
+        secondary={
+          <>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => {
+                if (
+                  !dirty ||
+                  window.confirm("Discard your context draft and reload?")
+                ) {
+                  localStorage.removeItem(key);
+                  void load();
+                  setError(null);
+                }
+              }}
+            >
+              Reload
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={historyPending}
+              onClick={() => void history()}
+            >
+              Version history
+            </Button>
+          </>
+        }
+        primary={dirty || pending ? (
+          <Button
+            size="sm"
+            disabled={pending || !dirty || draft.version !== baseline?.version}
+            onClick={() => void save()}
+          >
+            {pending ? "Saving…" : "Save context"}
+          </Button>
+        ) : undefined}
+      />
       {revisions && (
         <RevisionList
           revisions={revisions.map((r) => ({
@@ -306,13 +329,14 @@ export function FilesPanel({ id }: { id: string }) {
   return (
     <div className="channel-workbench-panel">
       <ErrorMessage error={error} />
-      {!files.length && (
-        <p>
-          {pending
-            ? "Loading files…"
-            : "Files shared by you and the bots appear here."}
-        </p>
-      )}
+      {!files.length && (pending ? (
+        <p role="status" className="bot-empty-state">Loading files…</p>
+      ) : (
+        <EmptyState
+          title="No files yet"
+          description="Shared files will appear here."
+        />
+      ))}
       <ChannelAttachments attachments={files} />
       {cursor && (
         <Button
@@ -336,103 +360,174 @@ export function UsagePanel({
   kind: "bot" | "channel";
 }) {
   const rpc = useRpc<typeof rpcContract>();
+  const controlId = useId();
   const [usage, setUsage] = useState<Awaited<
     ReturnType<typeof rpc.call<"usage">>
   > | null>(null);
   const [limits, setLimits] = useState(defaultLimits),
+    [baselineLimits, setBaselineLimits] = useState(defaultLimits),
     [error, setError] = useState<string | null>(null),
     [pending, setPending] = useState(false),
     [notice, setNotice] = useState("");
+  const dirty = JSON.stringify(limits) !== JSON.stringify(baselineLimits);
   useEffect(() => {
     void rpc.call("usage", { id, kind }).then(
-      (d) => {
-        setUsage(d);
-        setLimits(d.limits);
+      (data) => {
+        setUsage(data);
+        setLimits(data.limits);
+        setBaselineLimits(data.limits);
       },
-      (e) => setError(message(e)),
+      (cause) => setError(message(cause)),
     );
   }, [id, kind, rpc]);
+  const limitsValid = Object.entries({
+    turnsPerHour: [1, 1000],
+    turnsPerDay: [1, 10000],
+    minutesPerTurn: [1, 180],
+    concurrentForks: [1, 16],
+  }).every(([field, [minimum, maximum]]) => {
+    const value = limits[field as keyof typeof limits];
+    return Number.isInteger(value) && value >= minimum! && value <= maximum!;
+  });
+  const save = async () => {
+    if (pending || !usage || !dirty || !limitsValid) return;
+    setPending(true);
+    setError(null);
+    setNotice("");
+    try {
+      const data = await rpc.call("saveLimits", { id, kind, limits });
+      setUsage(data);
+      setLimits(data.limits);
+      setBaselineLimits(data.limits);
+      setNotice("Limits saved.");
+    } catch (cause) {
+      setError(message(cause));
+    } finally {
+      setPending(false);
+    }
+  };
+  const values = usage
+    ? [
+        ["Tasks", usage.turns],
+        ["Forks", usage.forks],
+        ["Unfinished", usage.active],
+        ["Failed", usage.errors],
+        ...(kind === "channel"
+          ? [
+              ["Classifier calls", usage.routingCalls],
+              [
+                "Classifier time",
+                `${Math.round(usage.routingMilliseconds / 1000)}s`,
+              ],
+            ]
+          : []),
+      ]
+    : [];
   return (
     <div className="channel-workbench-panel channel-context-form">
-      <p className="text-sm text-muted-foreground">
-        Work requested in the last 24 hours. Bot and channel limits both apply.
-      </p>
-      {usage && (
-        <dl className="channel-usage-stats">
-          {[
-            ["Tasks", usage.turns],
-            ["Forks", usage.forks],
-            ["Unfinished", usage.active],
-            ["Failed", usage.errors],
-            ...(kind === "channel"
-              ? [
-                  ["Classifier calls", usage.routingCalls],
-                  [
-                    "Classifier time",
-                    `${Math.round(usage.routingMilliseconds / 1000)}s`,
-                  ],
-                ]
-              : []),
-          ].map(([label, value]) => (
-            <div key={label}>
-              <dt>{label}</dt>
-              <dd>{value}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
-      <p className="text-xs text-muted-foreground">
-        Task counts and limits count started turns. Unfinished includes queued
-        work. Classifier calls are shown separately. Provider billing and token
-        usage remain in View work.
-      </p>
-      {(
-        [
-          ["turnsPerHour", "Turns per hour"],
-          ["turnsPerDay", "Turns per day"],
-          ...(kind === "bot"
-            ? [
-                ["minutesPerTurn", "Minutes per turn"],
-                ["concurrentForks", "Concurrent forks"],
-              ]
-            : []),
-        ] as [keyof typeof limits, string][]
-      ).map(([field, label]) => (
-        <label key={field}>
-          {label}
-          <Input
-            type="number"
-            min={1}
-            aria-label={label}
-            value={limits[field]}
-            onChange={(e) =>
-              setLimits({ ...limits, [field]: Number(e.target.value) })
-            }
-          />
-        </label>
-      ))}
-      <ErrorMessage error={error} />
-      <p role="status">{notice}</p>
-      <Button
-        size="sm"
-        disabled={pending || !usage}
-        onClick={async () => {
-          setPending(true);
-          setError(null);
-          try {
-            const u = await rpc.call("saveLimits", { id, kind, limits });
-            setUsage(u);
-            setLimits(u.limits);
-            setNotice("Limits saved. Queued work uses the new limits.");
-          } catch (e) {
-            setError(message(e));
-          } finally {
-            setPending(false);
-          }
-        }}
-      >
-        Save limits
-      </Button>
+      <Section title="Last 24 hours">
+        <div className="channel-usage-heading">
+          <IconActionTooltip
+            label="Task counts and limits count started turns. Unfinished includes queued work. Classifier calls are shown separately. Provider billing and token usage remain in View work."
+          >
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="How usage is counted"
+            >
+              <Icon name="Info" />
+            </Button>
+          </IconActionTooltip>
+        </div>
+        {usage ? (
+          <dl className="channel-usage-stats">
+            {values.map(([label, value]) => (
+              <div key={label}>
+                <dt>{label}</dt>
+                <dd>{value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : (
+          <p role="status" className="bot-empty-state">Loading usage…</p>
+        )}
+      </Section>
+      <Section title="Limits">
+        <FormRow label="Work limits">
+          <div className="channel-usage-limit-row">
+            <label htmlFor={`${controlId}-hour`}>
+              <Input
+                id={`${controlId}-hour`}
+                type="number"
+                min={1}
+                max={1000}
+                aria-label="Turns per hour"
+                disabled={pending}
+                value={limits.turnsPerHour}
+                onChange={(e) => setLimits({ ...limits, turnsPerHour: Number(e.target.value) })}
+              />
+              turns per hour
+            </label>
+            <span aria-hidden="true">·</span>
+            <label htmlFor={`${controlId}-day`}>
+              <Input
+                id={`${controlId}-day`}
+                type="number"
+                min={1}
+                max={10000}
+                aria-label="Turns per day"
+                disabled={pending}
+                value={limits.turnsPerDay}
+                onChange={(e) => setLimits({ ...limits, turnsPerDay: Number(e.target.value) })}
+              />
+              turns per day
+            </label>
+            {kind === "bot" && (
+              <>
+                <span aria-hidden="true">·</span>
+                <label htmlFor={`${controlId}-minutes`}>
+                  <Input
+                    id={`${controlId}-minutes`}
+                    type="number"
+                    min={1}
+                    max={180}
+                    aria-label="Minutes per turn"
+                    disabled={pending}
+                    value={limits.minutesPerTurn}
+                    onChange={(e) => setLimits({ ...limits, minutesPerTurn: Number(e.target.value) })}
+                  />
+                  minutes per turn
+                </label>
+                <span aria-hidden="true">·</span>
+                <label htmlFor={`${controlId}-forks`}>
+                  <Input
+                    id={`${controlId}-forks`}
+                    type="number"
+                    min={1}
+                    max={16}
+                    aria-label="Concurrent forks"
+                    disabled={pending}
+                    value={limits.concurrentForks}
+                    onChange={(e) => setLimits({ ...limits, concurrentForks: Number(e.target.value) })}
+                  />
+                  concurrent forks
+                </label>
+              </>
+            )}
+          </div>
+        </FormRow>
+      </Section>
+      <ErrorMessage
+        error={error || (dirty && !limitsValid ? "Use whole numbers within the allowed ranges." : null)}
+      />
+      <ActionBar
+        status={notice || (dirty ? "Unsaved changes" : "")}
+        primary={dirty || pending ? (
+          <Button size="sm" disabled={pending || !usage || !dirty || !limitsValid} onClick={() => void save()}>
+            {pending ? "Saving…" : "Save limits"}
+          </Button>
+        ) : undefined}
+      />
     </div>
   );
 }
@@ -479,7 +574,10 @@ export function SavedPanel({
     <div className="channel-workbench-panel">
       <ErrorMessage error={error} />
       {!items.length && (
-        <p>Save a message from its menu to keep a decision here.</p>
+        <EmptyState
+          title="No saved decisions"
+          description="Save a message from its menu to keep it here."
+        />
       )}
       {items.map((m) => (
         <button

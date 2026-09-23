@@ -161,7 +161,7 @@ Channels always respond to explicit messages. Separately, a bot’s mission work
 
 **Retire bot** stops its current work, removes it from every channel, and keeps its profile, files, and history. Use the collection’s **Retired** filter to find it. **Restore bot** makes it available for invitations again, with scheduled mission work paused.
 
-Failed channel responses show **View work** and **Retry response**. Retrying keeps the original message and targets only that bot; repeated clicks do not start duplicate retries. Restore and invite a removed bot before retrying.
+Failed channel responses show **View work** and **Retry response**. Retrying keeps the original message and targets only that bot; repeated clicks do not start duplicate retries. A long response gets a wrap-up request at 75% of its time limit (15 minutes at the 20-minute default), asking the bot to stop new work, save its state, and report progress. If it reaches the limit without finishing, Bot Teams stops the response, posts the last recorded progress in the channel, and preserves its work thread and workspace. **Resume response** continues in that same thread. For an important checkpoint or blocker before then, bots can use `bots_channel_notify`; it leaves a durable channel message and notifies the owner without waking other bots. Restore and invite a removed bot before retrying.
 
 Default limits are 30 started turns per hour, 300 per day, 20 minutes per turn, and two concurrent forks per bot. **Usage and limits** in the channel workbench and the bot’s **Usage** tab make these editable. Both bot and channel turn budgets apply; existing work can finish while new work waits. Provider billing and token details remain in **View work**. BB’s provider and concurrency limits also apply.
 

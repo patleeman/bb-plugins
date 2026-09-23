@@ -61,6 +61,11 @@ export const botSchema = profileInput.extend({
   error: z.string().nullable(),
 });
 export type Bot = z.infer<typeof botSchema>;
+export const botListItemSchema = botSchema.extend({
+  working: z.boolean(),
+  lastActivityAt: z.number().nullable(),
+});
+export type BotListItem = z.infer<typeof botListItemSchema>;
 export type ProfileInput = z.infer<typeof profileInput>;
 export const botCreateInput = profileInput.extend({
   mission: z.string().min(1).max(64000),
@@ -147,6 +152,7 @@ export const jobSchema = z.object({
   delegationId: z.string().optional(),
   returnOf: z.string().optional(),
   timedOut: z.boolean().optional(),
+  timeoutNoticePending: z.boolean().optional(),
   taskTitle: z.string().optional(),
   queueReason: z.string().optional(),
   queuePosition: z.number().optional(),
@@ -156,6 +162,7 @@ export const jobSchema = z.object({
   pendingSteer: z
     .object({ priorPrompt: z.string(), attemptedAt: z.number().optional() })
     .optional(),
+  wrapUpRequestedAt: z.number().optional(),
   automationId: z.string().optional(),
   id: z.string(),
   botId: idSchema,
@@ -224,7 +231,9 @@ export const roomSchema = z.object({
   updatedAt: z.number(),
 });
 export type Room = z.infer<typeof roomSchema>;
+export const attentionReason = z.enum(["decision", "blocker", "update"]);
 export const messageSchema = z.object({
+  attentionReason: attentionReason.optional(),
   saved: z.boolean().optional(),
   editedAt: z.number().optional(),
   sentText: z.string().optional(),
@@ -236,7 +245,7 @@ export const messageSchema = z.object({
   runId: z.string(),
   botId: idSchema.nullable(),
   speaker: z.string(),
-  system: z.enum(["bot_joined"]).optional(),
+  system: z.enum(["bot_joined", "bot_timeout"]).optional(),
   sourceThreadId: z.string().optional(),
   sourceJobId: z.string().optional(),
   replyTo: z.string().nullable().default(null),
@@ -245,6 +254,12 @@ export const messageSchema = z.object({
   createdAt: z.number(),
 });
 export type RoomMessage = z.infer<typeof messageSchema>;
+export const notifyInput = z.object({
+  channelId: z.string().uuid(),
+  requestId: z.string().uuid(),
+  reason: attentionReason,
+  text: z.string().trim().min(1).max(2000),
+});
 /** Scheduled prompts are execution records, not chat messages. */
 export const isAutomationTrigger = (
   message: Pick<RoomMessage, "automationId" | "botId">,
@@ -374,7 +389,7 @@ export const rpcContract = defineRpcContract({
   list: {
     input: z.null(),
     output: z.object({
-      bots: z.array(botSchema),
+      bots: z.array(botListItemSchema),
       rooms: z.array(roomSchema),
       activeRoomIds: z.array(z.string()),
       botCreateRequests: z.array(botCreateRequestViewSchema),

@@ -598,12 +598,22 @@ export default async function plugin(bb: BbPluginApi) {
     automationUpdate: (input) => automations.update(input),
     automationAction: (input) => automations.action(input),
     automationRuns: (input) => automations.runs(input),
-    list: () => ({
-      bots: store.all(),
-      rooms: store.rooms(),
-      activeRoomIds: store.activeRoomIds(),
-      botCreateRequests: store.botCreateRequests().map(botCreateRequestView),
-    }),
+    list: () => {
+      const activity = store.botActivitySummary();
+      return {
+        bots: store.all().map((bot) => {
+          const summary = activity.get(bot.id);
+          return {
+            ...bot,
+            working: summary?.working ?? false,
+            lastActivityAt: summary?.lastActivityAt ?? null,
+          };
+        }),
+        rooms: store.rooms(),
+        activeRoomIds: store.activeRoomIds(),
+        botCreateRequests: store.botCreateRequests().map(botCreateRequestView),
+      };
+    },
     create: (input) =>
       input.roomId
         ? runtime.locked(`room:${input.roomId}`, () => create(input))

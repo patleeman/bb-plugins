@@ -4,7 +4,7 @@ import {
   useRpc,
   experimental_Icon as Icon,
 } from "@get-bb/plugin-sdk/app";
-import type { Bot, BotCreateRequestView, rpcContract } from "./contract";
+import type { BotListItem, BotCreateRequestView, rpcContract } from "./contract";
 import { Button } from "./components/ui/button";
 import {
   ResourceListPanel,
@@ -12,7 +12,27 @@ import {
   ResourceToolbar,
 } from "./components/ui/resource-list";
 import { Menu } from "./channel-controls";
-import { ErrorMessage, message } from "./bot-ui";
+import { EmptyState, ErrorMessage, message, StatusBadge } from "./bot-ui";
+
+const relativeTime = new Intl.RelativeTimeFormat(undefined, {
+  numeric: "auto",
+  style: "narrow",
+});
+function relativeActivity(timestamp: number) {
+  const elapsed = Math.max(0, Date.now() - timestamp);
+  if (elapsed < 60_000) return "just now";
+  const units: [Intl.RelativeTimeFormatUnit, number][] = [
+    ["minute", 60_000],
+    ["hour", 3_600_000],
+    ["day", 86_400_000],
+    ["month", 2_592_000_000],
+    ["year", 31_536_000_000],
+  ];
+  const [unit, milliseconds] = units.find(([, size], index) =>
+    index === units.length - 1 || elapsed < units[index + 1]![1],
+  )!;
+  return relativeTime.format(-Math.max(1, Math.floor(elapsed / milliseconds)), unit);
+}
 
 export function BotCollection({
   bots,
@@ -21,7 +41,7 @@ export function BotCollection({
   botCreateRequests,
   onBotCreateRequestResolved,
 }: {
-  bots: Bot[];
+  bots: BotListItem[];
   loading: boolean;
   error: string | null;
   botCreateRequests: BotCreateRequestView[];
@@ -39,7 +59,8 @@ export function BotCollection({
     requestId: string;
     message: string;
   } | null>(null);
-  const activeCount = bots.filter((b) => !b.retired).length;
+  const activeCount = bots.filter((bot) => !bot.retired).length;
+  const retiredCount = bots.length - activeCount;
   const search = query.trim().toLowerCase();
   const visible = bots
     .filter(
@@ -51,7 +72,11 @@ export function BotCollection({
           ? !!b.retired
           : !b.retired &&
             (status === "all" ||
-              (status === "attention" ? !!b.error : !b.error))),
+              (status === "attention"
+                ? !!b.error
+                : status === "ready"
+                  ? !b.error && !b.paused && !b.working
+                  : false))),
     )
     .sort((a, b) =>
       sort === "recent"
@@ -61,9 +86,6 @@ export function BotCollection({
   return (
     <div className="h-full overflow-y-auto" data-bots-collection>
       <div className="mx-auto box-border flex w-full max-w-5xl flex-col gap-5 px-4 pb-4 pt-3 md:px-5 md:pt-4">
-        <p className="text-sm leading-5 text-muted-foreground">
-          Create and manage bots with their own workspace, mission, and memory.
-        </p>
         {botCreateRequests.length ? (
           <section
             className="overflow-hidden rounded-lg border border-border bg-card"
@@ -187,13 +209,10 @@ export function BotCollection({
             })}
           </section>
         ) : null}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 text-sm font-medium">
-            {status === "retired" ? "Retired bots" : "All bots"}{" "}
-            <span className="text-2xs text-subtle-foreground">
-              {status === "retired" ? bots.length - activeCount : activeCount}
-            </span>
-          </span>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-base font-semibold">
+            {status === "retired" ? "Retired bots" : "Bots"}
+          </h1>
           <Button
             size="sm"
             onClick={() => navigate.toPluginPanel("bots", { subPath: "new" })}
@@ -204,6 +223,7 @@ export function BotCollection({
         <ResourceToolbar
           value={query}
           onChange={setQuery}
+          placeholder={`Search ${status === "retired" ? retiredCount : activeCount} ${status === "retired" ? "retired bots" : "bots"}`}
           controls={
             <>
               <Menu
@@ -285,35 +305,38 @@ export function BotCollection({
             Loading bots…
           </p>
         ) : !bots.length ? (
-          <div className="rounded-lg border border-border p-6 text-center">
-            <p className="text-sm font-medium">Create your first bot</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Give it a mission, choose its model, and bring it into a channel.
-            </p>
-          </div>
+          <EmptyState
+            title="No bots yet"
+            description="Create a bot to give it a workspace, mission, and memory."
+          />
         ) : !visible.length ? (
-          <div
-            className="rounded-lg border border-border p-6 text-center"
+          <EmptyState
             role="status"
-          >
-            <p className="text-sm text-muted-foreground">
-              {!activeCount && status !== "retired" && !query
-                ? "No active bots. Your retired bots and their files are preserved."
-                : "No bots match your search or filters."}
-            </p>
-            <Button
-              variant="link"
-              size="sm"
-              onClick={() => {
-                setQuery("");
-                setStatus(!activeCount ? "retired" : "all");
-              }}
-            >
-              {!activeCount && status !== "retired"
-                ? "View retired bots"
-                : "Clear filters"}
-            </Button>
-          </div>
+            title={
+              !activeCount && status !== "retired" && !query
+                ? "No active bots"
+                : "No bots match this search"
+            }
+            description={
+              !activeCount && status !== "retired" && !query
+                ? "Retired bots and their files are preserved."
+                : undefined
+            }
+            action={
+              <Button
+                variant="link"
+                size="sm"
+                onClick={() => {
+                  setQuery("");
+                  setStatus(!activeCount ? "retired" : "all");
+                }}
+              >
+                {!activeCount && status !== "retired"
+                  ? "View retired bots"
+                  : "Clear filters"}
+              </Button>
+            }
+          />
         ) : (
           <ResourceListPanel>
             {visible.map((bot) => (
@@ -324,14 +347,19 @@ export function BotCollection({
                 titleMeta={`@${bot.handle}`}
                 description={bot.description}
                 state={
-                  <span
-                    className={`text-xs ${bot.error ? "text-destructive" : "text-muted-foreground"}`}
-                  >
-                    {bot.retired
-                      ? "Retired"
-                      : bot.error
-                        ? "Needs attention"
-                        : "Ready"}
+                  <span className="bot-collection-state">
+                    {bot.error ? (
+                      <StatusBadge status="error" label="Failing" />
+                    ) : bot.working ? (
+                      <StatusBadge status="working" />
+                    ) : bot.paused ? (
+                      <StatusBadge status="paused" />
+                    ) : null}
+                    <span className="bot-last-active">
+                      {bot.lastActivityAt === null
+                        ? "No activity yet"
+                        : `Last active ${relativeActivity(bot.lastActivityAt)}`}
+                    </span>
                   </span>
                 }
                 onOpen={() =>

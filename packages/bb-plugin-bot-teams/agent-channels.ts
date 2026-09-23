@@ -1,7 +1,7 @@
 import { isExecuting } from "./job-state";
 import { z } from "zod";
 import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
-import { rpcContract, idSchema } from "./contract";
+import { rpcContract, idSchema, messageSchema, notifyInput } from "./contract";
 import type { Store } from "./store";
 import type { MessageAuthor } from "./runtime";
 
@@ -63,6 +63,53 @@ export function authorizeChannel(
       "This bot must be invited to the channel before accessing it.",
     );
   return author;
+}
+export function notifyOwner(
+  store: Store,
+  input: z.output<typeof notifyInput>,
+  threadId: string,
+) {
+  const author = authorizeChannel(store, threadId, input.channelId);
+  const room = store.room(input.channelId);
+  const job = author.jobId ? store.job(author.jobId) : null;
+  if (
+    room.archived ||
+    !author.botId ||
+    !job ||
+    job.roomId !== room.id ||
+    job.threadId !== threadId ||
+    !["dispatching", "running"].includes(job.status) ||
+    job.cancellationPending
+  )
+    throw new Error("Attention updates are only available during active channel work.");
+  const id = `notify:${input.requestId}`;
+  const existing = store.message(id);
+  if (existing) {
+    if (
+      existing.roomId !== room.id ||
+      existing.text !== input.text ||
+      existing.attentionReason !== input.reason ||
+      existing.botId !== author.botId ||
+      existing.sourceThreadId !== threadId
+    )
+      throw new Error("This request ID was already used for a different update.");
+    return existing;
+  }
+  const message = messageSchema.parse({
+    id,
+    roomId: room.id,
+    runId: job.runId ?? id,
+    botId: author.botId,
+    speaker: author.speaker,
+    sourceThreadId: threadId,
+    sourceJobId: job.id,
+    conversationKey: job.conversationKey,
+    attentionReason: input.reason,
+    text: input.text,
+    createdAt: Date.now(),
+  });
+  store.putMessage(message);
+  return message;
 }
 export function creatorMembers(
   store: Store,
@@ -244,6 +291,16 @@ export function registerChannelTools(
     "Post as the calling agent. @handle or a reply targets a bot; @all explicitly requests everyone's input. Unaddressed messages follow the channel's Smart/Directed/Everyone behavior. Bot callers use their final answer for their current channel. Returns a request ID; use bots_channel_request to collect replies. Reuse requestId on retries.",
     rpcContract.send.input,
     (input, threadId) => send(input, threadId),
+  );
+  tool(
+    "bots_channel_notify",
+    "Post an important checkpoint or blocker to the current channel and notify the owner. The update is saved even if the channel is open. This does not wake other bots. Reuse requestId on retries; use your final answer for the final report.",
+    notifyInput,
+    (input, threadId) => {
+      const result = notifyOwner(store, input, threadId);
+      bb.realtime.publish("changed", {});
+      return result;
+    },
   );
   tool(
     "bots_channel_behavior",

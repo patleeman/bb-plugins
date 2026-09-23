@@ -13,7 +13,7 @@ import type {
   RoomMessage,
   RoomRun,
 } from "./contract";
-import { isAutomationTrigger } from "./contract";
+import { isAutomationTrigger, messageSchema } from "./contract";
 import { Store } from "./store";
 import { chatGuidance } from "./chat-guidance";
 import { activitySnippetFromTimeline } from "./activity";
@@ -49,8 +49,15 @@ export function recipients(text: string, members: Bot[]) {
     ? members.map((b) => b.id)
     : selected;
 }
-export const jobPrompt = (job: Job) =>
-  `Read MISSION.md and MEMORY.md before acting.${isForkConversation(job.conversationKey) ? " This is a separate fork. Handle only the new request; do not resume inherited work. The primary session owns shared MEMORY.md; do not edit it from this fork. Include useful durable findings in your channel answer." : ""}\n\n${job.text}\n\nRequest: ${job.id}`;
+export const jobPrompt = (job: Job) => {
+  const forkNote = isForkConversation(job.conversationKey)
+    ? " This is a separate fork. Handle only the new request; do not resume inherited work. The primary session owns shared MEMORY.md; do not edit it from this fork. Include useful durable findings in your channel answer."
+    : "";
+  const wrapUpNote = job.wrapUpRequestedAt
+    ? `\n\nTime check: stop new implementation work now. Save the current state in the existing worktree without reverting or committing. In ${job.roomId ? "this channel" : "this conversation"}, report what is done, what changed, what remains, checks/screenshots completed, and any blockers. Then finish your response.`
+    : "";
+  return `Read MISSION.md and MEMORY.md before acting.${forkNote}${wrapUpNote}\n\n${job.text}\n\nRequest: ${job.id}`;
+};
 
 const jobInput = (job: Job) => [
   { type: "text" as const, text: jobPrompt(job), mentions: [] },
@@ -411,6 +418,61 @@ export class Runtime {
       });
     })();
     return message;
+  }
+  postTimeoutNotice(job: Job) {
+    const currentJob = this.store.job(job.id);
+    if (
+      !currentJob ||
+      currentJob.status !== "cancelled" ||
+      !currentJob.timedOut ||
+      !currentJob.timeoutNoticePending
+    )
+      return;
+    job = currentJob;
+    if (!job.roomId) return;
+    const room = this.store.findRoom(job.roomId);
+    if (!room) return;
+    const id = `system:timeout:${job.id}`;
+    if (this.store.message(id)) {
+      this.store.clearTimeoutNoticePending(job.id);
+      return;
+    }
+    const bot = this.store.get(job.botId);
+    const progress =
+      job.activitySnippet?.trim() || "No activity update was recorded.";
+    const message = messageSchema.parse({
+      id,
+      roomId: room.id,
+      runId: job.runId ?? id,
+      botId: null,
+      speaker: "BB",
+      system: "bot_timeout",
+      sourceThreadId: job.threadId ?? undefined,
+      sourceJobId: job.id,
+      conversationKey: job.conversationKey,
+      text: [
+        `${bot.name}'s response stopped before its final report.`,
+        "The work thread and worktree are preserved, and this task is incomplete.",
+        `Last recorded progress: ${progress}`,
+      ].join(" "),
+      createdAt: Date.now(),
+    });
+    this.store.db.transaction(() => {
+      this.store.putMessage(message);
+      this.store.queueNotification(
+        `timeout:${job.id}`,
+        room.id,
+        "timeout",
+        job.id,
+      );
+      this.store.clearTimeoutNoticePending(job.id);
+      const current = this.store.room(room.id);
+      this.store.putRoom({
+        ...current,
+        updatedAt: Math.max(current.updatedAt + 1, message.createdAt),
+      });
+    })();
+    this.changed();
   }
   send(
     room: Room,
@@ -840,12 +902,12 @@ export class Runtime {
     const primary = `group:${message.roomId}`;
     const parent = message.replyTo ? this.store.message(message.replyTo) : null;
     if (!parent || (parent.botId && parent.botId !== botId)) return primary;
-    const job = this.store.job(
-      parent.botId ? parent.id : `${parent.id}:${botId}`,
-    );
+    const job =
+      this.store.job(parent.botId ? parent.id : `${parent.id}:${botId}`) ??
+      (parent.sourceJobId ? this.store.job(parent.sourceJobId) : null);
     const key =
       (parent.botId === botId ? parent.conversationKey : undefined) ??
-      job?.conversationKey;
+      (job?.botId === botId ? job.conversationKey : undefined);
     return key === primary || key?.startsWith(`${primary}:fork:`)
       ? key
       : primary;
@@ -1631,14 +1693,23 @@ export class Runtime {
     requireStopped = false,
     timedOut = false,
   ) {
+    const persistedJob = this.store.job(job.id);
+    job.timedOut ||= persistedJob?.timedOut ?? false;
+    job.timeoutNoticePending ||= persistedJob?.timeoutNoticePending ?? false;
     job.cancellationPending =
       !!job.threadId ||
       job.status === "dispatching" ||
       !!job.cancellationPending;
     job.status = "cancelled";
     job.timedOut ||= timedOut;
+    if (timedOut) job.timeoutNoticePending = true;
     job.error = reason;
     this.store.putJob(job);
+    const activityRefresh = job.timedOut
+      ? this.refreshJobActivity(job)
+      : Promise.resolve(job);
+    let stopSucceeded = false;
+    let stopFailure: unknown;
     if (job.threadId) {
       try {
         const queued = await this.bb.sdk.threads.queuedMessages.list({
@@ -1650,14 +1721,31 @@ export class Runtime {
             queuedMessageId: entry.id,
           });
         await this.bb.sdk.threads.stop({ threadId: job.threadId });
+        stopSucceeded = true;
       } catch (cause) {
-        if (!missingThread(cause)) throw cause;
+        if (missingThread(cause)) stopSucceeded = true;
+        else stopFailure = cause;
       }
-      job.cancellationPending = false;
-      this.store.putJob(job);
-      if (this.busy.get(job.botId)?.threadId === job.threadId)
-        this.busy.delete(job.botId);
+      if (stopSucceeded) {
+        const current = this.store.job(job.id);
+        if (current?.cancellationPending) {
+          current.cancellationPending = false;
+          this.store.putJob(current);
+        }
+        if (this.busy.get(job.botId)?.threadId === job.threadId)
+          this.busy.delete(job.botId);
+      }
     }
+    await activityRefresh;
+    const current = this.store.job(job.id);
+    if (current?.status === "cancelled" && current.timedOut) {
+      try {
+        this.postTimeoutNotice(current);
+      } catch (cause) {
+        this.bb.log.warn(`Posting timeout status failed: ${errorText(cause)}`);
+      }
+    }
+    if (stopFailure) throw stopFailure;
     if (requireStopped && this.store.job(job.id)?.cancellationPending)
       throw new Error(
         "Still locating a cancelled response. Try again after automatic cleanup finishes.",
@@ -1859,6 +1947,28 @@ export class Runtime {
       return remove(0);
     });
   }
+  private async refreshJobActivity(job: Job): Promise<Job> {
+    if (!job.threadId) return this.store.job(job.id) ?? job;
+    try {
+      const timeline = await this.bb.sdk.threads.timeline({
+        threadId: job.threadId,
+        includeNestedRows: "true",
+        segmentLimit: "100",
+      });
+      const activitySnippet = activitySnippetFromTimeline(timeline);
+      if (!activitySnippet || activitySnippet === job.activitySnippet)
+        return this.store.job(job.id) ?? job;
+      return (
+        this.store.updateActivitySnippet(job.id, activitySnippet) ??
+        this.store.job(job.id) ??
+        job
+      );
+    } catch (cause) {
+      if (!missingThread(cause))
+        this.bb.log.debug(`Channel activity refresh failed: ${errorText(cause)}`);
+      return this.store.job(job.id) ?? job;
+    }
+  }
   async roomJobsWithActivity(roomId: string): Promise<Job[]> {
     const jobs = this.store.roomJobs(roomId).map((job) => {
       const title =
@@ -1889,21 +1999,8 @@ export class Runtime {
       jobs.map(async (job) => {
         if (!job.threadId || !["dispatching", "running"].includes(job.status))
           return job;
-        try {
-          const timeline = await this.bb.sdk.threads.timeline({
-            threadId: job.threadId,
-            includeNestedRows: "true",
-            segmentLimit: "100",
-          });
-          const activitySnippet = activitySnippetFromTimeline(timeline);
-          return activitySnippet ? { ...job, activitySnippet } : job;
-        } catch (cause) {
-          if (!missingThread(cause))
-            this.bb.log.debug(
-              `Channel activity refresh failed: ${errorText(cause)}`,
-            );
-          return job;
-        }
+        const current = await this.refreshJobActivity(job);
+        return { ...current, taskTitle: job.taskTitle };
       }),
     );
   }
@@ -2100,6 +2197,23 @@ export class Runtime {
           (block) => block.type === "text" && block.text === jobPrompt(current),
         ),
       );
+      const limitMs = (bot.limits ?? defaultLimits).minutesPerTurn * 60000;
+      const startedAt = current.startedAt ?? current.dispatchStartedAt;
+      if (
+        thread.status !== "error" &&
+        (thread.status === "active" || matching) &&
+        startedAt &&
+        !current.wrapUpRequestedAt &&
+        Date.now() - startedAt >= limitMs * 0.75
+      ) {
+        current.pendingSteer = { priorPrompt: jobPrompt(current) };
+        current.wrapUpRequestedAt = Date.now();
+        current.requiresPromptMatch = true;
+        this.store.putJob(current);
+        this.changed();
+        await this.startSteer({ jobId: current.id });
+        return;
+      }
       if (thread.status === "error") {
         const matches = await this.latestPromptMatches(
           job.threadId,
@@ -2339,6 +2453,16 @@ export class Runtime {
     this.changed();
   }
   async tick() {
+    for (const job of this.store.timedOutJobsWithoutNotice()) {
+      const current = await this.refreshJobActivity(job);
+      if (current.status === "cancelled" && current.timedOut) {
+        try {
+          this.postTimeoutNotice(current);
+        } catch (cause) {
+          this.bb.log.warn(`Posting timeout status failed: ${errorText(cause)}`);
+        }
+      }
+    }
     for (const room of this.store.rooms())
       await this.locked(`room:${room.id}`, async () => {
         const current = this.store.findRoom(room.id);

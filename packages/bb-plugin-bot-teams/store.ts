@@ -70,6 +70,32 @@ export class Store {
       }[]
     ).map((r) => JSON.parse(r.json));
   }
+  botActivitySummary(): Map<
+    string,
+    { working: boolean; lastActivityAt: number | null }
+  > {
+    const rows = this.db
+      .prepare(
+        `SELECT bot_id AS botId,
+          MAX(COALESCE(CAST(json_extract(json,'$.updatedAt') AS INTEGER), created_at)) AS lastActivityAt,
+          MAX(CASE
+            WHEN status NOT IN ('done','error','cancelled')
+              OR json_extract(json,'$.cancellationPending')=1
+            THEN 1 ELSE 0 END) AS working
+        FROM jobs GROUP BY bot_id`,
+      )
+      .all() as {
+      botId: string;
+      lastActivityAt: number | null;
+      working: number;
+    }[];
+    return new Map(
+      rows.map((row) => [
+        row.botId,
+        { working: row.working === 1, lastActivityAt: row.lastActivityAt },
+      ]),
+    );
+  }
   routingSession(threadId: string): string | undefined {
     return (
       this.db
@@ -268,6 +294,31 @@ export class Store {
         .all(id) as { json: string }[]
     ).map((r) => jobSchema.parse(JSON.parse(r.json)));
   }
+  timedOutJobsWithoutNotice(): Job[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT j.json FROM jobs j
+          JOIN rooms r ON r.id=json_extract(j.json,'$.roomId')
+          WHERE j.status='cancelled'
+            AND json_extract(j.json,'$.timedOut')=1
+            AND json_extract(j.json,'$.timeoutNoticePending')=1
+            AND NOT EXISTS (
+              SELECT 1 FROM room_messages m
+              WHERE m.id='system:timeout:' || j.id
+            )`,
+        )
+        .all() as { json: string }[]
+    ).map((r) => jobSchema.parse(JSON.parse(r.json)));
+  }
+  clearTimeoutNoticePending(id: string) {
+    const job = this.job(id);
+    if (!job?.timeoutNoticePending) return;
+    delete job.timeoutNoticePending;
+    this.db
+      .prepare("UPDATE jobs SET json=? WHERE id=?")
+      .run(JSON.stringify(job), id);
+  }
   job(id: string): Job | null {
     const row = this.db.prepare("SELECT json FROM jobs WHERE id=?").get(id) as
       | { json: string }
@@ -281,6 +332,20 @@ export class Store {
         .run(j.id, j.botId, j.status, j.createdAt, JSON.stringify(j)).changes >
       0
     );
+  }
+  updateActivitySnippet(id: string, snippet: string): Job | null {
+    const job = this.job(id);
+    if (
+      !job ||
+      (!["dispatching", "running"].includes(job.status) &&
+        !(job.status === "cancelled" && job.timedOut))
+    )
+      return null;
+    job.activitySnippet = snippet;
+    this.db
+      .prepare("UPDATE jobs SET json=? WHERE id=?")
+      .run(JSON.stringify(job), id);
+    return job;
   }
   putJob(j: Job) {
     j.updatedAt = Date.now();
@@ -544,7 +609,7 @@ export class Store {
   queueNotification(
     id: string,
     roomId: string,
-    kind: "reply" | "error" | "interaction",
+    kind: "reply" | "error" | "interaction" | "attention" | "timeout",
     subjectId: string,
   ) {
     const room = this.findRoom(roomId);
@@ -564,7 +629,12 @@ export class Store {
           .prepare("INSERT OR IGNORE INTO room_messages VALUES (?,?,?)")
           .run(m.id, m.roomId, JSON.stringify(m)).changes > 0;
       if (inserted && m.botId && !m.system)
-        this.queueNotification(`reply:${m.id}`, m.roomId, "reply", m.id);
+        this.queueNotification(
+          `${m.attentionReason ? "attention" : "reply"}:${m.id}`,
+          m.roomId,
+          m.attentionReason ? "attention" : "reply",
+          m.id,
+        );
       return inserted;
     })();
   }

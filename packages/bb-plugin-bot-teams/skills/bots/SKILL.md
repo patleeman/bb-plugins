@@ -47,6 +47,15 @@ rounds, voting tools, or automatic majority verdicts.
 adds an identity-bound reaction without requesting replies. Use CLI for files,
 profile administration, archive, deletion, and per-response stop/retry.
 
+For a material checkpoint or blocker during long work, use
+`bots_channel_notify` with the channel ID, a UUID `requestId`, a reason
+(`update`, `decision`, or `blocker`), and a concise message. It saves a visible
+channel update and notifies the owner even when the channel is open; it does not
+wake other bots. Reuse the request ID if the result is uncertain. Use the final
+answer for the completed report. When a wrap-up request arrives, stop new work,
+save the current state, and report what is done, changed, remaining, checks or
+screenshots, and blockers.
+
 ```sh
 bb bots channel create 'Design review' --bot @grug --bot @architect --bot @designer --json
 bb bots channel send 'Design review' --text '@all Review this proposal independently in 150 words each: ...' --request-id UUID --json
