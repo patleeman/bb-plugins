@@ -2985,14 +2985,19 @@
 }
 
 /* Channel rail: ambient state for the open channel, beside the transcript. */
+/* A card that floats beside the transcript rather than a docked column. */
 .channel-rail {
   display: flex;
   flex-direction: column;
   width: 268px;
   flex: 0 0 268px;
   min-height: 0;
-  border-left: 1px solid var(--border);
-  background: var(--background);
+  margin: 8px 10px 10px 0;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius, 8px) + 2px);
+  background: var(--card, var(--background));
+  box-shadow: 0 8px 30px #0003;
+  overflow: hidden;
 }
 /*
  * The rail shares the channel with BB's own right panel. Measure the channel,
@@ -3009,8 +3014,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 6px 8px 12px;
-  border-bottom: 1px solid var(--border);
+  padding: 8px 6px 6px 12px;
 }
 .channel-rail-heading {
   margin: 0;

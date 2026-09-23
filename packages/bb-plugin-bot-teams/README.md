@@ -91,10 +91,10 @@ its workbench drawer.
 
 ## Channel rail
 
-The rail beside the transcript answers "what is true in this channel right
-now". The workbench tabs stay for what is configured and what already
-happened; the rail holds live state and collapses to almost nothing when the
-channel is quiet.
+The rail floats beside the transcript as its own card and answers "what is
+true in this channel right now". The workbench tabs stay for what is
+configured and what already happened; the rail holds live state and collapses
+to almost nothing when the channel is quiet.
 
 - **Live now** lists each working bot with its elapsed time, current activity,
   anything queued behind it, and a **Stop** button. It also shows the routing
@@ -342,9 +342,10 @@ The renamed Bot Teams collection in BB, filtered to the staged Atlas research
 bot. Atlas has mission schedules off; the capture restores its prior retirement
 state afterward.
 
-![The channel rail beside a staged channel transcript](assets/channel-rail.png)
+![The floating channel rail beside a staged channel transcript](assets/channel-rail.png)
 
-The running BB application shows the rail beside the staged Rail QA channel:
+The running BB application shows the rail floating beside the staged Rail QA
+channel:
 an open decision under **Needs you**, the bot's work thread, the member roster
 with its live state, a scheduled digest counting down, the published
 `rail-check.csv`, and the channel's turns used today. Live now is absent here
