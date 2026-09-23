@@ -1,6 +1,5 @@
 import {
   ContextPanel,
-  FilesPanel,
   UsagePanel,
   workbenchLabels,
   type WorkbenchPanel,
@@ -896,14 +895,13 @@ function stateFor(bot: Bot, data: ChannelData) {
 }
 // BB owns tab selection, persistence, resizing, splits, and the compact drawer.
 export const channelWorkbenchTabs: PluginFixedTabRegistration[] = (
-  ["context", "files", "activity", "automations", "usage"] as const
+  ["context", "activity", "automations", "usage"] as const
 ).map((panel) => ({
   id: panel,
   panelId: "channels",
   title: workbenchLabels[panel],
   icon: {
     context: "NotebookPen",
-    files: "Files",
     activity: "Activity",
     automations: "Clock",
     usage: "ChartNoAxesCombined",
@@ -938,8 +936,6 @@ function ChannelWorkbench({ id, panel }: { id: string; panel: WorkbenchPanel }) 
         !error && <p role="status">Loading channel…</p>
       ) : panel === "context" ? (
         <ContextPanel id={id} />
-      ) : panel === "files" ? (
-        <FilesPanel id={id} />
       ) : panel === "usage" ? (
         <UsagePanel id={id} kind="channel" />
       ) : panel === "automations" ? (

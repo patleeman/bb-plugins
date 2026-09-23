@@ -314,8 +314,7 @@ do not post images. Do not substitute local Markdown image paths for this tool.
 
 ## Channel context, artifacts, and budgets
 
-Read `bots_channel_context` for the channel brief, decisions, memory, and reference
-files. To update decisions or memory, supply its current `version`. Keep knowledge
+Read `bots_channel_context` for the channel brief, decisions, and memory. To update decisions or memory, supply its current `version`. Keep knowledge
 specific to one channel here; use shared `MEMORY.md` only for facts appropriate to
 all the bot's channels. The owner can compare and restore revisions in the UI.
 

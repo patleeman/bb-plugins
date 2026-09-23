@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
-import type { Attachment, RoomMessage, rpcContract } from "./contract";
+import type { rpcContract } from "./contract";
 import {
   channelContext,
   defaultLimits,
@@ -19,19 +19,16 @@ import {
   message,
   Section,
 } from "./bot-ui";
-import { ChannelAttachments } from "./channel-attachments";
 
 export type WorkbenchPanel =
   | "automations"
   | "activity"
   | "context"
-  | "files"
   | "usage";
 export const workbenchLabels: Record<WorkbenchPanel, string> = {
   automations: "Automations",
   activity: "Activity",
   context: "Context",
-  files: "Files",
   usage: "Usage",
 };
 import { RevisionList, type Revision } from "./revision-list";
@@ -45,14 +42,10 @@ export function ContextPanel({ id }: { id: string }) {
   const [error, setError] = useState<string | null>(null),
     [pending, setPending] = useState(false),
     [notice, setNotice] = useState("");
-  const [files, setFiles] = useState<Attachment[]>([]),
-    [fileCursor, setFileCursor] = useState<string | null>(null),
-    [revisions, setRevisions] = useState<Revision[] | null>(null);
-  const historyBusy = useRef(false),
-    fileBusy = useRef(false);
+  const [revisions, setRevisions] = useState<Revision[] | null>(null);
+  const historyBusy = useRef(false);
   const [historyMore, setHistoryMore] = useState(false),
-    [historyPending, setHistoryPending] = useState(false),
-    [filePending, setFilePending] = useState(false);
+    [historyPending, setHistoryPending] = useState(false);
   const dirty =
     !!draft && !!baseline && JSON.stringify(draft) !== JSON.stringify(baseline);
   const load = async () => {
@@ -77,13 +70,6 @@ export function ContextPanel({ id }: { id: string }) {
   };
   useEffect(() => {
     void load();
-    void rpc.call("channelFiles", { id }).then(
-      (p) => {
-        setFiles(p.files);
-        setFileCursor(p.nextBefore);
-      },
-      (e) => setError(message(e)),
-    );
   }, [id, rpc]);
   useEffect(() => {
     if (!draft || !baseline) return;
@@ -128,23 +114,6 @@ export function ContextPanel({ id }: { id: string }) {
       setHistoryPending(false);
     }
   };
-  const moreFiles = async () => {
-    if (fileBusy.current || !fileCursor) return;
-    fileBusy.current = true;
-    setFilePending(true);
-    try {
-      const p = await rpc.call("channelFiles", { id, before: fileCursor });
-      setFiles((f) => [
-        ...new Map([...f, ...p.files].map((a) => [a.id, a])).values(),
-      ]);
-      setFileCursor(p.nextBefore);
-    } catch (e) {
-      setError(message(e));
-    } finally {
-      fileBusy.current = false;
-      setFilePending(false);
-    }
-  };
   if (!draft)
     return (
       <div className="channel-workbench-panel">
@@ -185,49 +154,6 @@ export function ContextPanel({ id }: { id: string }) {
             />
           </FormRow>
         ))}
-      </Section>
-      <Section title="Reference files">
-        {files.length ? (
-          <div className="channel-reference-files">
-            {files.map((a) => (
-              <label className="channel-reference-file" key={a.id}>
-                <input
-                  type="checkbox"
-                  checked={draft.attachmentIds.includes(a.id)}
-                  disabled={
-                    pending ||
-                    (!draft.attachmentIds.includes(a.id) &&
-                      draft.attachmentIds.length >= 10)
-                  }
-                  onChange={(e) =>
-                    setDraft({
-                      ...draft,
-                      attachmentIds: e.target.checked
-                        ? [...draft.attachmentIds, a.id]
-                        : draft.attachmentIds.filter((x) => x !== a.id),
-                    })
-                  }
-                />
-                {a.name}
-              </label>
-            ))}
-          </div>
-        ) : (
-          <EmptyState
-            title="No reference files"
-            description="Send a file in the channel to keep it here."
-          />
-        )}
-        {fileCursor && (
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={filePending}
-            onClick={() => void moreFiles()}
-          >
-            More files
-          </Button>
-        )}
       </Section>
       <ErrorMessage error={error} />
       <ActionBar
@@ -300,55 +226,6 @@ export function ContextPanel({ id }: { id: string }) {
   );
 }
 
-export function FilesPanel({ id }: { id: string }) {
-  const rpc = useRpc<typeof rpcContract>();
-  const [files, setFiles] = useState<Attachment[]>([]),
-    [cursor, setCursor] = useState<string | null>(null),
-    [error, setError] = useState<string | null>(null),
-    [pending, setPending] = useState(false);
-  const load = async (before?: string) => {
-    setPending(true);
-    try {
-      const p = await rpc.call("channelFiles", {
-        id,
-        ...(before !== undefined ? { before } : {}),
-      });
-      setFiles((old) => (before ? [...old, ...p.files] : p.files));
-      setCursor(p.nextBefore);
-    } catch (e) {
-      setError(message(e));
-    } finally {
-      setPending(false);
-    }
-  };
-  useEffect(() => {
-    void load();
-  }, [id, rpc]);
-  return (
-    <div className="channel-workbench-panel">
-      <ErrorMessage error={error} />
-      {!files.length && (pending ? (
-        <p role="status" className="bot-empty-state">Loading files…</p>
-      ) : (
-        <EmptyState
-          title="No files yet"
-          description="Shared files will appear here."
-        />
-      ))}
-      <ChannelAttachments attachments={files} />
-      {cursor && (
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={pending}
-          onClick={() => void load(cursor)}
-        >
-          Earlier files
-        </Button>
-      )}
-    </div>
-  );
-}
 
 export function UsagePanel({
   id,

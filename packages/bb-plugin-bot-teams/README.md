@@ -64,21 +64,20 @@ BB’s **Settings → Appearance** can select sidebar providers. **Channels and 
 
 ## Channel workspace
 
-Context, files, usage, automations, and activity have separate
+Context, usage, automations, and activity have separate
 tabs in BB’s right workbench. Use **Show right panel** to open the workbench. The labeled tabs share its
 resize, collapse, and split controls with Browser and Terminal. On compact screens, BB opens them in
 its workbench drawer.
 
-- **Channel context** holds the owner’s brief, decisions, channel-specific memory,
-  and up to ten sent reference files. Bots receive it on their next task and can
-  update decisions/memory through `bots_channel_context` with a version check.
-  Required references and current uploads are both retained. Local drafts survive
+- **Channel context** holds the owner’s brief, decisions, and channel-specific
+  memory. Bots receive it on their next task and can update decisions/memory
+  through `bots_channel_context` with a version check. Local drafts survive
   navigation; stale saves preserve the draft and ask you to reload.
 - **Version history** compares and restores channel context, `MISSION.md`, and
   `MEMORY.md`. Restore loads a draft before saving. Bot documents are snapshotted
   when read/saved and after completed bot turns, not on every filesystem write.
-- **Files** collects files from posted messages. Bots can use `bots_publish_file`
-  or `bb bots publish-file` to attach reports, CSVs, PDFs, and images from their
+- Files stay in the transcript. Bots can use `bots_publish_file` or
+  `bb bots publish-file` to attach reports, CSVs, PDFs, and images from their
   workspace (8 MB each); failed responses do not publish their outputs.
 - Message menus offer **Copy message link**, and **Edit message** for your own
   posts. Editing changes the transcript; already queued or running work keeps the
