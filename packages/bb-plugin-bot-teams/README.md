@@ -116,9 +116,10 @@ remembers its state per device. Use the header's **Show channel details**
 control to hide or show the rail; while it is hidden, that control carries a
 dot when the channel has live work. The rail takes no column out of the channel: on a wide
 channel it lands in empty gutter. As the channel narrows the transcript and
-composer shift left to stay clear of it, and below roughly 680px — a channel
-sharing the window with BB's right workbench — the rail hides and the
-transcript takes the full width back.
+composer shift left to stay clear of it, and the card gives up its own width
+before it gives up theirs. It stays put wherever it fits, including alongside
+BB's right workbench, and stands down only below roughly 600px, where a
+readable transcript leaves no room for it.
 
 ## Parallel questions and tasks
 

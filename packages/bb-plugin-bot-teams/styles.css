@@ -3019,10 +3019,20 @@
   }
 }
 /*
- * Measure the channel, not the window: with BB's right workbench open there is
- * no room for both, and the transcript wins.
+ * The rail stays put wherever it fits, including alongside BB's right
+ * workbench. On a tight channel it gives up width of its own before it gives
+ * up the transcript's.
  */
-@container channel (max-width: 680px) {
+@container channel (max-width: 820px) {
+  .channel-rail {
+    width: 232px;
+  }
+  .bot-room[data-rail="open"] .bot-room-main {
+    padding-right: 252px;
+  }
+}
+/* Only below a readable transcript does the rail stand down. */
+@container channel (max-width: 600px) {
   .channel-rail {
     display: none;
   }
