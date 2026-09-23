@@ -468,7 +468,6 @@ export function UsagePanel({
               />
               turns per hour
             </label>
-            <span aria-hidden="true">·</span>
             <label htmlFor={`${controlId}-day`}>
               <Input
                 id={`${controlId}-day`}
@@ -484,7 +483,6 @@ export function UsagePanel({
             </label>
             {kind === "bot" && (
               <>
-                <span aria-hidden="true">·</span>
                 <label htmlFor={`${controlId}-minutes`}>
                   <Input
                     id={`${controlId}-minutes`}
@@ -498,7 +496,6 @@ export function UsagePanel({
                   />
                   minutes per turn
                 </label>
-                <span aria-hidden="true">·</span>
                 <label htmlFor={`${controlId}-forks`}>
                   <Input
                     id={`${controlId}-forks`}

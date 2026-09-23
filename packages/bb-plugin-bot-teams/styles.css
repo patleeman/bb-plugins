@@ -2491,48 +2491,49 @@
   background: var(--state-hover);
 }
 .channel-usage-heading {
-  position: relative;
-  z-index: 1;
   display: flex;
   justify-content: flex-end;
-  height: 0;
-  margin-top: -4px;
-  margin-bottom: -30px;
-  padding-inline-end: 6px;
+  padding: 4px 6px 0;
 }
 .channel-usage-heading button {
   width: 28px;
   height: 28px;
 }
 .channel-usage-stats {
-  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
-  gap: 8px;
-  padding: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  column-gap: 20px;
+  margin: 0;
+  padding: 0 12px 10px;
 }
 .channel-usage-stats > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
   min-width: 0;
-  padding: 8px 9px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--background);
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
 }
 .channel-usage-stats dt {
+  min-width: 0;
   overflow: hidden;
-  font-size: 11px;
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .channel-usage-stats dd {
-  margin-top: 2px;
-  font-size: 18px;
+  margin: 0;
+  font-size: var(--text-sm);
   font-weight: 600;
-  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
 }
 .channel-usage-limit-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 8px 20px;
   padding: 10px 12px;
 }
 .channel-usage-limit-row > label {
