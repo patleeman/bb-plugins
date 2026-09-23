@@ -1629,7 +1629,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
     ? responseErrors
     : responseErrors.slice(-5);
   return (
-    <div className="bot-room">
+    <div className="bot-room" data-rail={rail.open ? "open" : undefined}>
       {(failure || error) && (
         <div className="bot-error">
           <ErrorMessage error={failure || error} />

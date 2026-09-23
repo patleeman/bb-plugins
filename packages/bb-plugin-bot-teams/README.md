@@ -91,10 +91,11 @@ its workbench drawer.
 
 ## Channel rail
 
-The rail floats beside the transcript as its own card and answers "what is
-true in this channel right now". The workbench tabs stay for what is
-configured and what already happened; the rail holds live state and collapses
-to almost nothing when the channel is quiet.
+The rail floats over the transcript's right gutter as its own card and answers
+"what is true in this channel right now". It is only as tall as it needs to
+be, so a quiet channel leaves almost nothing on screen. The workbench tabs
+stay for what is configured and what already happened; the rail holds live
+state.
 
 - **Live now** lists each working bot with its elapsed time, current activity,
   anything queued behind it, and a **Stop** button. It also shows the routing
@@ -113,9 +114,11 @@ to almost nothing when the channel is quiet.
 Sections with nothing to report are hidden, and each one collapses and
 remembers its state per device. Use the header's **Show channel details**
 control to hide or show the rail; while it is hidden, that control carries a
-dot when the channel has live work. Because the rail shares the channel with
-BB's right workbench, it steps aside automatically when the channel is too
-narrow for both.
+dot when the channel has live work. The rail takes no column out of the channel: on a wide
+channel it lands in empty gutter. As the channel narrows the transcript and
+composer shift left to stay clear of it, and below roughly 680px — a channel
+sharing the window with BB's right workbench — the rail hides and the
+transcript takes the full width back.
 
 ## Parallel questions and tasks
 
@@ -208,7 +211,7 @@ Each bot lives at `<BB data directory>/plugins/bot-teams/homes/<bot-id>/`:
 
 **Profile → Workspace** shows the exact path. Document saves detect stale editor versions. Profiles, channel history, reactions, membership, work, and draft uploads live in the plugin’s SQLite database. Sent attachments use BB’s project attachment storage. Back up `plugins/bot-teams` along with BB’s conversation and attachment storage. Migrated installations also retain `plugins/bots/homes`; the new homes path links to it so saved workspace paths stay valid.
 
-Each bot keeps one hidden primary BB thread per channel. The first turn receives bounded channel history and saved context. Later turns receive the new request, messages the bot has not seen, and saved context only when it changes. Previously delivered files are not attached again. Forks use separate hidden threads and keep their own reply history. **View work** opens native tools, approvals, and failures. Existing group conversations appear as Channels without losing history; old group links redirect to their channel. Existing private work sessions remain stored and accessible through BB, while the Bot Teams page is for configuration.
+Each bot keeps one hidden primary BB thread per channel. The first turn receives bounded channel history and saved context. Later turns receive the new request, messages the bot has not seen, and saved context only when it changes. Previously delivered files are not attached again. Forks use separate hidden threads and keep their own reply history. **View work** opens the native conversation with its tools, approvals, and failures. You can type and send directly in any bot work thread, including a channel thread or fork. Direct replies stay in that BB thread; send from the channel composer when the message belongs in the channel transcript. Existing group conversations appear as Channels without losing history; old group links redirect to their channel. Existing private work sessions remain stored and accessible through BB, while the Bot Teams page is for configuration.
 
 Channels initially load 200 messages. **Load earlier messages** pages through the retained transcript. **Search channel** searches all stored message text and names; selecting a result or an older reply reference loads and focuses its message. This is a single-owner local feature. Bots use BB’s configured providers, credentials, tools, and skills on the primary machine. Separate directories provide persistent storage, not separate accounts. Shared `MEMORY.md` should contain only information appropriate for every channel the bot joins.
 
@@ -344,8 +347,8 @@ state afterward.
 
 ![The floating channel rail beside a staged channel transcript](assets/channel-rail.png)
 
-The running BB application shows the rail floating beside the staged Rail QA
-channel:
+The running BB application shows the rail floating over the staged Rail QA
+channel's right gutter:
 an open decision under **Needs you**, the bot's work thread, the member roster
 with its live state, a scheduled digest counting down, the published
 `rail-check.csv`, and the channel's turns used today. Live now is absent here

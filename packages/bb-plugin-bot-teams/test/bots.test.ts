@@ -1343,7 +1343,42 @@ test("default hourly limits count dispatches that never became active", async ()
   }
 });
 
-test("paused chats resume through core recheck and removed members cannot dispatch", async () => {
+test("direct owner replies can run in bot work threads despite bot and channel state", async () => {
+  const x = setup();
+  await plugin(x.bb);
+  try {
+    const hook = x.harness.inspection.registrations.hooks["message.dispatch"]!;
+    x.store.putConversation({
+      id: "group",
+      botId: x.a.id,
+      key: `group:${x.room.id}`,
+      threadId: "thr_group",
+      title: "Research",
+      kind: "group",
+      createdAt: 1,
+    });
+    x.store.put({ ...x.a, paused: true, retired: true });
+    x.store.putRoom({ ...x.room, memberIds: [x.b.id], archived: true });
+    x.runtime.busy.set(x.a.id, { threadId: "another-thread", at: Date.now() });
+    for (const origin of ["app", "cli", "sdk"] as const) {
+      assert.deepEqual(
+        await hook(
+          makeMessageDispatchHookContext({
+            thread: { id: "thr_group" },
+            input: { text: "A direct follow-up" },
+            origin,
+            originPluginId: null,
+          }),
+        ),
+        { action: "proceed" },
+      );
+    }
+  } finally {
+    await x.close();
+  }
+});
+
+test("managed paused chats resume through core recheck and removed members cannot dispatch", async () => {
   const x = setup();
   await plugin(x.bb);
   try {
@@ -1360,6 +1395,8 @@ test("paused chats resume through core recheck and removed members cannot dispat
     });
     const context = makeMessageDispatchHookContext({
       thread: { id: "thr_admin" },
+      origin: "plugin",
+      originPluginId: "bot-teams",
     });
     assert.equal((await hook(context)).action, "wait");
     const checks = x.harness.inspection.recheckCount;
@@ -1391,6 +1428,8 @@ test("paused chats resume through core recheck and removed members cannot dispat
           makeMessageDispatchHookContext({
             thread: { id: "thr_removed" },
             input: { text: jobPrompt(job) },
+            origin: "plugin",
+            originPluginId: "bot-teams",
           }),
         )
       ).action,

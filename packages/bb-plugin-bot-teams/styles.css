@@ -2985,28 +2985,49 @@
 }
 
 /* Channel rail: ambient state for the open channel, beside the transcript. */
-/* A card that floats beside the transcript rather than a docked column. */
+/*
+ * A card floating in the transcript's right gutter: it sits over the channel
+ * rather than taking a column out of it, and it is only as tall as it needs
+ * to be, so a quiet channel leaves almost nothing on screen.
+ */
 .channel-rail {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 10px;
+  width: 268px;
+  max-height: calc(100% - 18px);
   display: flex;
   flex-direction: column;
-  width: 268px;
-  flex: 0 0 268px;
-  min-height: 0;
-  margin: 8px 10px 10px 0;
   border: 1px solid var(--border);
   border-radius: calc(var(--radius, 8px) + 2px);
   background: var(--card, var(--background));
   box-shadow: 0 8px 30px #0003;
   overflow: hidden;
 }
+.bot-room-layout {
+  position: relative;
+}
 /*
- * The rail shares the channel with BB's own right panel. Measure the channel,
- * not the window, so opening a workbench tab hides the rail instead of
- * crushing the transcript.
+ * The transcript centres itself, so on a wide channel the card lands in empty
+ * gutter. Below that, hold the column and the composer clear of the card
+ * instead of letting it cover them.
  */
-@container channel (max-width: 720px) {
+@container channel (max-width: 1080px) {
+  .bot-room[data-rail="open"] .bot-room-main {
+    padding-right: 288px;
+  }
+}
+/*
+ * Measure the channel, not the window: with BB's right workbench open there is
+ * no room for both, and the transcript wins.
+ */
+@container channel (max-width: 680px) {
   .channel-rail {
     display: none;
+  }
+  .bot-room[data-rail="open"] .bot-room-main {
+    padding-right: 0;
   }
 }
 .channel-rail-header {

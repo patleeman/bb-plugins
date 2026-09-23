@@ -1286,6 +1286,11 @@ export default async function plugin(bb: BbPluginApi) {
             sendAt: Date.now() + 1500,
           }
         : { action: "proceed" };
+    // Native BB replies in a bot thread belong to the owner, even when that
+    // thread was originally created for channel or mission work. The checks
+    // below guard Bot Teams' own dispatches, not direct conversation.
+    if (context.initiator === "user" && context.originPluginId !== "bot-teams")
+      return { action: "proceed" };
     const bot = store.get(c.botId);
     if (bot.retired)
       return {
