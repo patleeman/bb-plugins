@@ -214,8 +214,8 @@ export class ChannelNotifications {
         const requestSignal = signal
           ? AbortSignal.any([signal, deadline])
           : deadline;
-        // Decisions and blockers use real BB questions, handled independently of this optional API.
-        if (!id.startsWith("attention:") && await this.resolve(id, requestSignal))
+        // Attention requests use the same native notification delivery as replies.
+        if (await this.resolve(id, requestSignal))
           await this.bb.sdk.plugins.callRpc({
             signal: requestSignal,
             pluginId: "push-notifications",

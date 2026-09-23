@@ -1,8 +1,7 @@
 import { classifyJevReturn } from "./jev";
 import { ChannelNotifications, notificationSchema } from "./notifications";
-import { AttentionQuestions } from "./attention-questions";
+import { AttentionReplies, StaleAttentionReplyError } from "./attention-replies";
 import { ChannelApprovals } from "./approvals";
-import { ATTENTION_QUESTION_RENDERER } from "./attention-question-contract";
 import { usageLimits } from "./workspace-contract";
 import { isExecuting } from "./job-state";
 import { broadcastHandles } from "./mentions";
@@ -87,8 +86,7 @@ export default async function plugin(bb: BbPluginApi) {
     },
   );
   bb.events.on("interaction.pending", ({ thread, interaction }) => {
-    if (interaction.origin?.kind !== "plugin" || interaction.origin.pluginId !== "bot-teams" || interaction.origin.rendererId !== ATTENTION_QUESTION_RENDERER)
-      notifications.interaction(thread.id, interaction.id);
+    notifications.interaction(thread.id, interaction.id);
     void approvals.tick();
     runtime.changed();
   });
@@ -96,12 +94,12 @@ export default async function plugin(bb: BbPluginApi) {
   const automations = new ChannelAutomations(bb, store, runtime);
   const settings = bb.settings.define({
     attentionNotifications: {
-      type: "boolean", label: "Attention notifications", default: true,
-      description: "Open real BB questions for decisions and blockers. Uses BB's existing phone notifications. The bot DM is visible while the question is open; requests also appear in the channel.",
+      type: "boolean", label: "Attention push notifications", default: true,
+      description: "Send a native notification for channel decisions, blockers, and important updates. Tapping it opens the request in its channel.",
     },
     replyNotifications: {
       type: "boolean", label: "Ordinary reply notifications", default: true,
-      description: "Notify for other channel replies. Turn off to receive only attention requests, failures, and questions.",
+      description: "Notify for other channel replies. Turn off to receive only attention requests and failures.",
     },
     defaultResponseBehavior: {
       type: "select",
@@ -479,9 +477,15 @@ export default async function plugin(bb: BbPluginApi) {
   const sendMessage = (
     input: z.output<typeof rpcContract.send.input>,
     threadId?: string,
+    attentionReply?: { id: string; revision: number },
   ) => {
     const { id, text, requestId, attachmentIds, replyTo, sendMode } = input;
     return runtime.locked(`room:${id}`, async () => {
+      if (attentionReply) {
+        const current = store.attention.get(attentionReply.id);
+        if (current?.status !== "open" || current.revision !== attentionReply.revision)
+          throw new StaleAttentionReplyError();
+      }
       const room = store.room(id);
       const author = threadId ? authorizeChannel(store, threadId, id) : undefined;
       if (threadId) agentAuthor(store, threadId, id);
@@ -550,9 +554,11 @@ export default async function plugin(bb: BbPluginApi) {
       );
     });
   };
-  const questions = new AttentionQuestions(bb, store,
-    input => sendMessage(rpcContract.send.input.parse(input)), () => runtime.changed());
-  questions.preferences = () => settings.get();
+  const replies = new AttentionReplies(store,
+    ({ attentionId, revision, ...input }) => sendMessage(
+      rpcContract.send.input.parse(input), undefined, { id: attentionId, revision },
+    ), () => runtime.changed(),
+    message => bb.log.warn(message));
   const handlers: PluginRpcHandlers<typeof rpcContract> = {
     createBotSetupThread: async (request) => {
       const thread = await bb.sdk.threads.spawn({
@@ -573,7 +579,7 @@ export default async function plugin(bb: BbPluginApi) {
       runtime.changed();
       return value;
     },
-    attentionDiscardReply: ({ id }) => questions.discardReply(id),
+    attentionDiscardReply: ({ id }) => replies.discardReply(id),
     documentHistory: async ({ id, file, before }) => {
       const latest = await document(store.get(id).home, file);
       runtime.data.snapshot(`${id}:${file}`, latest.text, "Observed file");
@@ -842,6 +848,17 @@ export default async function plugin(bb: BbPluginApi) {
       runtime.locked(id, () =>
         runtime.conversation(store.get(id), "admin", "admin", "Bot chat"),
       ),
+    handoffSource: async ({ threadId }) => {
+      const thread = await bb.sdk.threads.get({ threadId });
+      return {
+        threadId: thread.id,
+        projectId: thread.projectId,
+        title:
+          thread.title?.trim() ||
+          thread.titleFallback?.trim() ||
+          `Thread ${thread.id.slice(0, 8)}`,
+      };
+    },
     createRoom: ({ name, memberIds, requestId, responseBehavior: behavior }) =>
       runtime.locked("rooms", async () => {
         const existing =
@@ -1491,15 +1508,12 @@ export default async function plugin(bb: BbPluginApi) {
       }
     },
   });
-  bb.background.service("channel-questions", {
+  bb.background.service("attention-replies", {
     async start(signal) {
-      try {
-        while (!signal.aborted) {
-          if (store.attention.wake()) runtime.changed();
-          await questions.tick(signal);
-          try { await delay(1500, undefined, { signal }); } catch { break; }
-        }
-      } finally { await questions.dispose(); }
+      while (!signal.aborted) {
+        await replies.tick(signal);
+        try { await delay(1500, undefined, { signal }); } catch { break; }
+      }
     },
   });
   bb.background.service("channel-approvals", {

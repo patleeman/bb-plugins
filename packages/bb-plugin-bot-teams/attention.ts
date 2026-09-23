@@ -38,10 +38,6 @@ export class AttentionStore {
       snoozed_until INTEGER, json TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS attention_by_status ON channel_attention(status,snoozed_until);
       CREATE INDEX IF NOT EXISTS attention_by_room ON channel_attention(room_id);
-      CREATE TABLE IF NOT EXISTS attention_questions (
-        id TEXT NOT NULL, revision INTEGER NOT NULL, thread_id TEXT NOT NULL,
-        state TEXT NOT NULL, PRIMARY KEY(id,revision));
-      CREATE TABLE IF NOT EXISTS attention_question_visibility (thread_id TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS attention_question_replies (
         id TEXT PRIMARY KEY, attention_id TEXT NOT NULL, room_id TEXT NOT NULL, text TEXT NOT NULL,
         revision INTEGER NOT NULL, error TEXT, retry_at INTEGER NOT NULL DEFAULT 0);`);

@@ -8,7 +8,7 @@ type Interaction = Awaited<
   ReturnType<BbPluginApi["sdk"]["threads"]["interactions"]["get"]>
 >;
 
-/** Bot Teams opens its own channel questions. Answer them in the source bot DM. */
+/** Legacy Bot Teams attention prompts are not resolved through channel approvals. */
 export const ownQuestion = (interaction: Pick<Interaction, "origin">) =>
   interaction.origin?.kind === "plugin" &&
   interaction.origin.pluginId === "bot-teams";
@@ -200,7 +200,7 @@ export class ChannelApprovals {
       interactionId: input.interactionId,
     });
     if (ownQuestion(interaction))
-      throw new Error("Answer this channel question in the bot's DM.");
+      throw new Error("Use the channel message to respond to this attention request.");
     if (interaction.status !== "pending")
       throw new Error("This request was already answered.");
     const payload = interaction.payload;
@@ -232,7 +232,7 @@ export class ChannelApprovals {
         throw new Error("This request is not a question.");
       const question = payload.questions.find((q) => q.id === answer.questionId);
       if (!question || payload.questions.length !== 1)
-        throw new Error("Answer this question in the bot's DM.");
+        throw new Error("Use the channel message to respond to this attention request.");
       const options = question.options ?? [];
       if (
         !answer.selected.every((value) =>

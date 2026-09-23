@@ -8,6 +8,13 @@ import {
 import type { Bot, PermissionMode, Room, rpcContract } from "./contract";
 import { permissionOptions, permissionSummary } from "./permission-mode";
 import { Button } from "./components/ui/button";
+import {
+  OPTION_BASE_CLASS_NAME,
+  OPTION_INTERACTIVE_CLASS_NAME,
+  OPTION_MUTED_CLASS_NAME,
+} from "./components/ui/option-picker";
+import { LIST_HOVER_TRANSITION } from "./components/ui/motion";
+import { cn } from "./lib/utils";
 import { ErrorMessage, message } from "./bot-ui";
 
 /**
@@ -75,7 +82,7 @@ export function ChannelPermissionPicker({
             OPTION_INTERACTIVE_CLASS_NAME,
             OPTION_MUTED_CLASS_NAME,
             LIST_HOVER_TRANSITION,
-            "channel-permission-trigger h-6",
+            "h-6 data-[elevated]:text-warning-text data-[elevated]:hover:text-warning-text",
           )}
         >
           <span className="channel-permission-label">Bot permissions:</span>

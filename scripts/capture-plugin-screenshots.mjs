@@ -426,18 +426,6 @@ const captures = [
     },
   },
   {
-    id: "bots-attention-question",
-    packageDir: "bb-plugin-bot-teams",
-    fileName: "channel-attention-question.png",
-    setup: async (client) => {
-      await client.navigate(threadUrl);
-      for (const text of ["Atlas in #Attention QA", "Which day should we release ORBIT-42?", "Your answer", "Send reply", "Snooze 1 hour"]) await client.waitForText(text);
-      await client.evaluate(`(() => {
-        if (!document.querySelector('.attention-question textarea')) throw new Error('The real pending channel question must be open');
-      })()`);
-    },
-  },
-  {
     id: "bots-attention",
     packageDir: "bb-plugin-bot-teams",
     fileName: "channel-attention.png",
@@ -1122,8 +1110,8 @@ const captures = [
       await client.waitForText("Atlas is ready. I will verify the facts before we decide.");
       await client.waitForText("Scribe is ready. I will record our decisions and next steps.");
       await client.waitForAriaButton("Channel members: 2 bots");
-      await client.waitForAriaButton("Attach files");
-      await client.waitForAriaButton("Dictate message");
+      await client.waitForAriaButton("Prompt actions");
+      await client.waitForAriaButton("Start voice input");
       await client.waitForText("launch-brief.txt");
       await client.waitForText("ORBIT-42");
       await client.evaluate(`(() => {

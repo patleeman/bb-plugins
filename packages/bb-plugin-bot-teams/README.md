@@ -9,6 +9,8 @@ Persistent bots with their own files, mission, and memory, and Slack-style chann
 3. Click the overlapping avatars in the header to see members and their activity. **Add bot** sits at the bottom; member options let you configure or remove a bot.
 4. Open **Bot Teams** to administer profiles, `MISSION.md`, `MEMORY.md`, and activity. The collection uses BB's standard content width, search toolbar, status filter, sorting, and bordered rows. Shared conversations live in Channels. Each bot also has a DM you can open from its channel.
 
+In a thread, choose **Handoff to new channel** from the composer’s **+** menu. Bot Teams opens a new channel with an editable draft that references the source thread. Add bots and your request, then send it.
+
 **New bot** in the collection opens the same conversation flow without a channel invitation. Send the prefilled instructions, or add your bot’s purpose first. The agent handles the name, mission, model, and permissions using sensible defaults.
 
 Bot configuration uses the same centered content width, compact settings rows,
@@ -56,7 +58,7 @@ Explicit modes with addressed recipients bypass action classification. Single-bo
 
 When Auto routes to a busy bot, a small label beside the sent message's timestamp shows the applied action. Hover or focus it to see which bot the classifier selected and whether Bot Teams changed the suggestion before dispatch. Explicit send modes have no classifier label.
 
-The composer uses BB’s native surface, spacing, and button conventions. Type `#` to find another channel; choosing one inserts a stable channel reference that renders as a link in the transcript. It supports attachments through the plus button, paste, and drag and drop (10 files per message, 8 MB each). Dictation uses BB’s configured transcription service and microphone preference. Message text, attachment references, and replies survive reloads. Unsent uploads expire after seven days.
+The composer is adapted from BB’s thread composer: the same prompt box, **+** menu, dictation strip, attachment previews, mention menu, and the row of controls beneath it. Work in progress sits in a card tucked behind the top of the box, like a thread’s follow-ups. Type `#` to find another channel; choosing one inserts a stable channel reference that renders as a link in the transcript. It supports attachments through the plus button, paste, and drag and drop (10 files per message, 8 MB each). Dictation uses BB’s configured transcription service and microphone preference. Message text, attachment references, and replies survive reloads. Unsent uploads expire after seven days.
 
 PNG, JPEG, GIF, and WebP images appear as composer previews and inline in sent messages, including images pasted with text. Click an image to expand it and download the original. Other file types stay downloadable. Image bytes are checked before inline display; SVG and HTML remain downloads. Bots use `bots_publish_image` (or `bb bots publish-image`) with an absolute path inside their workspace to add up to ten images to their current final response. This publishes one message containing text and images, or images alone with `[PASS]`; cancelled or failed responses do not post images.
 
@@ -438,9 +440,9 @@ The image workflow and chat mode selector below were captured in the running app
 
 ## Notifications
 
-Decisions and blockers use real BB questions and the existing built-in phone notification sender. Enable **Attention notifications** in **Settings → Bot Teams** and mobile delivery in **Settings → Push notifications**. See **Attention requests** below for the complete flow.
+Decisions, blockers, and important updates queue events for BB's shared push notification delivery. Enable **Attention push notifications** in **Settings → Bot Teams** and mobile delivery in **Settings → Push notifications**. On a BB build with the delivery RPC, tapping a notification opens the marked message in its channel; it does not open a question prompt.
 
-Ordinary channel replies and failures use a separate, optional shared notification API (`notifications.enqueue`). The installed BB build does not expose this API, so those events do not produce channel push alerts. This limitation does not affect the native decision and blocker questions.
+Ordinary channel replies and failures use the same queue. The installed BB build does not expose the delivery RPC, so these events do not currently produce phone alerts. Delivery also respects **Settings → Push notifications**.
 
 
 ## Permissions
@@ -464,9 +466,9 @@ Only the owner can change a channel's permissions. Bots have no tool for it, and
 
 When a bot's DM stops for an approval, the request is forwarded to the channel that started the work, so you do not have to find the DM. A card appears below the transcript: the bot, what it wants (the command, the file change, the permission, the plan, or the tool), and the provider's reason. **Approve**, **Approve for session**, and **Deny** answer the real request in the DM; only the decisions the provider offers are shown. A single multiple-choice question shows one button per choice. Anything else shows **Open DM** alone, so nothing is answered blind. A handled card collapses to a one-line result.
 
-While a bot waits, its row in the queue shelf reads **Needs approval** in amber with a **Review** button that jumps to the card. The channel's sidebar row shows the bell, and so does that bot's nested DM row.
+While a bot waits, its row in the **Working** card above the composer reads **Needs approval** in amber with a **Review** button that jumps to the card. The channel's sidebar row shows the bell, and so does that bot's nested DM row.
 
-Channel decisions and blockers that Bot Teams itself opens are not forwarded here. Answer them in the bot DM or use the controls on the channel message, described below. Answering is restricted to a bot that is still working in that channel, so a settled or reassigned request is refused with an explanation rather than resolved.
+Channel decisions and blockers that Bot Teams itself records stay on the channel message, described below. Reply in the channel composer or use its acknowledge and snooze controls.
 
 ## Delegation returns
 
@@ -476,13 +478,13 @@ The configured classifier decides whether the exchange contains a work request a
 
 ## Attention requests
 
-Decisions, blockers, and important updates appear on their channel messages and in the channel details rail. Each request stays open until you acknowledge it. Reading its channel does not dismiss it. Use the channel composer to reply, or open the native question in the bot DM. The question also offers **Snooze 1 hour**. The CLI supports other durations from 1 minute to 30 days.
+Decisions, blockers, and important updates appear on their channel messages and in the channel details rail. Each request stays open until you acknowledge it. Reading its channel does not dismiss it. Reply in the channel composer, or use **Acknowledge** and **Snooze 1 hour** on the message. The CLI supports other snooze durations from 1 minute to 30 days.
 
 Open requests highlight their channel message in amber with **Needs you**, **Acknowledge**, and **Snooze 1 hour** actions. Snoozed and acknowledged messages offer **Bring back**. A bell replaces the channel’s sidebar hash while requests need attention, including when the channel is selected or working. Reading the channel does not clear the bell; acknowledge or snooze does. Historical pings from builds without attention capture show **Mentioned you** without sending old alerts.
 
 Bots can mention `@user` in a final response to request a decision. Mentions inside code, quotes, or links do not create requests. For an immediate alert with a specific reason, use `bots_channel_notify` with `channelId`, `requestId`, `reason` (`decision`, `blocker`, or `update`), and `text`. It posts one marked channel message with the caller's identity and does not wake other bots. Reuse the request ID when retrying, and do not repeat the alert in the final answer.
 
-In **Settings → Bot Teams**, **Attention notifications** controls these alerts and **Ordinary reply notifications** controls other replies. Both default to on. Delivery also respects **Settings → Push notifications**. Requests remain on their channel messages when push delivery is disabled. Archived channels hide their requests until restored; deleting a channel deletes its requests.
+In **Settings → Bot Teams**, **Attention push notifications** controls queued attention alerts and **Ordinary reply notifications** controls other replies. Both default to on. Delivery also respects **Settings → Push notifications**. The installed BB build does not expose the shared `notifications.enqueue` RPC, so neither kind currently reaches the phone; requests still appear in their channels. Queued alerts can be delivered by a BB build that provides that RPC while they remain in the 24-hour queue. Archived channels hide their requests until restored; deleting a channel deletes its requests.
 
 - `bb bots inbox [--status open|snoozed|acknowledged] [--limit N] [--offset N]`
 - `bb bots attention MESSAGE_ID acknowledge`
@@ -491,16 +493,6 @@ In **Settings → Bot Teams**, **Attention notifications** controls these alerts
 - `bb bots channel notify CHANNEL --reason blocker --text "The release needs your decision." --request-id UUID`
 
 The notify command runs from an agent or bot thread. Request management belongs to the owner. The plugin RPC methods `attentionList` and `attentionUpdate` expose the same operations.
-
-Decisions and blockers open a real BB question in the bot DM. Its hidden BB thread becomes visible while the question is open, then returns to hidden. BB's built-in sender sends its normal phone alert; tapping it opens the question. **Send reply** posts your answer back to the original channel message and acknowledges the request. **Acknowledge** and **Snooze 1 hour** are also available. FYI updates remain on their channel messages without creating a question.
-
-Questions wait behind existing input requests. Each question lasts up to 1 hour. Dismissal, timeout, or plugin reload leaves the channel request open without repeating the same alert. Snooze or `bb bots attention MESSAGE_ID reopen` creates a fresh reminder. Requests without an available source thread remain on their channel messages. BB's normal notification settings and read suppression still apply.
-
-Answers persist before delivery. If sending fails, the channel shows the error while delivery retries. You can discard that failed reply when it is not being sent. The feature uses the public Plugin SDK and works with the installed BB build; no core or mobile update is required.
-
-![A real channel question in the staged BB application](assets/channel-attention-question.png)
-
-The live capture shows Atlas asking for the ORBIT-42 release date, with reply, acknowledge, and snooze actions.
 
 ![Attention request in a channel in the staged BB application](assets/channel-attention.png)
 

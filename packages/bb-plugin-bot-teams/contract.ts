@@ -597,6 +597,14 @@ export const rpcContract = defineRpcContract({
     }),
     output: roomSchema,
   },
+  handoffSource: {
+    input: z.object({ threadId: z.string().min(1).max(200) }),
+    output: z.object({
+      threadId: z.string(),
+      projectId: z.string(),
+      title: z.string(),
+    }),
+  },
   updateRoom: {
     input: roomInput.extend({
       id: z.string().uuid(),

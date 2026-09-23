@@ -18,6 +18,7 @@ import { Store, document, saveDocument } from "../store";
 import { Runtime, jobPrompt, mentioned, recipients } from "../runtime";
 import { profileInput, roomSchema, type Bot, type Room } from "../contract";
 import { emptyDraft, prepareSend, readDraft, clearSentDraft } from "../draft";
+import { channelHandoffText } from "../handoff-draft";
 import { directMessageId } from "../direct-messages";
 
 const bot = (
@@ -1735,6 +1736,58 @@ test("blank channels get distinct names even with concurrent creation and archiv
   } finally {
     await x.close();
   }
+});
+
+test("channel handoff resolves an existing source thread", async () => {
+  const x = setup();
+  try {
+    await plugin(x.bb);
+    x.harness.inspection.sdk.stub("threads.get", async ({ threadId }) => {
+      if (threadId !== "thr_source") throw new Error("Thread not found");
+      return makeThreadResponse({
+        id: threadId,
+        projectId: "proj_test",
+        title: "Source work",
+      });
+    });
+    assert.deepEqual(
+      await x.harness.behavior.callRpc("handoffSource", {
+        threadId: "thr_source",
+      }),
+      {
+        threadId: "thr_source",
+        projectId: "proj_test",
+        title: "Source work",
+      },
+    );
+    await assert.rejects(
+      x.harness.behavior.callRpc("handoffSource", {
+        threadId: "thr_missing",
+      }),
+      /Thread not found/,
+    );
+  } finally {
+    await x.close();
+  }
+});
+
+test("channel handoff draft links to standard and projectless source threads", () => {
+  assert.equal(
+    channelHandoffText({
+      threadId: "thr_source",
+      projectId: "proj_test",
+      title: "Design [v2]",
+    }),
+    "Continue from [Design \\[v2\\]](/projects/proj_test/threads/thr_source) (@thread:thr_source)",
+  );
+  assert.equal(
+    channelHandoffText({
+      threadId: "thr_personal",
+      projectId: "proj_personal",
+      title: "Personal work",
+    }),
+    "Continue from [Personal work](/threads/thr_personal) (@thread:thr_personal)",
+  );
 });
 
 test("archive stops channel work, preserves history and read state is monotonic", async () => {

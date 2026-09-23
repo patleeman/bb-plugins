@@ -207,7 +207,7 @@ export function registerChannelTools(
   };
   tool(
     "bots_channel_notify",
-    "Request the owner's attention for a decision, blocker, or important update. Marks the channel message as needing attention. Decisions and blockers also open a real question in your visible BB thread, eligible for built-in phone notifications; updates remain in the channel. The owner's answer is posted back to the channel. Does not wake bots until the owner replies. Reuse requestId on retries. Do not repeat this message in your final answer. For a final response that needs an answer, use @user instead.",
+    "Request the owner's attention for a decision, blocker, or important update. Marks a channel message and sends a native notification when enabled. Tapping the notification opens that message in the channel; the owner can reply there or acknowledge or snooze the request. Does not wake bots. Reuse requestId on retries. Do not repeat this message in your final answer. For a final response that needs attention, use @user instead.",
     notifyInput,
     (input, threadId) => {
       const result = notifyOwner(store, input, threadId);

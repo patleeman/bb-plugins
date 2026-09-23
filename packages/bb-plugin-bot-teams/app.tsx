@@ -1,7 +1,5 @@
 import { channelTabLabels } from "./channel-tab-labels";
 import { UsagePanel } from "./channel-workbench";
-import { AttentionQuestion } from "./attention-question-view";
-import { ATTENTION_QUESTION_RENDERER } from "./attention-question-contract";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   definePluginApp,
@@ -34,6 +32,10 @@ import {
 import { Modal } from "./channel-controls";
 import { BotCollection } from "./bot-collection";
 import { BotCreationThread } from "./bot-creation-thread";
+import {
+  ChannelHandoffController,
+  requestChannelHandoff,
+} from "./channel-handoff";
 import "./styles.css";
 const tabs = ["profile", "mission", "memory", "activity", "usage"] as const;
 
@@ -293,11 +295,30 @@ function BotsPage({ subPath }: PluginNavPanelProps) {
   );
 }
 export default definePluginApp((app) => {
-  app.slots.pendingInteraction({ id: ATTENTION_QUESTION_RENDERER, component: AttentionQuestion });
   app.contentScripts.register(channelTabLabels);
   app.slots.experimental_appOverlay({
     id: "channel-links",
     component: ChannelLinkNavigation,
+  });
+  app.slots.experimental_appOverlay({
+    id: "channel-handoff",
+    component: ChannelHandoffController,
+  });
+  app.composer.customize({
+    id: "channel-handoff",
+    scopes: ["thread"],
+    plusMenu: [
+      {
+        id: "new-channel",
+        label: "Handoff to new channel",
+        icon: "MessageSquarePlus",
+        description: "Open a new channel with a reference to this thread.",
+        run: ({ view }) => {
+          if (view.scope.kind === "thread")
+            requestChannelHandoff(view.scope.threadId);
+        },
+      },
+    ],
   });
   app.slots.navPanel({
     id: "bots",

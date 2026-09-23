@@ -14,6 +14,7 @@ import {
 import { mentionsOwner } from "../attention";
 import { notifyOwner } from "../agent-channels";
 import { ChannelNotifications } from "../notifications";
+import { AttentionReplies, StaleAttentionReplyError } from "../attention-replies";
 
 function setup() {
   const host = createFakePluginHost({ pluginId: "bot-teams" });
@@ -141,6 +142,54 @@ test("snooze suppresses queued delivery and wakes once after restart with a new 
     assert.equal(restarted.attention.list("open", 30, 0).openCount, 1);
     restarted.deleteRoom(x.room.id);
     assert.equal(restarted.attention.get("message"), null);
+  } finally {
+    await x.harness.lifecycle.dispose();
+  }
+});
+
+test("queued legacy answers are discarded when their attention request changes", async () => {
+  const x = setup();
+  try {
+    x.store.putMessage(x.message);
+    x.store.db.prepare(`INSERT INTO attention_question_replies
+      (id,attention_id,room_id,text,revision,error,retry_at) VALUES (?,?,?,?,?,?,?)`)
+      .run("answer", x.message.id, x.room.id, "Tomorrow", 0, null, 0);
+    x.store.attention.update(x.message.id, "snooze", 60);
+    const sent: string[] = [];
+    const replies = new AttentionReplies(
+      x.store,
+      async ({ text }) => { sent.push(text); },
+      () => {},
+      () => {},
+    );
+    await replies.tick();
+    assert.deepEqual(sent, []);
+    assert.equal(x.store.db.prepare("SELECT id FROM attention_question_replies WHERE id=?").get("answer"), undefined);
+    assert.equal(x.store.attention.get(x.message.id)?.status, "snoozed");
+  } finally {
+    await x.harness.lifecycle.dispose();
+  }
+});
+
+test("a legacy answer becoming stale while waiting to send is discarded", async () => {
+  const x = setup();
+  try {
+    x.store.putMessage(x.message);
+    x.store.db.prepare(`INSERT INTO attention_question_replies
+      (id,attention_id,room_id,text,revision,error,retry_at) VALUES (?,?,?,?,?,?,?)`)
+      .run("answer", x.message.id, x.room.id, "Tomorrow", 0, null, 0);
+    const replies = new AttentionReplies(
+      x.store,
+      async () => {
+        x.store.attention.update(x.message.id, "acknowledge");
+        throw new StaleAttentionReplyError();
+      },
+      () => {},
+      () => {},
+    );
+    await replies.tick();
+    assert.equal(x.store.db.prepare("SELECT id FROM attention_question_replies WHERE id=?").get("answer"), undefined);
+    assert.equal(x.store.attention.get(x.message.id)?.status, "acknowledged");
   } finally {
     await x.harness.lifecycle.dispose();
   }

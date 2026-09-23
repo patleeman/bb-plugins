@@ -156,7 +156,8 @@ export function GroupComposer({
   const editor = useRef<HTMLTextAreaElement>(null),
     picker = useRef<HTMLInputElement>(null),
     alive = useRef(true),
-    sending = useRef(false);
+    sending = useRef(false),
+    menuItemSelected = useRef(false);
   const listId = useId();
   const [mention, setMention] = useState<{
       kind: "bot" | "channel";
@@ -717,10 +718,18 @@ export function GroupComposer({
                       align="start"
                       side="top"
                       className="w-40"
+                      onCloseAutoFocus={(event) => {
+                        // Leave focus where the chosen action put it.
+                        if (menuItemSelected.current) event.preventDefault();
+                        menuItemSelected.current = false;
+                      }}
                     >
                       <DropdownMenuItem
                         disabled={uploading || pending}
-                        onSelect={() => picker.current?.click()}
+                        onSelect={() => {
+                          menuItemSelected.current = true;
+                          picker.current?.click();
+                        }}
                       >
                         <Icon
                           name={uploading ? "Spinner" : "Paperclip"}
@@ -733,7 +742,12 @@ export function GroupComposer({
                         Attach files
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem onSelect={() => insertTrigger("@")}>
+                      <DropdownMenuItem
+                        onSelect={() => {
+                          menuItemSelected.current = true;
+                          insertTrigger("@");
+                        }}
+                      >
                         <Icon
                           name="AtSign"
                           className="size-4 text-muted-foreground"
@@ -741,7 +755,12 @@ export function GroupComposer({
                         />
                         Mention a bot
                       </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => insertTrigger("#")}>
+                      <DropdownMenuItem
+                        onSelect={() => {
+                          menuItemSelected.current = true;
+                          insertTrigger("#");
+                        }}
+                      >
                         <Icon
                           name="Hash"
                           className="size-4 text-muted-foreground"
