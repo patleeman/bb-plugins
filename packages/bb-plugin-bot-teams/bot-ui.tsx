@@ -723,7 +723,7 @@ const activityTime = (at: number) =>
       ? { timeStyle: "short" }
       : { dateStyle: "short", timeStyle: "short" },
   ).format(at);
-/** Read-only log of bot calls. Each row opens the bot's work thread. */
+/** Read-only log of bot calls. Each row opens the bot's DM. */
 export function WorkList({ jobs, bots }: { jobs: Job[]; bots: Bot[] }) {
   const navigate = useBbNavigate();
   if (!jobs.length) return <EmptyState title="No activity yet" />;
@@ -746,7 +746,7 @@ export function WorkList({ jobs, bots }: { jobs: Job[]; bots: Bot[] }) {
               type="button"
               className="activity-row"
               disabled={!job.threadId}
-              title={job.threadId ? "Open work thread" : undefined}
+              title={job.threadId ? "Open bot DM" : undefined}
               aria-label={`${bot?.name ?? "Bot"}, ${status.label}: ${title}`}
               onClick={() => job.threadId && openWorkThread(navigate, job.threadId, job.roomId)}
             >

@@ -100,7 +100,7 @@ export function UsagePanel({
       <Section title="Last 24 hours">
         <div className="channel-usage-heading">
           <IconActionTooltip
-            label="Task counts and limits count started turns. Unfinished includes queued work. Classifier calls are shown separately. Provider billing and token usage remain in View work."
+            label="Task counts and limits count started turns. Unfinished includes queued work. Classifier calls are shown separately. Provider billing and token usage remain in the bot DM."
           >
             <Button
               size="icon"
@@ -200,4 +200,3 @@ export function UsagePanel({
     </div>
   );
 }
-

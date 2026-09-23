@@ -8,6 +8,8 @@ Choose New channel in the sidebar. Type @ to invite an existing bot or start a b
 
 Messages have avatars, timestamps, linked replies, and persistent emoji reactions. Hover for message actions. Share files or dictate using BB’s composer styling. Bots work independently and post as they finish; each working bot has a Stop button beside its animated response indicator. Channels always accept messages without run or pause controls.
 
+Each channel also lists a DM with each bot beneath it in the sidebar. Typing in a bot DM sends a private message to that bot; typing in the channel shares a message with the channel. If the bot posts a DM answer to the channel, a tombstone links back to the DM without copying your message text.
+
 ## Keep work and memory across conversations
 
 Profiles, files, channels, reactions, and work survive BB restarts. Mission schedules are optional and separately pausable. Bots use your existing BB providers and permissions on the primary machine.

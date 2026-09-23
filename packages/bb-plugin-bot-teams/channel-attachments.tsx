@@ -24,9 +24,7 @@ export function ChannelAttachments({
   const [failed, setFailed] = useState<string[]>([]);
   return (
     <>
-      <div
-        className={`group-attachments${onRemove ? " group-attachments-draft" : ""}`}
-      >
+      <div className={`group-attachments${onRemove ? " group-attachments-draft" : ""}`}>
         {attachments.map((a) => (
           <div
             key={a.id}
@@ -76,41 +74,56 @@ export function ChannelAttachments({
           </div>
         ))}
       </div>
-      <Dialog.Root
-        open={!!expanded}
-        onOpenChange={(open) => {
-          if (!open) setExpanded(null);
-        }}
-      >
-        <Dialog.Portal>
-          <Dialog.Overlay className="channel-dialog-overlay" />
-          <Dialog.Content
-            className="channel-image-viewer"
-            aria-describedby={undefined}
-          >
-            <header>
-              <Dialog.Title>{expanded?.name}</Dialog.Title>
-              <a
-                href={expanded ? url(expanded) : undefined}
-                download={expanded?.name}
-              >
-                Download
-              </a>
-              <Dialog.Close asChild>
-                <Button variant="ghost" size="icon" aria-label="Close image">
-                  <Icon name="X" />
-                </Button>
-              </Dialog.Close>
-            </header>
-            {expanded && (
-              <img
-                src={url(expanded, true)}
-                alt={expanded.alt || expanded.name}
-              />
-            )}
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <AttachmentLightbox
+        attachment={expanded}
+        onClose={() => setExpanded(null)}
+      />
     </>
+  );
+}
+
+export function AttachmentLightbox({
+  attachment,
+  onClose,
+}: {
+  attachment: Attachment | null;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog.Root
+      open={!!attachment}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="channel-dialog-overlay" />
+        <Dialog.Content
+          className="channel-image-viewer"
+          aria-describedby={undefined}
+        >
+          <header>
+            <Dialog.Title>{attachment?.name}</Dialog.Title>
+            <a
+              href={attachment ? url(attachment) : undefined}
+              download={attachment?.name}
+            >
+              Download
+            </a>
+            <Dialog.Close asChild>
+              <Button variant="ghost" size="icon" aria-label="Close image">
+                <Icon name="X" />
+              </Button>
+            </Dialog.Close>
+          </header>
+          {attachment && (
+            <img
+              src={url(attachment, true)}
+              alt={attachment.alt || attachment.name}
+            />
+          )}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

@@ -174,12 +174,12 @@ export function ChannelApprovalDeck({
                 </Button>
               ))}
               <Button size="sm" variant="ghost" onClick={() => open(approval)}>
-                Open thread
+                Open DM
               </Button>
             </div>
             {approval.kind === "other" && (
               <p className="channel-approval-note">
-                Answer this one in the bot’s thread.
+                Answer this one in the bot’s DM.
               </p>
             )}
           </article>

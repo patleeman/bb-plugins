@@ -1,11 +1,38 @@
-import { useEffect, useRef, useState, useId, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useId,
+  type ReactNode,
+} from "react";
 import { experimental_Icon as Icon, useRpc } from "@get-bb/plugin-sdk/app";
 import type { Bot, Room, RoomMessage, rpcContract } from "./contract";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Button } from "./components/ui/button";
-import { BotOptions, ChannelOptions, matchingBots } from "./channel-controls";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./components/ui/dropdown-menu";
+import {
+  COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS,
+  COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS,
+  COARSE_POINTER_TEXT_BASE_CLASS,
+} from "./components/ui/coarse-pointer-sizing";
+import { CHROME_SUBTLE_ICON_BUTTON_FOREGROUND_CLASS } from "./components/ui/chrome-style-tokens";
+import { cn } from "./lib/utils";
+import { matchingBots } from "./channel-controls";
 import { channelReference, matchingChannels } from "./channel-references";
-import { ChannelAttachments } from "./channel-attachments";
+import { AttachmentPreview } from "./composer-attachments";
+import { ComposerMentionMenu } from "./composer-mention-menu";
+import {
+  useVoiceInput,
+  VoiceRecordingBar,
+  voiceUnsupportedMessage,
+} from "./composer-voice";
 import {
   emptyDraft,
   readDraft,
@@ -17,49 +44,19 @@ import { SendModePicker } from "./send-mode-picker";
 import { parseSendMode, type SendMode } from "./send-mode";
 import { matchingBroadcastMentions, type BroadcastMention } from "./mentions";
 
-const errorText = (e: unknown) => {
-  if (e instanceof DOMException && e.name === "NotAllowedError")
-    return "Allow microphone access to dictate a message.";
-  return (e instanceof Error ? e.message : String(e)).replace(
-    /^(HTTP \d+: )+/,
-    "",
-  );
-};
-/** Live input level bars, matching BB's thread dictation strip. */
-function Waveform({ stream }: { stream: MediaStream | null }) {
-  const [levels, setLevels] = useState<number[]>(() => Array(48).fill(0));
-  useEffect(() => {
-    if (!stream || typeof AudioContext === "undefined") return;
-    const audio = new AudioContext();
-    const analyser = audio.createAnalyser();
-    analyser.fftSize = 256;
-    audio.createMediaStreamSource(stream).connect(analyser);
-    const samples = new Uint8Array(analyser.fftSize);
-    let frame = 0,
-      last = 0;
-    const tick = (now: number) => {
-      frame = requestAnimationFrame(tick);
-      if (now - last < 60) return;
-      last = now;
-      analyser.getByteTimeDomainData(samples);
-      let peak = 0;
-      for (const v of samples) peak = Math.max(peak, Math.abs(v - 128) / 128);
-      setLevels((old) => [...old.slice(1), Math.min(1, peak * 2.5)]);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => {
-      cancelAnimationFrame(frame);
-      void audio.close();
-    };
-  }, [stream]);
-  return (
-    <div className="group-compose-waveform" aria-hidden="true">
-      {levels.map((level, i) => (
-        <span key={i} style={{ height: `${Math.max(3, level * 18)}px` }} />
-      ))}
-    </div>
-  );
-}
+// Layout, spacing, and motion follow BB's PromptBoxInternal and
+// FollowUpPromptBox so a channel composer reads like a thread composer.
+const PROMPTBOX_MIN_HEIGHT = 68;
+const PROMPTBOX_MAX_HEIGHT = "calc(50dvh - 3rem)";
+const VOICE_ACTION_TRANSITION_MS = 180;
+const ACTION_GROUP_TRANSITION_CLASS =
+  "transition-[opacity,transform] duration-[180ms] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none";
+
+const errorText = (e: unknown) =>
+  (e instanceof Error ? e.message : String(e)).replace(/^(HTTP \d+: )+/, "");
+const prefersReducedMotion = () =>
+  typeof matchMedia === "function" &&
+  matchMedia("(prefers-reduced-motion: reduce)").matches;
 const encode = (file: Blob) =>
   new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -67,6 +64,35 @@ const encode = (file: Blob) =>
     reader.onerror = () => reject(new Error("Could not read this file."));
     reader.readAsDataURL(file);
   });
+
+/** Keeps the dictation strip mounted while it fades out, as BB's composer does. */
+function useVoiceActionTransition(active: boolean) {
+  const [present, setPresent] = useState(active);
+  const [visible, setVisible] = useState(active);
+  useLayoutEffect(() => {
+    if (active) {
+      setPresent(true);
+      if (prefersReducedMotion()) {
+        setVisible(true);
+        return;
+      }
+      const frame = requestAnimationFrame(() => setVisible(true));
+      return () => cancelAnimationFrame(frame);
+    }
+    setVisible(false);
+    if (prefersReducedMotion()) {
+      setPresent(false);
+      return;
+    }
+    const timer = setTimeout(
+      () => setPresent(false),
+      VOICE_ACTION_TRANSITION_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [active]);
+  return { present, visible };
+}
+
 export function GroupComposer({
   autoFocus = false,
   roomId,
@@ -81,12 +107,16 @@ export function GroupComposer({
   memberIds,
   rooms,
   onCreateBot,
-  footer,
-  shelf,
+  railStart,
+  railEnd,
+  stack,
 }: {
-  footer?: ReactNode;
-  /** Work and queue for this channel, attached to the top of the input. */
-  shelf?: ReactNode;
+  /** Left side of the row beneath the input, like a thread's environment. */
+  railStart?: ReactNode;
+  /** Right side of that row, like a thread's permission control. */
+  railEnd?: ReactNode;
+  /** Cards tucked behind the top of the input, like a thread's follow-ups. */
+  stack?: ReactNode;
   autoFocus?: boolean;
   bots: Bot[];
   memberIds: string[];
@@ -122,19 +152,11 @@ export function GroupComposer({
     } catch {}
     setDraftState(next);
   };
-  const [voiceEnabled, setVoiceEnabled] = useState(false),
-    [voice, setVoice] = useState<
-      "idle" | "starting" | "recording" | "transcribing"
-    >("idle");
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
   const editor = useRef<HTMLTextAreaElement>(null),
     picker = useRef<HTMLInputElement>(null),
-    recording = useRef<MediaRecorder | null>(null),
-    stream = useRef<MediaStream | null>(null),
     alive = useRef(true),
-    sending = useRef(false),
-    timer = useRef<ReturnType<typeof setTimeout> | null>(null),
-    discard = useRef(false);
-  const [liveStream, setLiveStream] = useState<MediaStream | null>(null);
+    sending = useRef(false);
   const listId = useId();
   const [mention, setMention] = useState<{
       kind: "bot" | "channel";
@@ -143,6 +165,51 @@ export function GroupComposer({
       query: string;
     } | null>(null),
     [selection, setSelection] = useState(0);
+
+  const insertAtCursor = useCallback((text: string) => {
+    const field = editor.current;
+    const current = latestDraft.current.text;
+    const start = field?.selectionStart ?? current.length,
+      end = field?.selectionEnd ?? current.length;
+    const before = current.slice(0, start),
+      after = current.slice(end);
+    const lead = before && !/\s$/.test(before) ? " " : "";
+    const trail = after && !/^\s/.test(after) ? " " : "";
+    const inserted = `${lead}${text}${trail}`;
+    setDraft((d) => ({
+      ...d,
+      text: (before + inserted + after).slice(0, 16000),
+    }));
+    const caret = start + inserted.length;
+    requestAnimationFrame(() => {
+      editor.current?.focus();
+      editor.current?.setSelectionRange(caret, caret);
+    });
+  }, []);
+  const voice = useVoiceInput({
+    transcribe: async (audio, promptContext) =>
+      (
+        await rpc.call("transcribe", {
+          data: await encode(audio),
+          mimeType: audio.type,
+          prompt: promptContext ?? "",
+        })
+      ).text,
+    onTranscript: insertAtCursor,
+    onError: setError,
+    getPromptContext: () => {
+      const field = editor.current;
+      return latestDraft.current.text.slice(
+        0,
+        field?.selectionStart ?? undefined,
+      );
+    },
+  });
+  const voiceActive = voice.state !== "idle";
+  const voiceAction = useVoiceActionTransition(voiceActive);
+  const lastVoiceState = useRef<"recording" | "transcribing">("recording");
+  if (voice.state !== "idle") lastVoiceState.current = voice.state;
+
   const options =
     mention?.kind === "bot"
       ? [
@@ -201,8 +268,10 @@ export function GroupComposer({
     setMention(null);
     onCreateBot();
   };
-  const editorBlocked = paused || uploading || voice !== "idle";
-  const blocked = editorBlocked || pending;
+  const blocked = paused || uploading || voiceActive || pending;
+  const canSubmit =
+    !blocked && (!!draft.text.trim() || draft.attachments.length > 0);
+  const showMentionMenu = !!mention && !paused && !voiceActive;
   useEffect(() => {
     alive.current = true;
     rpc.call("composer").then(
@@ -211,9 +280,6 @@ export function GroupComposer({
     );
     return () => {
       alive.current = false;
-      if (timer.current) clearTimeout(timer.current);
-      if (recording.current?.state === "recording") recording.current.stop();
-      stream.current?.getTracks().forEach((t) => t.stop());
     };
   }, [rpc]);
   useEffect(() => {
@@ -240,11 +306,23 @@ export function GroupComposer({
     const el = editor.current;
     if (el) {
       el.style.height = "auto";
-      el.style.height = `${Math.min(220, Math.max(68, el.scrollHeight))}px`;
+      el.style.height = `${Math.max(PROMPTBOX_MIN_HEIGHT, el.scrollHeight)}px`;
     }
   }, [draft.text]);
+  // Escape cancels dictation from anywhere, as in a thread composer.
+  useEffect(() => {
+    if (!voiceActive) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      voice.cancel();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [voiceActive, voice.cancel]);
   const attach = async (files: File[]) => {
-    if (blocked || !files.length) return;
+    if (paused || pending || uploading || !files.length) return;
     setError(null);
     if (draft.attachments.length + files.length > 10) {
       setError("Attach up to 10 files per message.");
@@ -273,13 +351,24 @@ export function GroupComposer({
       if (alive.current) setUploading(false);
     }
   };
+  const removeAttachment = async (a: Draft["attachments"][number]) => {
+    if (sending.current || blocked) return;
+    setUploading(true);
+    try {
+      await rpc.call("discardAttachment", { id: roomId, attachmentId: a.id });
+      if (alive.current)
+        setDraft((d) => ({
+          ...d,
+          attachments: d.attachments.filter((x) => x.id !== a.id),
+        }));
+    } catch (e) {
+      if (alive.current) setError(errorText(e));
+    } finally {
+      if (alive.current) setUploading(false);
+    }
+  };
   const send = async () => {
-    if (
-      sending.current ||
-      blocked ||
-      (!draft.text.trim() && !draft.attachments.length)
-    )
-      return;
+    if (sending.current || !canSubmit) return;
     sending.current = true;
     setPending(true);
     setError(null);
@@ -322,431 +411,427 @@ export function GroupComposer({
       editor.current?.setSelectionRange(caret, caret);
     });
   };
-  const dictate = async () => {
-    if (voice === "recording") {
-      recording.current?.stop();
-      return;
-    }
-    if (blocked || !voiceEnabled) return;
-    setError(null);
-    setVoice("starting");
+  const canStartVoice =
+    voice.isSupported && voiceEnabled && !paused && !pending && !uploading;
+  const sendMode = (() => {
     try {
-      if (
-        !navigator.mediaDevices?.getUserMedia ||
-        typeof MediaRecorder === "undefined"
-      )
-        throw new Error(
-          "Dictation needs microphone access in a supported browser.",
-        );
-      const media = await navigator.mediaDevices.getUserMedia({
-        audio: localStorage.getItem("bb.voiceInput.audioInputDeviceId")
-          ? {
-              deviceId: {
-                ideal: localStorage.getItem(
-                  "bb.voiceInput.audioInputDeviceId",
-                )!,
-              },
-            }
-          : true,
-      });
-      if (!alive.current) {
-        media.getTracks().forEach((t) => t.stop());
-        return;
-      }
-      stream.current = media;
-      discard.current = false;
-      setLiveStream(media);
-      const mime = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"].find(
-        (t) => MediaRecorder.isTypeSupported(t),
-      );
-      const recorder = new MediaRecorder(
-        media,
-        mime ? { mimeType: mime } : undefined,
-      );
-      recording.current = recorder;
-      const chunks: Blob[] = [];
-      let failed = false;
-      recorder.ondataavailable = (e) => {
-        if (e.data.size) chunks.push(e.data);
-      };
-      recorder.onerror = () => {
-        failed = true;
-        if (timer.current) clearTimeout(timer.current);
-        media.getTracks().forEach((t) => t.stop());
-        setLiveStream(null);
-        if (alive.current) {
-          setVoice("idle");
-          setError("Microphone recording failed. Try again.");
-        }
-      };
-      recorder.onstop = async () => {
-        if (timer.current) clearTimeout(timer.current);
-        if (!failed) media.getTracks().forEach((t) => t.stop());
-        recording.current = null;
-        stream.current = null;
-        setLiveStream(null);
-        if (!alive.current || failed) return;
-        if (discard.current) {
-          setVoice("idle");
-          return;
-        }
-        setVoice("transcribing");
-        try {
-          const blob = new Blob(chunks, { type: recorder.mimeType });
-          if (blob.size > 5 * 1024 * 1024)
-            throw new Error("Recording exceeds 5 MB. Try a shorter message.");
-          const result = await rpc.call("transcribe", {
-            data: await encode(blob),
-            mimeType: blob.type,
-            prompt: draft.text,
-          });
-          if (alive.current) {
-            setDraft((d) => ({
-              ...d,
-              text: `${d.text}${d.text ? " " : ""}${result.text}`,
-            }));
-            editor.current?.focus();
-          }
-        } catch (e) {
-          if (alive.current) setError(errorText(e));
-        } finally {
-          if (alive.current) setVoice("idle");
-        }
-      };
-      recorder.start();
-      setVoice("recording");
-      timer.current = setTimeout(() => {
-        if (recorder.state === "recording") recorder.stop();
-      }, 120000);
-    } catch (e) {
-      stream.current?.getTracks().forEach((t) => t.stop());
-      setError(errorText(e));
-      setVoice("idle");
+      return parseSendMode(draft.text, draft.sendMode).mode;
+    } catch {
+      return draft.sendMode;
     }
-  };
+  })();
+
   return (
-    <div className="group-compose-wrap" data-shelf={shelf ? "" : undefined}>
-      {mention && !editorBlocked && (
-        <div className="channel-mention-picker">
-          {mention.kind === "channel" ? (
-            <ChannelOptions
-              rooms={rooms}
-              currentRoomId={roomId}
-              query={mention.query}
-              selected={Math.min(selection, channelOptions.length)}
-              listId={listId}
-              onHover={setSelection}
-              onSelect={insertMention}
-            />
-          ) : (
-            <BotOptions
-              bots={bots}
-              memberIds={memberIds}
-              query={mention.query}
-              selected={Math.min(selection, options.length)}
-              listId={listId}
-              onHover={setSelection}
-              onSelect={insertMention}
-              onCreate={createMention}
-              onBroadcast={insertMention}
-            />
-          )}
-        </div>
-      )}
-      {error && (
-        <p role="alert" className="bot-compose-error">
-          {error}
-        </p>
-      )}
-      {shelf}
-      <div
-        className="group-compose group/promptbox relative w-full rounded-xl border border-border bg-background shadow-lift"
-        onDragOver={(e) => {
-          if (e.dataTransfer.types.includes("Files")) {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = "copy";
-          }
-        }}
-        onDrop={(e) => {
-          if (e.dataTransfer.files.length) {
-            e.preventDefault();
-            void attach(Array.from(e.dataTransfer.files));
-          }
-        }}
-      >
-        {draft.reply && (
-          <div className="group-reply-preview">
-            <Icon name="CornerDownRight" />
-            <span>
-              <strong>Replying to {draft.reply.speaker}</strong>
-              <span>{draft.reply.text.slice(0, 150) || "Attachment"}</span>
-            </span>
-            <button
-              aria-label="Cancel reply"
-              onClick={() => setDraft((d) => ({ ...d, reply: null }))}
-            >
-              <Icon name="X" />
-            </button>
-          </div>
-        )}
-        {!!draft.attachments.length && (
-          <ChannelAttachments
-            attachments={draft.attachments}
-            disabled={pending}
-            onRemove={async (a) => {
-              if (sending.current || blocked) return;
-              setUploading(true);
-              try {
-                await rpc.call("discardAttachment", {
-                  id: roomId,
-                  attachmentId: a.id,
-                });
-                if (alive.current)
-                  setDraft((d) => ({
-                    ...d,
-                    attachments: d.attachments.filter((x) => x.id !== a.id),
-                  }));
-              } catch (e) {
-                if (alive.current) setError(errorText(e));
-              } finally {
-                if (alive.current) setUploading(false);
-              }
-            }}
-          />
-        )}
-        <textarea
-          ref={editor}
-          autoFocus={autoFocus}
-          aria-label="Message channel"
-          role="combobox"
-          aria-autocomplete="list"
-          aria-expanded={!!mention && !editorBlocked}
-          aria-controls={mention ? listId : undefined}
-          aria-activedescendant={
-            mention
-              ? `${listId}-${Math.min(selection, activeOptions.length)}`
-              : undefined
-          }
-          placeholder={paused ? "Channel archived" : `Message #${roomName}…`}
-          value={draft.text}
-          maxLength={16000}
-          disabled={editorBlocked}
-          rows={1}
-          onChange={(e) => {
-            setDraft((d) => ({ ...d, text: e.target.value }));
-            findMention(e.target.value, e.target.selectionStart);
-          }}
-          onClick={(e) =>
-            findMention(e.currentTarget.value, e.currentTarget.selectionStart)
-          }
-          onBlur={(e) => {
-            if (!e.relatedTarget?.closest(".channel-mention-picker"))
-              setMention(null);
-          }}
-          onPaste={(e) => {
-            const files = Array.from(e.clipboardData.files);
-            if (files.length) {
-              e.preventDefault();
-              const text = e.clipboardData.getData("text/plain");
-              if (text && !blocked && !sending.current) {
-                const { selectionStart, selectionEnd } = e.currentTarget;
-                setDraft((d) => ({
-                  ...d,
-                  text: (
-                    d.text.slice(0, selectionStart) +
-                    text +
-                    d.text.slice(selectionEnd)
-                  ).slice(0, 16000),
-                }));
-              }
-              void attach(files);
-            }
-          }}
-          onKeyDown={(e) => {
-            if (e.nativeEvent.isComposing) return;
-            if (mention && !editorBlocked) {
-              if (e.key === "Escape") {
-                e.preventDefault();
-                setMention(null);
-                return;
-              }
-              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-                e.preventDefault();
-                setSelection(
-                  (value) =>
-                    (value +
-                      (e.key === "ArrowDown" ? 1 : activeOptions.length)) %
-                    (activeOptions.length + 1),
-                );
-                return;
-              }
-              if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
-                e.preventDefault();
-                const item =
-                  activeOptions[Math.min(selection, activeOptions.length)];
-                if (item) insertMention(item);
-                else if (mention.kind === "bot") createMention();
-                else setMention(null);
-                return;
-              }
-            }
-            if (
-              e.key === "Enter" &&
-              !e.shiftKey &&
-              !e.nativeEvent.isComposing
-            ) {
-              e.preventDefault();
+    <div className="group-compose-wrap">
+      <div data-promptbox-shell="" className="space-y-2">
+        {stack ? <div className="grid gap-2">{stack}</div> : null}
+        <div className="relative z-20" data-follow-up-composer="">
+          <form
+            data-promptbox=""
+            data-promptbox-voice-active={voiceActive ? "" : undefined}
+            className="group-compose group/promptbox relative w-full rounded-xl border border-border bg-background shadow-lift"
+            onSubmit={(event) => {
+              event.preventDefault();
               void send();
-            }
-          }}
-        />
-        <div className="group-compose-controls">
-          <input
-            ref={picker}
-            type="file"
-            multiple
-            hidden
-            aria-label="Choose attachments"
-            onChange={(e) => {
-              void attach(Array.from(e.target.files ?? []));
-              e.target.value = "";
             }}
-          />
-          {voice === "recording" ? (
-            <>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 max-md:pointer-coarse:h-10 max-md:pointer-coarse:w-10"
-                aria-label="Cancel dictation"
-                onClick={() => {
-                  discard.current = true;
-                  recording.current?.stop();
-                }}
-              >
-                <Icon name="X" />
-              </Button>
-              <Waveform stream={liveStream} />
-              <Button
-                size="icon"
-                className="h-8 w-8 rounded-full max-md:pointer-coarse:h-10 max-md:pointer-coarse:w-10"
-                aria-label="Finish dictation"
-                onClick={() => void dictate()}
-              >
-                <Icon name="Check" />
-              </Button>
-            </>
-          ) : (
-            <>
-              <DropdownMenu.Root>
-                <DropdownMenu.Trigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 max-md:pointer-coarse:h-10 max-md:pointer-coarse:w-10"
-                    aria-label="Add to message"
-                    disabled={blocked}
-                  >
-                    <Icon name="Plus" />
-                  </Button>
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Portal>
-                  <DropdownMenu.Content
-                    align="start"
-                    side="top"
-                    sideOffset={4}
-                    collisionPadding={8}
-                    className="channel-popover channel-add-menu"
-                  >
-                    <DropdownMenu.Item
-                      className="channel-menu-row"
-                      onSelect={() => picker.current?.click()}
-                    >
-                      <Icon name="Paperclip" />
-                      Attach files
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Separator className="channel-menu-separator" />
-                    <DropdownMenu.Item
-                      className="channel-menu-row"
-                      onSelect={() => insertTrigger("@")}
-                    >
-                      <Icon name="AtSign" />
-                      Mention a bot
-                    </DropdownMenu.Item>
-                    <DropdownMenu.Item
-                      className="channel-menu-row"
-                      onSelect={() => insertTrigger("#")}
-                    >
-                      <Icon name="Hash" />
-                      Link a channel
-                    </DropdownMenu.Item>
-                  </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-              </DropdownMenu.Root>
-              <span className="group-compose-hint" role="status">
-                {pending
-                  ? "Sending…"
-                  : uploading
-                    ? "Uploading…"
-                    : voice === "transcribing"
-                      ? "Transcribing…"
-                      : voice === "starting"
-                        ? "Opening microphone…"
-                        : ""}
-              </span>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 max-md:pointer-coarse:h-10 max-md:pointer-coarse:w-10"
-                aria-label={
-                  voiceEnabled
-                    ? "Dictate message"
-                    : "Dictate message (enable voice transcription in BB settings)"
-                }
-                disabled={
-                  !voiceEnabled ||
-                  paused ||
-                  pending ||
-                  uploading ||
-                  ["starting", "transcribing"].includes(voice)
-                }
-                onClick={() => void dictate()}
-              >
-                <Icon name="Mic" />
-              </Button>
-          <SendModePicker
-            value={(() => {
-              try {
-                return parseSendMode(draft.text, draft.sendMode).mode;
-              } catch {
-                return draft.sendMode;
+            onMouseDown={(event) => {
+              // Clicking the box's chrome focuses the editor, as in BB.
+              if (event.target === event.currentTarget) {
+                event.preventDefault();
+                editor.current?.focus();
               }
-            })()}
-            disabled={blocked}
-            onChange={(sendMode) =>
-              setDraft((d) => ({
-                ...d,
-                sendMode,
-                text: parseSendMode(d.text).text,
-              }))
-            }
-          />
-          <Button
-            size="icon"
-            className="h-8 w-8 max-md:pointer-coarse:h-10 max-md:pointer-coarse:w-10"
-            aria-label="Send message"
-            disabled={
-              blocked || (!draft.text.trim() && !draft.attachments.length)
-            }
-            onClick={() => void send()}
+            }}
+            onDragOver={(e) => {
+              if (e.dataTransfer.types.includes("Files")) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "copy";
+              }
+            }}
+            onDrop={(e) => {
+              if (e.dataTransfer.files.length) {
+                e.preventDefault();
+                void attach(Array.from(e.dataTransfer.files));
+              }
+            }}
           >
-            <Icon name="CornerDownLeft" />
-          </Button>
-            </>
-          )}
+            <input
+              ref={picker}
+              type="file"
+              multiple
+              className="hidden"
+              aria-label="Choose attachments"
+              onChange={(e) => {
+                void attach(Array.from(e.target.files ?? []));
+                e.target.value = "";
+              }}
+            />
+            {showMentionMenu && mention ? (
+              <div
+                data-promptbox-typeahead-menu=""
+                className="channel-mention-picker absolute -left-px -right-px bottom-full z-20 mb-2"
+              >
+                <ComposerMentionMenu
+                  kind={mention.kind}
+                  query={mention.query}
+                  bots={bots}
+                  memberIds={memberIds}
+                  rooms={rooms}
+                  currentRoomId={roomId}
+                  selectedIndex={selection}
+                  listId={listId}
+                  onHover={setSelection}
+                  onInsert={insertMention}
+                  onCreateBot={createMention}
+                />
+              </div>
+            ) : null}
+            <div
+              data-promptbox-main=""
+              className={cn(
+                "min-h-0 overflow-hidden transition-opacity duration-[180ms] motion-reduce:transition-none",
+                voiceActive && "pointer-events-none",
+              )}
+            >
+              {draft.reply ? (
+                <div
+                  inert={voiceActive ? true : undefined}
+                  className="flex min-w-0 items-start gap-1.5 pl-4 pr-2 pt-3 text-xs"
+                >
+                  <Icon
+                    name="CornerDownRight"
+                    className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+                    aria-hidden
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-foreground">
+                      Replying to {draft.reply.speaker}
+                    </div>
+                    <div className="truncate border-l-2 border-surface-selected-border pl-2 text-muted-foreground">
+                      {draft.reply.text.slice(0, 150) || "Attachment"}
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    aria-label="Cancel reply"
+                    onClick={() => setDraft((d) => ({ ...d, reply: null }))}
+                    className={cn(
+                      "-mt-1 h-6 w-6 p-0 [&_[data-icon-root]]:size-3.5",
+                      CHROME_SUBTLE_ICON_BUTTON_FOREGROUND_CLASS,
+                    )}
+                  >
+                    <Icon name="X" />
+                  </Button>
+                </div>
+              ) : null}
+              <div data-promptbox-input-region="" className="relative">
+                <textarea
+                  ref={editor}
+                  data-promptbox-editor-scroll=""
+                  autoFocus={autoFocus}
+                  aria-label="Message channel"
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded={showMentionMenu}
+                  aria-controls={showMentionMenu ? listId : undefined}
+                  aria-activedescendant={
+                    showMentionMenu
+                      ? `${listId}-${Math.min(selection, activeOptions.length)}`
+                      : undefined
+                  }
+                  aria-busy={voiceActive || undefined}
+                  placeholder={
+                    paused ? "Channel archived" : `Message #${roomName}…`
+                  }
+                  value={draft.text}
+                  maxLength={16000}
+                  disabled={paused}
+                  readOnly={voiceActive}
+                  rows={1}
+                  className={cn(
+                    "block w-full resize-none overflow-y-auto border-0 bg-transparent px-4 pb-1 pt-3 text-foreground outline-none",
+                    COARSE_POINTER_TEXT_BASE_CLASS,
+                    "leading-[1.7]",
+                    "placeholder:font-light placeholder:text-subtle-foreground placeholder:opacity-70",
+                    "disabled:cursor-not-allowed",
+                  )}
+                  style={{
+                    minHeight: `${PROMPTBOX_MIN_HEIGHT}px`,
+                    maxHeight: PROMPTBOX_MAX_HEIGHT,
+                  }}
+                  onChange={(e) => {
+                    setDraft((d) => ({ ...d, text: e.target.value }));
+                    findMention(e.target.value, e.target.selectionStart);
+                  }}
+                  onClick={(e) =>
+                    findMention(
+                      e.currentTarget.value,
+                      e.currentTarget.selectionStart,
+                    )
+                  }
+                  onBlur={() => setMention(null)}
+                  onPaste={(e) => {
+                    const files = Array.from(e.clipboardData.files);
+                    if (files.length) {
+                      e.preventDefault();
+                      const text = e.clipboardData.getData("text/plain");
+                      if (text && !blocked && !sending.current) {
+                        const { selectionStart, selectionEnd } =
+                          e.currentTarget;
+                        setDraft((d) => ({
+                          ...d,
+                          text: (
+                            d.text.slice(0, selectionStart) +
+                            text +
+                            d.text.slice(selectionEnd)
+                          ).slice(0, 16000),
+                        }));
+                      }
+                      void attach(files);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.nativeEvent.isComposing) return;
+                    if (showMentionMenu && mention) {
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        setMention(null);
+                        return;
+                      }
+                      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setSelection(
+                          (value) =>
+                            (value +
+                              (e.key === "ArrowDown"
+                                ? 1
+                                : activeOptions.length)) %
+                            (activeOptions.length + 1),
+                        );
+                        return;
+                      }
+                      if (
+                        (e.key === "Enter" && !e.shiftKey) ||
+                        e.key === "Tab"
+                      ) {
+                        e.preventDefault();
+                        const item =
+                          activeOptions[
+                            Math.min(selection, activeOptions.length)
+                          ];
+                        if (item) insertMention(item);
+                        else if (mention.kind === "bot") createMention();
+                        else setMention(null);
+                        return;
+                      }
+                    }
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      void send();
+                    }
+                  }}
+                />
+              </div>
+
+              <div inert={voiceActive ? true : undefined}>
+                <AttachmentPreview
+                  attachments={draft.attachments}
+                  onRemoveAttachment={
+                    blocked ? undefined : (a) => void removeAttachment(a)
+                  }
+                />
+                {error ? (
+                  <div
+                    role="alert"
+                    className="mx-3 mb-1 mt-1 text-xs text-destructive"
+                  >
+                    {error}
+                  </div>
+                ) : null}
+              </div>
+
+              <div
+                data-promptbox-action-row=""
+                className="relative flex shrink-0 select-none flex-row items-center gap-3 pb-2 pl-3.5 pr-2 pt-1.5"
+              >
+                {voiceAction.present ? (
+                  <div
+                    data-promptbox-voice-controls=""
+                    inert={voiceAction.visible ? undefined : true}
+                    aria-hidden={voiceAction.visible ? undefined : true}
+                    className={cn(
+                      "absolute inset-0 z-10 min-w-0 origin-center will-change-[opacity,transform]",
+                      ACTION_GROUP_TRANSITION_CLASS,
+                      voiceAction.visible
+                        ? "pointer-events-auto translate-y-0 scale-100 opacity-100"
+                        : "pointer-events-none translate-y-1 scale-[0.985] opacity-0",
+                    )}
+                  >
+                    <VoiceRecordingBar
+                      state={
+                        voice.state === "idle"
+                          ? lastVoiceState.current
+                          : voice.state
+                      }
+                      stream={voice.stream}
+                      onConfirm={voice.stop}
+                      onCancel={voice.cancel}
+                    />
+                  </div>
+                ) : null}
+                <div
+                  data-promptbox-standard-actions=""
+                  className={cn(
+                    "flex min-w-0 flex-1 flex-row items-center gap-1",
+                    ACTION_GROUP_TRANSITION_CLASS,
+                    voiceActive
+                      ? "pointer-events-none translate-y-1 opacity-0"
+                      : "translate-y-0 opacity-100",
+                  )}
+                  inert={voiceActive ? true : undefined}
+                  aria-live="polite"
+                >
+                  <DropdownMenu modal={false}>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        aria-label="Prompt actions"
+                        disabled={paused}
+                        className={cn(
+                          COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS,
+                          CHROME_SUBTLE_ICON_BUTTON_FOREGROUND_CLASS,
+                          "-ml-1.5",
+                        )}
+                      >
+                        <Icon
+                          name={uploading ? "Spinner" : "Plus"}
+                          className={cn("size-4", uploading && "animate-spin")}
+                        />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      aria-label="Prompt actions"
+                      align="start"
+                      side="top"
+                      className="w-40"
+                    >
+                      <DropdownMenuItem
+                        disabled={uploading || pending}
+                        onSelect={() => picker.current?.click()}
+                      >
+                        <Icon
+                          name={uploading ? "Spinner" : "Paperclip"}
+                          className={cn(
+                            "size-4 text-muted-foreground",
+                            uploading && "animate-spin",
+                          )}
+                          aria-hidden
+                        />
+                        Attach files
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={() => insertTrigger("@")}>
+                        <Icon
+                          name="AtSign"
+                          className="size-4 text-muted-foreground"
+                          aria-hidden
+                        />
+                        Mention a bot
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => insertTrigger("#")}>
+                        <Icon
+                          name="Hash"
+                          className="size-4 text-muted-foreground"
+                          aria-hidden
+                        />
+                        Link a channel
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <SendModePicker
+                    value={sendMode}
+                    disabled={blocked}
+                    onChange={(next) =>
+                      setDraft((d) => ({
+                        ...d,
+                        sendMode: next,
+                        text: parseSendMode(d.text).text,
+                      }))
+                    }
+                  />
+                </div>
+                <div
+                  data-promptbox-standard-actions=""
+                  className={cn(
+                    "flex shrink-0 flex-row items-center gap-1",
+                    ACTION_GROUP_TRANSITION_CLASS,
+                    voiceActive
+                      ? "pointer-events-none translate-y-1 opacity-0"
+                      : "translate-y-0 opacity-100",
+                  )}
+                  inert={voiceActive ? true : undefined}
+                >
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    aria-label={
+                      !voice.isSupported
+                        ? voiceUnsupportedMessage()
+                        : voiceEnabled
+                          ? "Start voice input"
+                          : "Start voice input (turn on voice transcription in BB settings)"
+                    }
+                    disabled={!canStartVoice}
+                    onClick={() => void voice.start()}
+                    className={COARSE_POINTER_PROMPT_ICON_ACTION_BUTTON_CLASS}
+                  >
+                    <Icon name="Mic" className="size-4" />
+                  </Button>
+                  <div
+                    data-promptbox-submit-group=""
+                    className="flex shrink-0 flex-row items-center"
+                  >
+                    <Button
+                      data-promptbox-submit-action=""
+                      type="submit"
+                      size="sm"
+                      variant="default"
+                      aria-label={pending ? "Sending message" : "Send message"}
+                      disabled={!canSubmit}
+                      className={cn(
+                        "ml-1",
+                        COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS,
+                        "transition-colors",
+                      )}
+                    >
+                      {pending ? (
+                        <Icon name="Spinner" className="size-4 animate-spin" />
+                      ) : (
+                        <Icon name="CornerDownLeft" className="size-4" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </form>
+          {railStart || railEnd ? (
+            <div
+              data-follow-up-composer-footer=""
+              className="mt-1 flex min-h-6 select-none items-center justify-between gap-2 pl-[15px] pr-3.5"
+            >
+              <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+                {railStart}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">{railEnd}</div>
+            </div>
+          ) : null}
         </div>
       </div>
-      {footer && <div className="group-compose-footer">{footer}</div>}
     </div>
   );
 }

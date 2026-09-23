@@ -41,6 +41,7 @@ import type {
   ChannelApproval,
 } from "./contract";
 import { Button } from "./components/ui/button";
+import { cn } from "./lib/utils";
 import { Input } from "./components/ui/input";
 import {
   ContextMenu,
@@ -52,7 +53,6 @@ import { WorkList, ErrorMessage, message } from "./bot-ui";
 import {
   ChannelThreadList,
   openWorkThread,
-  useExpandedChannels,
 } from "./channel-threads";
 import { channelQueues, channelResponseFailures, channelWork, channelWorkActivity } from "./channel-work";
 import { ChannelRail, useChannelRail } from "./channel-rail-view";
@@ -63,7 +63,7 @@ import {
   revealApproval,
 } from "./channel-approvals";
 import { ChannelSearch } from "./channel-search";
-import { useAttention, ChannelAttentionBanner, MessageAttention } from "./attention-view";
+import { ChannelAttentionBanner, MessageAttention } from "./attention-view";
 import { ChannelSidebarRow } from "./channel-sidebar-row";
 import { ChannelPermissionPicker } from "./channel-permissions";
 import {
@@ -274,10 +274,10 @@ function MessageActionButtons({
         <Button
           variant="ghost"
           size="icon"
-          aria-label={`View ${message.speaker}'s work`}
+          aria-label={job?.threadId || message.botId ? "Open bot DM" : "Open source thread"}
           onClick={onView}
         >
-          <IconActionTooltip label="See work">
+          <IconActionTooltip label={job?.threadId || message.botId ? "Open bot DM" : "Open source thread"}>
             <Icon name="ExternalLink" />
           </IconActionTooltip>
         </Button>
@@ -297,6 +297,7 @@ function MessageContextActions({
   onEmoji,
   onCopy,
   onView,
+  viewLabel,
 }: {
   onPermalink: () => void;
   onEdit?: () => void;
@@ -308,6 +309,7 @@ function MessageContextActions({
   onEmoji: () => void;
   onCopy: () => void;
   onView: () => void;
+  viewLabel: string;
 }) {
   return (
     <>
@@ -344,7 +346,7 @@ function MessageContextActions({
       {hasWork && (
         <ContextMenuItem onSelect={onView}>
           <Icon name="ExternalLink" />
-          See thread
+          {viewLabel}
         </ContextMenuItem>
       )}
     </>
@@ -569,16 +571,14 @@ export function ChannelRedirect({ subPath }: { subPath?: string }) {
 }
 export function ChannelsNavigation(props: ExperimentalSidebarNavigationProps) {
   const [expanded, setExpanded] = useState(false);
-  const { data: attention } = useAttention("open", 1);
-  const inbox = props.items.find(item => item.action.kind === "open-plugin-panel" && item.action.pluginId === "bot-teams" && item.action.panelId === "for-you");
   const channel = props.items.find(
     (item) =>
       item.action.kind === "open-plugin-panel" &&
       item.action.pluginId === "bot-teams" &&
       item.action.panelId === "channels",
   );
-  const rest = props.items.filter((item) => item !== channel && item !== inbox);
-  const ordered = [rest[0], inbox, channel, ...rest.slice(1)].filter((item): item is typeof props.items[number] => !!item);
+  const rest = props.items.filter((item) => item !== channel);
+  const ordered = [rest[0], channel, ...rest.slice(1)].filter((item): item is typeof props.items[number] => !!item);
   const visible = expanded ? ordered : ordered.slice(0, 10);
   return (
     <nav className="channels-navigation" aria-label="Main navigation">
@@ -613,7 +613,6 @@ export function ChannelsNavigation(props: ExperimentalSidebarNavigationProps) {
           >
             <Icon name={icon} />
             <span>{item === channel ? "New channel" : item.label}</span>
-            {item === inbox && !!attention?.openCount && <span className="attention-count" aria-label={`${attention.openCount} requests need you`}>{attention.openCount}</span>}
           </button>
         );
       })}
@@ -634,7 +633,6 @@ export function ChannelsSidebar({
   onNavigate,
   activeThreadId,
 }: PluginThreadListProps) {
-  const { expanded, setExpanded } = useExpandedChannels();
   const { rooms, activeRoomIds, attentionCounts, approvalCounts, error } =
       useRoster(true),
     rpc = useRpc<typeof rpcContract>(),
@@ -647,6 +645,7 @@ export function ChannelsSidebar({
     [deleting, setDeleting] = useState<Room | null>(null),
     [failure, setFailure] = useState<string | null>(null),
     [pending, setPending] = useState(false);
+  const channelPanel = useRef<string | null>(null);
   const archive = async (room: Room) => {
     setPending(true);
     setFailure(null);
@@ -667,14 +666,25 @@ export function ChannelsSidebar({
     }
   };
   useEffect(() => {
-    const listener = (e: Event) =>
-      setSelected((e as CustomEvent<string | null>).detail);
+    const listener = (e: Event) => {
+      channelPanel.current = (e as CustomEvent<string | null>).detail;
+      setSelected(channelPanel.current);
+    };
     window.addEventListener("bots:channel-selection", listener);
     return () => window.removeEventListener("bots:channel-selection", listener);
   }, []);
   useEffect(() => {
-    if (activeThreadId) setSelected(null);
-  }, [activeThreadId]);
+    if (!activeThreadId) {
+      if (!channelPanel.current) setSelected(null);
+      return;
+    }
+    let current = true;
+    void rpc.call("channelForThread", { threadId: activeThreadId }).then(
+      (roomId) => { if (current) setSelected(roomId); },
+      () => { if (current) setSelected(null); },
+    );
+    return () => { current = false; };
+  }, [activeThreadId, rpc]);
   const open = (id: string) => {
     setSelected(id);
     navigate.toPluginPanel("channels", { subPath: id });
@@ -765,8 +775,6 @@ export function ChannelsSidebar({
             onCopyId={() => void copyChannelId(r.id)}
             onArchive={() => void archive(r)}
             onDelete={() => setDeleting(r)}
-            expanded={expanded.has(r.id)}
-            onToggleExpanded={() => setExpanded(r.id, !expanded.has(r.id))}
           >
             <ChannelThreadList
               roomId={r.id}
@@ -1730,8 +1738,9 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                     .map((r) => r.emoji),
                 ),
               ];
-              if (m.system === "bot_joined" || m.system === "bot_timeout") {
+              if (m.system === "bot_joined" || m.system === "bot_timeout" || m.system === "bot_dm") {
                 const timedOut = m.system === "bot_timeout";
+                const directMessage = m.system === "bot_dm";
                 return (
                   <div key={m.id} data-channel-message={m.id}>
                     {newDay && (
@@ -1750,8 +1759,17 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                       }`}
                       role="status"
                     >
-                      <Icon name={timedOut ? "Clock" : "UserRoundPlus"} />
+                      <Icon name={timedOut ? "Clock" : directMessage ? "MessageSquare" : "UserRoundPlus"} />
                       <span>{m.text}</span>
+                      {directMessage && m.sourceThreadId && (
+                        <button
+                          type="button"
+                          className="channel-system-link"
+                          onClick={() => openWorkThread(navigate, m.sourceThreadId!, id)}
+                        >
+                          Open DM
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -2124,6 +2142,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                         onView={() =>
                           openWorkThread(navigate, (job?.threadId ?? m.sourceThreadId)!, id)
                         }
+                        viewLabel={job?.threadId || m.botId ? "Open bot DM" : "Open source thread"}
                       />
                     </ContextMenuContent>
                   </ContextMenu>
@@ -2197,7 +2216,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                           size="sm"
                           onClick={() => openWorkThread(navigate, j.threadId!, id)}
                         >
-                          View work
+                          Open DM
                         </Button>
                       )}
                     </div>
@@ -2296,104 +2315,152 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
           )}
           <GroupComposer
             key={id}
-            shelf={
+            stack={
               queues.length > 0 ? (
-            <section className="channel-work-shelf" aria-label="Bot work and queue">
-              {queues.map(({ head: current, queued }) => {
-                const b = bots.find((b) => b.id === current.botId);
-                if (!b) return null;
-                const approval = approvalFor(data.approvals, current);
-                const activity = approval
-                  ? "Needs approval"
-                  : channelWorkActivity(current);
-                const stopLabel = `${current.cancellationPending ? "Stopping" : "Stop"} ${b.name}'s response`;
-                return (
-                  <div className="channel-work-group" key={current.id}>
-                    <div
-                      className="channel-agent-stub"
-                      data-waiting={approval ? "approval" : undefined}
-                      role="status"
-                      aria-label={`${b.name}: ${activity}`}
-                    >
-                      <span className="channel-agent-avatar" aria-hidden>
-                        {b.avatar}
+                // BB's follow-up card: tucked behind the top of the input.
+                <section
+                  aria-label="Bot work and queue"
+                  className="relative z-10 -mb-5 flex max-h-[40vh] min-h-0 flex-col overflow-hidden rounded-xl rounded-b-none border border-b-0 border-border bg-surface-raised-solid pb-3 shadow-lift"
+                >
+                  <header className="flex h-8 shrink-0 items-center gap-2 border-b border-border/35 px-2">
+                    <div className="flex min-w-16 items-baseline gap-1.5 pl-1">
+                      <span className="text-xs font-normal text-subtle-foreground">
+                        Working
                       </span>
-                      <strong className="channel-agent-name" title={b.name}>
-                        {b.name}
-                      </strong>
-                      {isForkConversation(current.conversationKey) && (
-                        <span className="channel-fork-label">Fork</span>
-                      )}
-                      <span className="channel-activity-snippet" title={activity}>
-                        {activity}
+                      <span className="text-2xs text-subtle-foreground">
+                        {queues.length}
                       </span>
-                      {queued.length > 0 && (
-                        <span className="channel-queue-count">
-                          {queued.length} queued
-                        </span>
-                      )}
-                      {approval && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="channel-review-button"
-                          onClick={() => revealApproval(approval.id)}
-                        >
-                          Review
-                        </Button>
-                      )}
-                      <IconActionTooltip label={stopLabel}>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="channel-stop-button"
-                          aria-label={stopLabel}
-                          disabled={!!current.cancellationPending}
-                          onClick={() => {
-                            if (current.cancellationPending) return;
-                            void rpc
-                              .call("cancelJob", { id: current.id })
-                              .catch((e) => setFailure(message(e)));
-                          }}
-                        >
-                          <Icon name="Square" />
-                        </Button>
-                      </IconActionTooltip>
                     </div>
-                    {queued.length > 0 && (
-                      <ol className="channel-queue" aria-label={`Queued for ${b.name}`}>
-                        {queued.map((q) => {
-                          const text =
-                            messages.find((m) => m.id === q.triggerMessageId)?.text ||
-                            q.taskTitle ||
-                            "Queued request";
-                          return (
-                            <li className="channel-queue-item" key={q.id}>
-                              <span className="channel-queue-text" title={text}>
-                                {text}
+                  </header>
+                  <ul className="min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain py-1">
+                    {queues.map(({ head: current, queued }) => {
+                      const b = bots.find((b) => b.id === current.botId);
+                      if (!b) return null;
+                      const approval = approvalFor(data.approvals, current);
+                      const activity = approval
+                        ? "Needs approval"
+                        : channelWorkActivity(current);
+                      const stopLabel = `${current.cancellationPending ? "Stopping" : "Stop"} ${b.name}'s response`;
+                      return (
+                        <li
+                          key={current.id}
+                          className="border-b border-border/35 px-2.5 py-0.5 last:border-b-0"
+                        >
+                          <div
+                            className="flex min-h-8 min-w-0 items-center gap-1.5 text-xs"
+                            role="status"
+                            aria-label={`${b.name}: ${activity}`}
+                          >
+                            <span
+                              aria-hidden
+                              className="flex size-5 shrink-0 items-center justify-center text-sm leading-none"
+                            >
+                              {b.avatar}
+                            </span>
+                            <strong
+                              className="min-w-0 max-w-[40%] shrink truncate font-medium text-foreground"
+                              title={b.name}
+                            >
+                              {b.name}
+                            </strong>
+                            {isForkConversation(current.conversationKey) && (
+                              <span className="channel-fork-label shrink-0">
+                                Fork
                               </span>
+                            )}
+                            <span
+                              className={cn(
+                                "min-w-0 flex-1 truncate",
+                                approval
+                                  ? "text-warning-text"
+                                  : "text-muted-foreground",
+                              )}
+                              title={activity}
+                            >
+                              {activity}
+                            </span>
+                            {queued.length > 0 && (
+                              <span className="shrink-0 text-2xs tabular-nums text-subtle-foreground">
+                                {queued.length} queued
+                              </span>
+                            )}
+                            {approval && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 shrink-0 px-2 text-xs"
+                                onClick={() => revealApproval(approval.id)}
+                              >
+                                Review
+                              </Button>
+                            )}
+                            <IconActionTooltip label={stopLabel}>
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="channel-queue-remove"
-                                aria-label={`Remove queued request for ${b.name}`}
-                                onClick={() =>
+                                className="size-7 shrink-0 text-muted-foreground hover:text-destructive max-md:pointer-coarse:size-9 [&_[data-icon-root]]:size-3.5"
+                                aria-label={stopLabel}
+                                disabled={!!current.cancellationPending}
+                                onClick={() => {
+                                  if (current.cancellationPending) return;
                                   void rpc
-                                    .call("cancelJob", { id: q.id })
-                                    .catch((e) => setFailure(message(e)))
-                                }
+                                    .call("cancelJob", { id: current.id })
+                                    .catch((e) => setFailure(message(e)));
+                                }}
                               >
-                                <Icon name="X" />
+                                <Icon
+                                  name="Square"
+                                  className="fill-current [&_*]:stroke-0"
+                                />
                               </Button>
-                            </li>
-                          );
-                        })}
-                      </ol>
-                    )}
-                  </div>
-                );
-              })}
-            </section>
+                            </IconActionTooltip>
+                          </div>
+                          {queued.length > 0 && (
+                            <ol
+                              className="m-0 list-none pb-0.5 pl-6"
+                              aria-label={`Queued for ${b.name}`}
+                            >
+                              {queued.map((q) => {
+                                const text =
+                                  messages.find(
+                                    (m) => m.id === q.triggerMessageId,
+                                  )?.text ||
+                                  q.taskTitle ||
+                                  "Queued request";
+                                return (
+                                  <li
+                                    className="group/row relative flex min-h-7 items-center gap-1.5"
+                                    key={q.id}
+                                  >
+                                    <span
+                                      className="min-w-0 flex-1 truncate text-xs leading-4 text-foreground"
+                                      title={text}
+                                    >
+                                      {text}
+                                    </span>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="size-7 shrink-0 text-muted-foreground opacity-0 transition-opacity duration-[120ms] ease-out hover:text-destructive focus-visible:opacity-100 group-hover/row:opacity-100 [@media(hover:none)]:opacity-100 [&_[data-icon-root]]:size-4"
+                                      aria-label={`Remove queued request for ${b.name}`}
+                                      onClick={() =>
+                                        void rpc
+                                          .call("cancelJob", { id: q.id })
+                                          .catch((e) => setFailure(message(e)))
+                                      }
+                                    >
+                                      <Icon name="Trash2" aria-hidden />
+                                    </Button>
+                                  </li>
+                                );
+                              })}
+                            </ol>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
               ) : null
             }
             autoFocus={!messages.length}
@@ -2403,15 +2470,13 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
             bots={bots}
             memberIds={room.memberIds}
             rooms={rooms}
-            footer={
-              <>
-                <ChannelModePicker room={room} onChanged={load} />
-                <ChannelPermissionPicker
-                  room={room}
-                  bots={bots}
-                  onChanged={load}
-                />
-              </>
+            railStart={<ChannelModePicker room={room} onChanged={load} />}
+            railEnd={
+              <ChannelPermissionPicker
+                room={room}
+                bots={bots}
+                onChanged={load}
+              />
             }
             onCreateBot={() =>
               navigate.toPluginPanel("bots", { subPath: `new/${room.id}` })

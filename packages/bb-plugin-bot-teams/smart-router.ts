@@ -229,7 +229,7 @@ export async function runClassifier<T>(
     }
   }
   throw new Error(
-    `Could not choose a bot. Mention a bot directly or retry routing. ${lastError instanceof Error ? lastError.message : "Routing unavailable."}`,
+    `Could not choose a bot. Mention one in the channel or retry routing. ${lastError instanceof Error ? lastError.message : "Routing unavailable."}`,
   );
 }
 

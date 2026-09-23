@@ -129,7 +129,7 @@ export class Store {
         .all(id) as { json: string }[]
     ).map((r) => JSON.parse(r.json));
   }
-  /** Each bot's primary work thread for one channel (forks excluded). */
+  /** Each bot's primary DM thread for one channel (forks excluded). */
   roomConversations(roomId: string): Conversation[] {
     return (
       this.db

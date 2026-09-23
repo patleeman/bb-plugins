@@ -33,13 +33,9 @@ export function ChannelSidebarRow({
   onCopyId,
   onArchive,
   onDelete,
-  expanded = false,
-  onToggleExpanded,
   children,
 }: {
-  expanded?: boolean;
-  onToggleExpanded?: () => void;
-  /** Nested rows shown while expanded. */
+  /** Bot DMs shown while this channel is selected. */
   children?: ReactNode;
   room: Room;
   selected: boolean;
@@ -58,7 +54,6 @@ export function ChannelSidebarRow({
   const menuId = useId();
   const unread = room.updatedAt > (room.lastReadAt ?? 0) && !selected;
   const archiveLabel = room.archived ? "Restore channel" : "Archive channel";
-  const threadsLabel = `${expanded ? "Hide" : "Show"} bot threads`;
   const waitingLabel = [
     attentionCount > 0 &&
       `${attentionCount} ${attentionCount === 1 ? "request needs" : "requests need"} your attention`,
@@ -74,7 +69,6 @@ export function ChannelSidebarRow({
         <div
           className="channel-sidebar-row"
           data-selected={selected || undefined}
-          data-expanded={expanded || undefined}
           onKeyDown={(event) => {
             if (
               event.key !== "ContextMenu" &&
@@ -124,19 +118,6 @@ export function ChannelSidebarRow({
             )}
           </button>
           <span className="channel-nav-actions">
-            {onToggleExpanded && (
-              <IconActionTooltip label={threadsLabel}>
-                <button
-                  type="button"
-                  className="channel-nav-action channel-nav-expand"
-                  aria-label={`${threadsLabel}: ${room.name}`}
-                  aria-expanded={expanded}
-                  onClick={onToggleExpanded}
-                >
-                  <Icon name="ChevronRight" />
-                </button>
-              </IconActionTooltip>
-            )}
             <IconActionTooltip label={archiveLabel}>
               <button
                 type="button"
@@ -165,12 +146,6 @@ export function ChannelSidebarRow({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent id={menuId} aria-label={`${room.name} options`}>
-        {onToggleExpanded && (
-          <ContextMenuItem onSelect={onToggleExpanded}>
-            <Icon name="ListTree" />
-            {threadsLabel}
-          </ContextMenuItem>
-        )}
         <ContextMenuItem onSelect={onRename}>
           <Icon name="Edit" />
           Rename
@@ -192,7 +167,7 @@ export function ChannelSidebarRow({
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
-    {expanded && children}
+    {selected && children}
     </>
   );
 }

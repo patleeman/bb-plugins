@@ -9,9 +9,6 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./contract";
 
-const expandedKey = "bb:bots:expanded-channels";
-const revealEvent = "bb:bots:reveal-thread";
-
 type ChannelThread = {
   threadId: string;
   botId: string;
@@ -21,46 +18,13 @@ type ChannelThread = {
   needsApproval: boolean;
 };
 
-/** Open a bot's work thread and show it nested under its channel. */
+/** Open a bot DM. The sidebar shows DMs for the selected channel. */
 export function openWorkThread(
   navigate: { toThread(threadId: string): void },
   threadId: string,
-  roomId: string | null | undefined,
+  _roomId: string | null | undefined,
 ) {
-  if (roomId)
-    window.dispatchEvent(new CustomEvent(revealEvent, { detail: { roomId } }));
   navigate.toThread(threadId);
-}
-
-/** Which channels show their bot threads. Persists per device. */
-export function useExpandedChannels() {
-  const [expanded, setExpanded] = useState<Set<string>>(() => {
-    try {
-      return new Set(JSON.parse(localStorage.getItem(expandedKey) ?? "[]"));
-    } catch {
-      return new Set();
-    }
-  });
-  const update = (roomId: string, open: boolean) =>
-    setExpanded((old) => {
-      if (old.has(roomId) === open) return old;
-      const next = new Set(old);
-      if (open) next.add(roomId);
-      else next.delete(roomId);
-      try {
-        localStorage.setItem(expandedKey, JSON.stringify([...next]));
-      } catch {}
-      return next;
-    });
-  useEffect(() => {
-    const reveal = (event: Event) => {
-      const roomId = (event as CustomEvent<{ roomId: string }>).detail?.roomId;
-      if (roomId) update(roomId, true);
-    };
-    window.addEventListener(revealEvent, reveal);
-    return () => window.removeEventListener(revealEvent, reveal);
-  }, []);
-  return { expanded, setExpanded: update };
 }
 
 export function ChannelThreadList({
@@ -84,9 +48,9 @@ export function ChannelThreadList({
   }, [roomId, refreshKey, rpc]);
   if (!threads) return null;
   if (!threads.length)
-    return <p className="channel-thread-empty">No bot threads yet</p>;
+    return <p className="channel-thread-empty">No bot DMs yet</p>;
   return (
-    <ul className="channel-thread-list" aria-label="Bot threads">
+    <ul className="channel-thread-list" aria-label="Bot DMs">
       {threads.map((t) => (
         <ChannelThreadRow key={t.threadId} thread={t} />
       ))}
@@ -106,6 +70,7 @@ function ChannelThreadRow({ thread }: { thread: ChannelThread }) {
         type="button"
         className="channel-nav-row channel-thread-row"
         aria-current={current ? "page" : undefined}
+        aria-label={`Open DM with ${thread.name}`}
         title={split.isAvailable ? "Drag or ⌘-click to open in a split" : undefined}
         {...split.splitProps}
         onClick={(event) => {

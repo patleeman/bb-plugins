@@ -4,9 +4,9 @@ Validated on 22 September 2026 with installed BB Nightly `0.43.4-nightly.3544646
 
 ## Delivered plugin behavior
 
-Bot Teams exposes **For you**, `bots_channel_notify`, and the inbox CLI. Decisions and blockers open real questions through `bb.ui.requestInput`. BB's existing `interaction.pending` listener sends their phone notifications. The plugin temporarily reveals hidden work threads it owns, then restores their visibility when the question settles. FYI updates remain in the inbox.
+Bot Teams exposes channel attention markers, `bots_channel_notify`, and the inbox CLI. Decisions and blockers open real questions through `bb.ui.requestInput`. BB's existing `interaction.pending` listener sends their phone notifications. The plugin temporarily reveals hidden work threads it owns, then restores their visibility when the question settles. FYI updates remain on their channel messages.
 
-Answers are durably queued before the question completes. Delivery replies to the original channel message and acknowledges the matching request revision. Failed replies retry independently, show an error in the inbox, and can be discarded by their own ID when not being sent. One failed or archived-channel reply cannot block other replies or questions.
+Answers are durably queued before the question completes. Delivery replies to the original channel message and acknowledges the matching request revision. Failed replies retry independently, show an error in the channel, and can be discarded by their own ID when not being sent. One failed or archived-channel reply cannot block other replies or questions.
 
 No BB core or mobile change is part of this feature. The local core checkout `/Users/patrick/workingdir/bb-channel-notifications` is clean, with pre-existing commit `95742c3a6` preserved. The earlier generic notification sender experiment was reverted. Ordinary channel reply push still requires an unavailable generic enqueue API; native decision and blocker questions do not.
 
@@ -19,7 +19,7 @@ The staged application ran from the installed BB app bundle, including its uncha
 - Fixture: paused Atlas in **Attention QA**, asking which day to release ORBIT-42.
 - Source work thread: `thr_rds87ijxtn`; no agent work ran for this fixture.
 - Native question screenshot: [Channel question](../assets/channel-attention-question.png), captured by `bots-attention-question` in `scripts/capture-plugin-screenshots.mjs`.
-- Inbox screenshot: [For you](../assets/channel-attention.png), captured by `bots-attention` during the original inbox validation.
+- Current channel request screenshot: [Rail QA](../assets/channel-attention.png), captured by `bots-attention` after the separate page was removed.
 
 The installed built-in sender delivered a mobile payload to a loopback relay with `kind: pending-interaction`, the exact source thread ID, project ID, registered server URL, and channel question text. The relay returned an accepted ticket. This proves the existing sender path, not physical phone receipt.
 

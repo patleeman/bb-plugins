@@ -50,12 +50,28 @@ async function exercise(p, { origin, fixture, active }) {
   if (await p.evaluate(hasRow, fixture.name)) throw new Error('Archived channel leaked into Active view.');
   if (await p.evaluate(() => [...document.querySelectorAll('.channels-sidebar header button')].some((b) => b.textContent === 'Channels')))
     throw new Error('Channels heading is still a hidden toggle.');
+  if (await p.evaluate(() => !!document.querySelector('.channel-nav-expand')))
+    throw new Error('Channel rows still expose a bot-thread dropdown.');
+  await p.evaluate((name) =>
+    [...document.querySelectorAll('.channel-sidebar-row > .channel-nav-row')]
+      .find((row) => row.querySelector('.channel-nav-name')?.textContent === name)?.click(),
+    active.name,
+  );
+  await p.waitForFunction((name) =>
+    document.querySelector('.channel-sidebar-row[data-selected] .channel-nav-name')?.textContent === name &&
+    document.querySelectorAll('.channel-thread-empty').length === 1,
+    {}, active.name,
+  );
+  if (await p.evaluate(() => document.querySelectorAll('.channel-thread-list').length > 1))
+    throw new Error('Bot threads appeared under more than the selected channel.');
 
   // Archive is visible and reachable with keyboard input.
   console.log('Checking keyboard archive toggle');
   await p.focus(archivedButton);
   await p.keyboard.press('Enter');
   await waitRow(fixture.name);
+  if (await p.evaluate(() => !!document.querySelector('.channel-thread-list, .channel-thread-empty')))
+    throw new Error('Hidden channel kept its bot threads visible.');
   if (await p.evaluate(hasRow, active.name)) throw new Error('Active channel leaked into Archived view.');
   await clickView(activeButton);
   await p.click('.channels-sidebar [aria-label="Search channels"]');
@@ -70,6 +86,7 @@ async function exercise(p, { origin, fixture, active }) {
   await p.waitForSelector('[role="menuitem"]');
   const options = await p.evaluate(() => [...document.querySelectorAll('[role="menuitem"]')].map((e) => e.textContent.trim()));
   if (!options.includes('Restore') || !options.includes('Delete')) throw new Error('Archived result actions missing.');
+  if (options.some((label) => /bot threads/i.test(label))) throw new Error('Context menu still exposes a bot-thread toggle.');
   await p.evaluate(() => [...document.querySelectorAll('[role="menuitem"]')].find((e) => e.textContent.trim() === 'Delete').click());
   await p.waitForSelector('[role="dialog"]');
   await p.evaluate(() => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent.trim() === 'Cancel').click());
@@ -122,6 +139,6 @@ async function exercise(p, { origin, fixture, active }) {
     const r = b.getBoundingClientRect();
     return r.left < 0 || r.right > innerWidth || r.width < 24;
   }))) throw new Error('Header controls overflow the touch sidebar.');
-  console.log('PASS: visible archive navigation, keyboard activation, search across both states, status labels, delete cancellation, empty/whitespace search, search reset, mobile layout.');
+  console.log('PASS: selected-channel thread list, no thread toggle, archive navigation, keyboard activation, search across both states, status labels, delete cancellation, empty/whitespace search, search reset, mobile layout.');
   await p.shot({ type: 'jpeg', maxEdge: 1000, quality: 80 });
 }

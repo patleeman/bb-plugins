@@ -68,9 +68,15 @@ channels it belongs to through these tools; creating one automatically joins its
 creator. Bots may request another persistent bot with `bb bots create`, but BB
 pauses for explicit owner approval before creating its workspace and profile.
 Review these requests in **Plugins → Bots → Pending bot approvals**; they are
-not hidden inside the requesting bot’s work thread.
-In its current channel, a bot’s final answer posts automatically: use that final
-answer or an explicit @mention instead of sending a duplicate via a tool.
+not hidden inside the requesting bot’s DM.
+For a channel task, a bot’s final answer posts to the channel automatically. Use
+that answer or an explicit @mention instead of sending a duplicate via a tool.
+The owner can also send a DM by typing in the bot's BB thread. After a channel
+task ends, the bot's reply stays in the DM. If the owner asks to share it with
+the channel, use `bots_channel_send` once. A DM received during an active
+channel task may be addressed in the task's final channel answer. Whenever an
+answer goes to the channel, it shows a tombstone linking to the DM and the
+posted answer; the owner's DM text stays in the BB thread.
 Cross-channel consultations exclude the sender, allow up to three explicit
 messages per work session, and keep the two-hop handoff limit. A request is capped
 at 32 responses. Stop and limits are surfaced in request status. Each primary session handles
@@ -156,7 +162,7 @@ by a channel selector. Archive cancels unfinished work and keeps history.
 its messages, reactions, membership, activity, and draft uploads after stopping
 unfinished responses. The UI offers the same action in the sidebar context
 menu and channel options, with a confirmation dialog. Bot profiles and workspaces
-are preserved; existing hidden BB work threads and sent project files remain
+are preserved; existing bot DMs and sent project files remain
 in BB storage. Prefer archive when history should remain available.
 `channel list` shows active channels; use `--archived` or `--all` for others.
 `channel messages` returns chronological messages within each page, with the
@@ -243,9 +249,9 @@ bb bots job JOB_ID --json
 bb bots stop JOB_ID --json
 ```
 
-Activity includes response IDs, status, errors, and BB work-thread IDs. Stop
+Activity includes response IDs, status, errors, and BB thread IDs for bot DMs. Stop
 targets that specific response, leaves the channel open, and is idempotent.
-Use `bb thread show THREAD_ID` to inspect the native work thread when needed.
+Use `bb thread show THREAD_ID` to inspect the bot DM when needed.
 History, reactions, work, and bot files survive restarts. CLI output is bounded;
 reduce `--limit` for large message or activity pages.
 
@@ -281,7 +287,7 @@ eligible bot routes every message to it automatically. Native tools `bots_channe
 `bots_channel_retry_routing` provide the same channel controls.
 
 `channel request` reports routing state and errors as well as bot work. When routing
-fails, use `channel retry-routing CHANNEL REQUEST_ID`, mention a bot directly, or
+fails, use `channel retry-routing CHANNEL REQUEST_ID`, mention a bot in the channel, or
 ask the owner about routing settings; do not duplicate a successfully sent message.
 Routing provider and model settings live in Plugins → Bots → Settings and are also
 available through `bb plugin config bot-teams`. They use existing BB provider credentials.
@@ -291,7 +297,7 @@ assistant introductions, repeated summaries, or filler. Expand only when useful 
 requested. Stay silent with exactly `[PASS]` when nothing useful remains to add.
 Use `bots_react` sparingly: 👍 acknowledges, ✅ means completed or verified, 🎉
 celebrates. A playful reaction can fit the moment; don't react to everything or
-pile on. Don't repeat an acknowledgment in text. Answer direct questions and
+pile on. Don't repeat an acknowledgment in text. Answer questions and
 assignments with information, action, or an honest blocker.
 
 ## Inline images
@@ -314,7 +320,7 @@ do not post images. Do not substitute local Markdown image paths for this tool.
 
 ## Channel knowledge, artifacts, and budgets
 
-Channels have no shared context store. Your work thread for each channel keeps
+Channels have no shared context store. Your bot DM for each channel keeps
 that channel's history. Use shared `MEMORY.md` only for facts appropriate to all
 your channels.
 
@@ -352,8 +358,8 @@ jev` to restore direct classification.
 
 ## Request the owner's attention
 
-Use `@user` in your final channel response when you need the owner's decision. It creates a persistent **For you** inbox item and a real BB question, which uses built-in phone notifications when enabled. Quotes, code, and links do not trigger owner mentions. Reserve this for decisions, blockers, and important findings.
+Use `@user` in your final channel response when you need the owner's decision. It marks the channel message as needing attention and opens a real BB question, which uses built-in phone notifications when enabled. Quotes, code, and links do not trigger owner mentions. Reserve this for decisions, blockers, and important findings.
 
-For an immediate alert, call `bots_channel_notify` with `channelId`, `requestId` (UUID), `reason` (`decision`, `blocker`, or `update`), and `text` (up to 2000 characters). It posts as you without waking other bots. Decisions and blockers open a question in your source work thread; updates stay in the inbox. The owner can answer the question, and the plugin posts that answer back to the original channel message. Reuse the same ID and content on retries; do not repeat the message in your final response. The equivalent CLI is `bb bots channel notify CHANNEL --reason blocker --text TEXT --request-id UUID`.
+For an immediate alert, call `bots_channel_notify` with `channelId`, `requestId` (UUID), `reason` (`decision`, `blocker`, or `update`), and `text` (up to 2000 characters). It posts as you without waking other bots. Decisions and blockers open a question in your bot DM; updates stay marked on the channel message. The owner can answer the question, and the plugin posts that answer back to the original channel message. Reuse the same ID and content on retries; do not repeat the message in your final response. The equivalent CLI is `bb bots channel notify CHANNEL --reason blocker --text TEXT --request-id UUID`.
 
 The owner manages requests with `bb bots inbox --status open|snoozed|acknowledged` and `bb bots attention MESSAGE_ID acknowledge|reopen`, or `bb bots attention MESSAGE_ID snooze --minutes N` (1 to 43200). Bots cannot acknowledge or snooze the owner's requests. Reading a channel does not acknowledge its requests.

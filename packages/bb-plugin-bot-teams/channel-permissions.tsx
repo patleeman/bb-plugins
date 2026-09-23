@@ -69,19 +69,28 @@ export function ChannelPermissionPicker({
           aria-busy={pending || undefined}
           disabled={!!room.archived}
           data-elevated={elevated || undefined}
-          // Match BB's permission control beneath the thread composer.
-          className="channel-permission-trigger h-8 w-fit max-w-full min-w-0 justify-start gap-1 border-none bg-transparent px-1 text-xs leading-tight text-muted-foreground shadow-none [&_[data-icon-root]]:size-3.5 max-md:pointer-coarse:h-9"
+          // BB's PermissionModePicker trigger beneath the thread composer.
+          className={cn(
+            OPTION_BASE_CLASS_NAME,
+            OPTION_INTERACTIVE_CLASS_NAME,
+            OPTION_MUTED_CLASS_NAME,
+            LIST_HOVER_TRANSITION,
+            "channel-permission-trigger h-6",
+          )}
         >
           <span className="channel-permission-label">Bot permissions:</span>
-          <span className="truncate">{summary}</span>
-          <Icon name="ChevronDown" />
+          <span className="min-w-0 truncate">{summary}</span>
+          <Icon
+            name="ChevronDown"
+            className="size-3.5 shrink-0 text-subtle-foreground/75"
+          />
         </Button>
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content
           align="end"
           sideOffset={6}
-          className="channel-permission-popover"
+          className="channel-permission-popover z-40 flex max-h-[min(60vh,520px)] w-[min(340px,calc(100vw-24px))] flex-col gap-0.5 overflow-y-auto rounded-md border bg-popover p-1 text-xs text-popover-foreground shadow-md"
           aria-label="Bot permissions"
         >
           <p className="channel-permission-heading" id={`${room.id}-all`}>

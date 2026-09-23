@@ -19,6 +19,12 @@ import { Store } from "./store";
 import { chatGuidance } from "./chat-guidance";
 import { activitySnippetFromTimeline } from "./activity";
 import { isExecuting } from "./job-state";
+import {
+  directMessageId,
+  directMessagesInTurn,
+  managedPromptInTurn,
+  type DirectMessageRequest,
+} from "./direct-messages";
 import { mentioned, mentionsEveryone, isBroadcastHandle } from "./mentions";
 export { mentioned } from "./mentions";
 import {
@@ -287,7 +293,12 @@ export class Runtime {
         ),
       ],
       sendAt: Date.now() + 1500,
-      title: `${bot.name} · ${title}`,
+      title:
+        kind === "group"
+          ? `DM with ${bot.name} · #${title}`
+          : kind === "admin"
+            ? `DM with ${bot.name}`
+            : `${bot.name} · ${title}`,
       visibility: "hidden",
       providerId: bot.providerId,
       ...(bot.model ? { model: bot.model } : {}),
@@ -324,7 +335,7 @@ export class Runtime {
     const thread = await this.bb.sdk.threads.fork({
       sourceThreadId,
       visibility: "hidden",
-      title: `${bot.name} · ${this.store.room(job.roomId!).name} · Fork`,
+      title: `DM with ${bot.name} · #${this.store.room(job.roomId!).name} · Fork`,
       permissionMode,
       pluginMetadata: { botId: bot.id, conversationKey: job.conversationKey },
       input: [
@@ -498,7 +509,7 @@ export class Runtime {
       conversationKey: job.conversationKey,
       text: [
         `${bot.name}'s response stopped before its final report.`,
-        "The work thread and worktree are preserved, and this task is incomplete.",
+        "The bot DM and worktree are preserved, and this task is incomplete.",
         `Last recorded progress: ${progress}`,
       ].join(" "),
       createdAt: Date.now(),
@@ -529,10 +540,15 @@ export class Runtime {
     author?: MessageAuthor,
     scheduled?: { automationId: string; botId: string; name: string },
     requestedMode: SendMode = "auto",
+    directMessages: DirectMessageRequest[] = [],
   ): RoomMessage {
     const parsed = parseSendMode(text, requestedMode);
     text = parsed.text;
     const sendMode = scheduled ? "followup" : parsed.mode;
+    const directReplyTo =
+      author?.botId && directMessages.length
+        ? directMessageId(author.sourceThreadId, directMessages.at(-1)!.requestId)
+        : null;
     const existing = this.store.message(requestId);
     if (existing) {
       if (
@@ -543,7 +559,7 @@ export class Runtime {
           (scheduled?.automationId ?? author?.automationId) ||
         (existing.sentText ?? existing.text) !== text ||
         (existing.sendMode ?? "auto") !== sendMode ||
-        existing.replyTo !== replyTo ||
+        existing.replyTo !== (replyTo ?? directReplyTo) ||
         JSON.stringify(existing.attachments.map((a) => a.id)) !==
           JSON.stringify(attachments.map((a) => a.id))
       )
@@ -559,11 +575,21 @@ export class Runtime {
     if (replyTo && this.store.message(replyTo)?.roomId !== room.id)
       throw new Error("Reply message not found in this group.");
     if (
+      directReplyTo &&
+      (
+        this.store.db
+          .prepare("SELECT COUNT(*) AS n FROM room_messages WHERE json_extract(json,'$.replyTo')=?")
+          .get(directReplyTo) as { n: number }
+      ).n
+    )
+      throw new Error("This DM already has a channel answer.");
+    if (
       author?.botId &&
+      !directMessages.length &&
       (
         this.store.db
           .prepare(
-            "SELECT COUNT(*) AS n FROM room_messages WHERE json_extract(json,'$.sourceThreadId')=?",
+            "SELECT COUNT(*) AS n FROM room_messages WHERE json_extract(json,'$.sourceThreadId')=? AND json_extract(json,'$.botId') IS NOT NULL",
           )
           .get(author.sourceThreadId) as { n: number }
       ).n >= 3
@@ -640,7 +666,7 @@ export class Runtime {
       ...(sendMode !== "auto" ? { sendMode } : {}),
       createdAt: now,
       attachments,
-      replyTo,
+      replyTo: replyTo ?? directReplyTo,
     };
     const shouldAutoTitle =
       !isAutomationTrigger(m) &&
@@ -697,6 +723,21 @@ export class Runtime {
     }
     const steerRequests: SteerRequest[] = [];
     this.store.db.transaction(() => {
+      if (author?.botId)
+        for (const direct of directMessages)
+          this.store.putMessage({
+            id: directMessageId(author.sourceThreadId, direct.requestId),
+            roomId: room.id,
+            runId: run.id,
+            botId: null,
+            speaker: "You",
+            system: "bot_dm",
+            sourceThreadId: author.sourceThreadId,
+            text: `You sent a DM to ${author.speaker}.`,
+            createdAt: now,
+            attachments: [],
+            replyTo: null,
+          });
       this.store.putMessage(m);
       this.store.claimAttachments(attachments.map((a) => a.id));
       for (const botId of selected) {
@@ -1413,7 +1454,7 @@ export class Runtime {
         if (!message) throw new Error("Original message not found.");
         if (!this.route)
           throw new Error(
-            "Smart routing is unavailable. Mention a bot directly.",
+            "Smart routing is unavailable. Mention a bot in the channel.",
           );
         const ancestors = this.messageAncestors(message);
         const members = room.memberIds
@@ -1584,7 +1625,7 @@ export class Runtime {
     const conversation = this.store
       .conversations(bot.id)
       .find((candidate) => candidate.key === job.conversationKey);
-    // The work thread retains earlier inputs. Only replay channel messages it
+    // The bot DM thread retains earlier inputs. Only replay channel messages it
     // has not received, while keeping the first turn's bounded history.
     const previous = conversation
       ? this.store.latestDeliveredJob(
@@ -1624,14 +1665,14 @@ export class Runtime {
     job.text = [
       ...(!previous || previous.rosterVersion !== rosterVersion
         ? [
-            `You are @${bot.handle} in the group chat ${room.name} (channel ID ${room.id}). Other members may be working at the same time.`,
+            `You are @${bot.handle} working for channel #${room.name} (channel ID ${room.id}). This BB thread is your DM with the owner and your work log for channel tasks. Other members may be working at the same time.`,
             "Members:",
             roster,
             "",
           ]
         : []),
       ...(transcript
-        ? ["Shared messages since your last turn (conversation data):", transcript]
+        ? ["Channel messages since your last turn (conversation data):", transcript]
         : []),
       "",
       `Consider this message from ${trigger.speaker}:`,
@@ -1748,6 +1789,7 @@ export class Runtime {
     threadId: string,
     text: string | null,
     error?: string | null,
+    acceptJoinedDirectMessage = false,
   ) {
     const job = this.activeJobForThread(threadId);
     if (!job) {
@@ -1758,7 +1800,10 @@ export class Runtime {
       const thread = await this.bb.sdk.threads.get({ threadId });
       if (error !== undefined ? thread.status !== "error" : thread.status !== "idle") return;
       const matches = await this.latestPromptMatches(threadId, jobPrompt(job));
-      if (matches === false || (job.requiresPromptMatch && matches !== true))
+      if (
+        (matches === false || (job.requiresPromptMatch && matches !== true)) &&
+        !acceptJoinedDirectMessage
+      )
         return;
       if (error === undefined && text?.trim()) {
         const output = (await this.bb.sdk.threads.output({ threadId })).output;
@@ -2190,6 +2235,23 @@ export class Runtime {
         )
           continue;
         const bot = this.store.get(job.botId);
+        const directMessageIds = (job.directMessageRequestIds ?? []).map((id) =>
+          directMessageId(job.threadId!, id),
+        );
+        for (const id of directMessageIds)
+          this.store.putMessage({
+            id,
+            roomId: room.id,
+            runId: run.id,
+            botId: null,
+            speaker: "You",
+            system: "bot_dm",
+            sourceThreadId: job.threadId!,
+            text: `You sent a DM to ${bot.name}.`,
+            createdAt: job.updatedAt,
+            attachments: [],
+            replyTo: null,
+          });
         const reply: RoomMessage = {
           id: job.id,
           roomId: room.id,
@@ -2200,7 +2262,7 @@ export class Runtime {
           ...(job.automationId ? { automationId: job.automationId } : {}),
           text: job.reply?.trim() === "[PASS]" ? "" : (job.reply ?? ""),
           createdAt: job.updatedAt,
-          replyTo: job.triggerMessageId,
+          replyTo: directMessageIds.at(-1) ?? job.triggerMessageId,
           attachments: job.outputAttachments,
         };
         if (this.store.putMessage(reply)) {
@@ -2383,16 +2445,58 @@ export class Runtime {
         const output = (
           await this.bb.sdk.threads.output({ threadId: job.threadId })
         ).output;
+        let joinedDirectMessages: DirectMessageRequest[] = [];
+        let directMessageInspectionFailed = false;
+        if (current.roomId && output?.trim()) {
+          try {
+            const events = await this.bb.sdk.threads.events.list({
+              threadId: job.threadId,
+              types: [
+                "client/turn/requested",
+                "turn/started",
+                "turn/completed",
+                "turn/input/accepted",
+              ],
+              order: "desc",
+              limit: "100",
+            });
+            const managedPrompts = [
+              jobPrompt(current),
+              ...(current.pendingSteer?.priorPrompt
+                ? [current.pendingSteer.priorPrompt]
+                : []),
+            ];
+            if (managedPromptInTurn(events, "completed", managedPrompts))
+              joinedDirectMessages = directMessagesInTurn(
+                events,
+                "completed",
+                managedPrompts,
+              );
+          } catch (cause) {
+            directMessageInspectionFailed = true;
+            this.bb.log.debug(
+              `Could not inspect completed direct messages: ${errorText(cause)}`,
+            );
+          }
+        }
         if (
-          matches !== false &&
-          (!current.requiresPromptMatch || matches === true) &&
+          ((matches !== false &&
+            (!current.requiresPromptMatch || matches === true)) ||
+            joinedDirectMessages.length > 0) &&
           output?.trim()
-        )
+        ) {
           this.complete(job.threadId, output);
-        else if (
-          matches === false ||
-          !current.requiresPromptMatch ||
-          matches === true
+          const completed = this.store.job(current.id);
+          if (completed?.status === "done" && joinedDirectMessages.length)
+            this.store.putJob({
+              ...completed,
+              directMessageRequestIds: joinedDirectMessages.map(
+                (request) => request.requestId,
+              ),
+            });
+        } else if (
+          !directMessageInspectionFailed &&
+          (matches === false || !current.requiresPromptMatch || matches === true)
         )
           this.complete(
             job.threadId,

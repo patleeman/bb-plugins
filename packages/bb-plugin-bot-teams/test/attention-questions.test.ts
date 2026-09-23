@@ -69,7 +69,7 @@ test("answer delivery is durable, idempotent and targets the original message", 
   } finally { await x.close(); }
 });
 
-test("acknowledging in the inbox cancels the prompt and restores hidden visibility", async () => {
+test("acknowledging a request cancels the prompt and restores hidden visibility", async () => {
   const x = setup();
   try {
     x.add(); await x.questions.tick();
@@ -113,7 +113,7 @@ test("FYIs and disabled attention do not create questions", async () => {
   } finally { await x.close(); }
 });
 
-test("dismissal and reload retain the inbox item without repeating a phone prompt", async () => {
+test("dismissal and reload retain the request without repeating a phone prompt", async () => {
   const x = setup();
   try {
     x.add(); await x.questions.tick();

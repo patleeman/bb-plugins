@@ -162,6 +162,7 @@ export const jobSchema = z.object({
   dispatchAction: z.enum(["steer", "followup", "fork"]).optional(),
   forkSourceThreadId: z.string().optional(),
   requiresPromptMatch: z.boolean().optional(),
+  directMessageRequestIds: z.array(z.string()).optional(),
   pendingSteer: z
     .object({ priorPrompt: z.string(), attemptedAt: z.number().optional() })
     .optional(),
@@ -258,7 +259,7 @@ export const messageSchema = z.object({
   runId: z.string(),
   botId: idSchema.nullable(),
   speaker: z.string(),
-  system: z.enum(["bot_joined", "bot_timeout"]).optional(),
+  system: z.enum(["bot_joined", "bot_timeout", "bot_dm"]).optional(),
   sourceThreadId: z.string().optional(),
   sourceJobId: z.string().optional(),
   replyTo: z.string().nullable().default(null),
@@ -305,7 +306,7 @@ export const approvalQuestion = z.object({
     )
     .default([]),
 });
-/** A bot's pending request, forwarded from its work thread into the channel. */
+/** A bot's pending request, forwarded from its DM into the channel. */
 export const approvalSchema = z.object({
   id: z.string(),
   threadId: z.string(),
@@ -420,6 +421,10 @@ export const rpcContract = defineRpcContract({
         needsApproval: z.boolean().default(false),
       }),
     ),
+  },
+  channelForThread: {
+    input: z.object({ threadId: z.string() }),
+    output: z.string().uuid().nullable(),
   },
   channelFiles: {
     input: z.object({

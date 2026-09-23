@@ -8,7 +8,7 @@ type Interaction = Awaited<
   ReturnType<BbPluginApi["sdk"]["threads"]["interactions"]["get"]>
 >;
 
-/** Bot Teams opens its own channel questions. Those stay in For you. */
+/** Bot Teams opens its own channel questions. Answer them in the source bot DM. */
 export const ownQuestion = (interaction: Pick<Interaction, "origin">) =>
   interaction.origin?.kind === "plugin" &&
   interaction.origin.pluginId === "bot-teams";
@@ -98,7 +98,7 @@ const key = (approvals: ChannelApproval[]) =>
     .join("|");
 
 /**
- * Pending requests from bot work threads, forwarded to the channel that started
+ * Pending requests from bot DMs, forwarded to the channel that started
  * them. Polling fills a cache so channel reads stay synchronous.
  */
 export class ChannelApprovals {
@@ -200,7 +200,7 @@ export class ChannelApprovals {
       interactionId: input.interactionId,
     });
     if (ownQuestion(interaction))
-      throw new Error("Answer this channel question in For you.");
+      throw new Error("Answer this channel question in the bot's DM.");
     if (interaction.status !== "pending")
       throw new Error("This request was already answered.");
     const payload = interaction.payload;
@@ -232,7 +232,7 @@ export class ChannelApprovals {
         throw new Error("This request is not a question.");
       const question = payload.questions.find((q) => q.id === answer.questionId);
       if (!question || payload.questions.length !== 1)
-        throw new Error("Answer this question in the bot's thread.");
+        throw new Error("Answer this question in the bot's DM.");
       const options = question.options ?? [];
       if (
         !answer.selected.every((value) =>

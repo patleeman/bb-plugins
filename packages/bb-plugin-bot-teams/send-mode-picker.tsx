@@ -1,7 +1,4 @@
-import { useId } from "react";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { experimental_Icon as Icon } from "@get-bb/plugin-sdk/app";
-import { Button } from "./components/ui/button";
+import { OptionPicker } from "./components/ui/option-picker";
 import {
   sendModes,
   sendModeLabels,
@@ -9,6 +6,13 @@ import {
   type SendMode,
 } from "./send-mode";
 
+const options = sendModes.map((mode) => ({
+  value: mode,
+  label: sendModeLabels[mode],
+  description: sendModeDescriptions[mode],
+}));
+
+/** Sits beside the + menu, where a thread composer keeps its model picker. */
 export function SendModePicker({
   value,
   disabled,
@@ -18,62 +22,16 @@ export function SendModePicker({
   disabled: boolean;
   onChange: (mode: SendMode) => void;
 }) {
-  const hintId = useId();
   return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={disabled}
-          aria-label={`Send mode: ${sendModeLabels[value]}`}
-          className="h-8 gap-1 px-2 text-xs text-muted-foreground"
-        >
-          <span>{sendModeLabels[value]}</span>
-          <Icon name="ChevronDown" aria-hidden />
-        </Button>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          aria-label="Send mode"
-          align="end"
-          side="top"
-          sideOffset={4}
-          collisionPadding={8}
-          className="channel-popover channel-mode-menu"
-        >
-          <DropdownMenu.Label className="channel-menu-label">
-            Send this message
-          </DropdownMenu.Label>
-          <DropdownMenu.RadioGroup
-            value={value}
-            onValueChange={(next) => onChange(next as SendMode)}
-          >
-            {sendModes.map((mode) => (
-              <DropdownMenu.RadioItem
-                key={mode}
-                value={mode}
-                className="channel-menu-row"
-                textValue={sendModeLabels[mode]}
-                aria-describedby={`${hintId}-${mode}`}
-              >
-                <span className="channel-mode-mark" aria-hidden>
-                  <DropdownMenu.ItemIndicator>
-                    <Icon name="Check" />
-                  </DropdownMenu.ItemIndicator>
-                </span>
-                <span className="channel-bot-name">
-                  {sendModeLabels[mode]}
-                  <small id={`${hintId}-${mode}`}>
-                    {sendModeDescriptions[mode]}
-                  </small>
-                </span>
-              </DropdownMenu.RadioItem>
-            ))}
-          </DropdownMenu.RadioGroup>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+    <OptionPicker
+      label="Send mode"
+      heading="Send this message"
+      value={value}
+      options={options}
+      disabled={disabled}
+      onChange={onChange}
+      className="max-md:pointer-coarse:h-10"
+      contentClassName="max-w-72"
+    />
   );
 }

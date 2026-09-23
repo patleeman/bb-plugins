@@ -30,6 +30,7 @@ import {
   roomTitleThreadPrefix,
 } from "./runtime";
 import { chatGuidance } from "./chat-guidance";
+import { directMessagesInTurn, managedPromptInTurn } from "./direct-messages";
 import { ChannelAutomations } from "./channel-automations";
 import { imageMime } from "./image-format";
 import { isForkConversation } from "./send-mode";
@@ -96,7 +97,7 @@ export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
     attentionNotifications: {
       type: "boolean", label: "Attention notifications", default: true,
-      description: "Open real BB questions for decisions and blockers. Uses BB's existing phone notifications. The bot's work thread is visible while the question is open; requests also stay in For you.",
+      description: "Open real BB questions for decisions and blockers. Uses BB's existing phone notifications. The bot DM is visible while the question is open; requests also appear in the channel.",
     },
     replyNotifications: {
       type: "boolean", label: "Ordinary reply notifications", default: true,
@@ -454,6 +455,27 @@ export default async function plugin(bb: BbPluginApi) {
     )
       throw new Error("A channel with this name already exists.");
   }
+  const readTurnMessages = async (
+    threadId: string,
+    phase: "active" | "completed",
+    managedPrompts: readonly string[] = [],
+  ) => {
+    const events = await bb.sdk.threads.events.list({
+        threadId,
+        types: [
+          "client/turn/requested",
+          "turn/started",
+          "turn/completed",
+          "turn/input/accepted",
+        ],
+        order: "desc",
+        limit: "100",
+      });
+    return {
+      direct: directMessagesInTurn(events, phase, managedPrompts),
+      managed: managedPromptInTurn(events, phase, managedPrompts),
+    };
+  };
   const sendMessage = (
     input: z.output<typeof rpcContract.send.input>,
     threadId?: string,
@@ -461,7 +483,7 @@ export default async function plugin(bb: BbPluginApi) {
     const { id, text, requestId, attachmentIds, replyTo, sendMode } = input;
     return runtime.locked(`room:${id}`, async () => {
       const room = store.room(id);
-      if (threadId) authorizeChannel(store, threadId, id);
+      const author = threadId ? authorizeChannel(store, threadId, id) : undefined;
       if (threadId) agentAuthor(store, threadId, id);
       const attachments = attachmentIds.map((key) => {
         const a = store.attachment(key);
@@ -469,14 +491,18 @@ export default async function plugin(bb: BbPluginApi) {
           throw new Error("Attachment belongs to a different group.");
         return a;
       });
-      if (store.message(requestId))
+      const existing = store.message(requestId);
+      if (existing)
         return runtime.send(
           room,
           text,
           requestId,
           attachments,
-          replyTo,
-          threadId ? agentAuthor(store, threadId, id) : undefined,
+          replyTo ??
+            (threadId && existing.replyTo?.startsWith(`dm:${threadId}:`)
+              ? existing.replyTo
+              : null),
+          author,
           undefined,
           sendMode,
         );
@@ -502,15 +528,25 @@ export default async function plugin(bb: BbPluginApi) {
         a.path = uploaded.path;
         store.putAttachment(a);
       }
+      const conversation = threadId ? store.byThread(threadId) : null;
+      const directMessages =
+        threadId &&
+        conversation?.kind === "group" &&
+        !store.work(conversation.botId).some((job) =>
+          job.threadId === threadId && isExecuting(job),
+        )
+          ? (await readTurnMessages(threadId, "active")).direct
+          : [];
       return runtime.send(
         room,
         text,
         requestId,
         attachments,
         replyTo,
-        threadId ? agentAuthor(store, threadId, id) : undefined,
+        author,
         undefined,
         sendMode,
+        directMessages,
       );
     });
   };
@@ -569,6 +605,13 @@ export default async function plugin(bb: BbPluginApi) {
           return [];
         }
       });
+    },
+    channelForThread: ({ threadId }) => {
+      const conversation = store.byThread(threadId);
+      if (conversation?.kind !== "group" || !conversation.key.startsWith("group:"))
+        return null;
+      const roomId = conversation.key.slice("group:".length).split(":")[0]!;
+      return store.findRoom(roomId) ? roomId : null;
     },
     channelFiles: ({ id, before }) => runtime.data.files(id, before),
     usage: ({ id, kind }) =>
@@ -1365,9 +1408,41 @@ export default async function plugin(bb: BbPluginApi) {
     }
   });
   bb.events.on("thread.idle", async ({ thread, lastAssistantText }) => {
-    if (!store.byThread(thread.id)) return;
-    await runtime.settleFromEvent(thread.id, lastAssistantText);
     const c = store.byThread(thread.id);
+    if (!c) return;
+    const activeJob = store
+      .work(c.botId)
+      .find((job) => job.threadId === thread.id && isExecuting(job));
+    const settle = async () => {
+      let turnMessages = { direct: [] as { requestId: string; createdAt: number }[], managed: false };
+      if (activeJob?.roomId)
+        try {
+          turnMessages = await readTurnMessages(thread.id, "completed", [
+            jobPrompt(activeJob),
+            ...(activeJob.pendingSteer?.priorPrompt
+              ? [activeJob.pendingSteer.priorPrompt]
+              : []),
+          ]);
+        } catch (cause) {
+          bb.log.warn(`Could not read direct messages in bot turn: ${String(cause)}`);
+        }
+      await runtime.settleFromEvent(
+        thread.id,
+        lastAssistantText,
+        undefined,
+        turnMessages.managed && turnMessages.direct.length > 0,
+      );
+      const completedJob = activeJob && store.job(activeJob.id);
+      if (!activeJob || completedJob?.status !== "done" || !completedJob.roomId) return;
+      if (turnMessages.direct.length)
+        store.putJob({
+          ...completedJob,
+          directMessageRequestIds: turnMessages.direct.map((request) => request.requestId),
+        });
+    };
+    if (activeJob?.roomId)
+      await runtime.locked(`room:${activeJob.roomId}`, settle);
+    else await settle();
     if (c)
       try {
         const d = await document(store.get(c.botId).home, "MEMORY.md");

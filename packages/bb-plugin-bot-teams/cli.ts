@@ -527,7 +527,7 @@ export function registerCli(
             );
         }
         if (command === "inbox" || command === "attention") {
-          if (caller?.botId) throw new UsageError("Only the owner can manage the For you inbox.");
+          if (caller?.botId) throw new UsageError("Only the owner can manage attention requests.");
           if (command === "inbox") {
             const a = argumentsFor(rest, ["status", "limit", "offset"]);
             a.positional(0);

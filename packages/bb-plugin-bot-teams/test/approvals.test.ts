@@ -138,7 +138,7 @@ test("a bot's pending approval reaches the channel that started the work", async
   assert.equal(x.changes(), 1);
 });
 
-test("channel questions Bot Teams opened itself stay in For you", async () => {
+test("channel questions Bot Teams opened itself are not forwarded as approvals", async () => {
   const x = setup([
     interaction({
       origin: {

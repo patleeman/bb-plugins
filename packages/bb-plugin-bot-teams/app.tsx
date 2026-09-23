@@ -1,6 +1,5 @@
 import { channelTabLabels } from "./channel-tab-labels";
 import { UsagePanel } from "./channel-workbench";
-import { AttentionInbox } from "./attention-view";
 import { AttentionQuestion } from "./attention-question-view";
 import { ATTENTION_QUESTION_RENDERER } from "./attention-question-contract";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -320,9 +319,6 @@ export default definePluginApp((app) => {
     id: "channels",
     title: "Channels and threads",
     component: ChannelsSidebar,
-  });
-  app.slots.navPanel({
-    id: "for-you", title: "For you", icon: "Bell", path: "for-you", component: AttentionInbox,
   });
   app.slots.experimental_sidebarNavigation({
     id: "channels",

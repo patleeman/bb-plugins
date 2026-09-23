@@ -18,6 +18,7 @@ import { Store, document, saveDocument } from "../store";
 import { Runtime, jobPrompt, mentioned, recipients } from "../runtime";
 import { profileInput, roomSchema, type Bot, type Room } from "../contract";
 import { emptyDraft, prepareSend, readDraft, clearSentDraft } from "../draft";
+import { directMessageId } from "../direct-messages";
 
 const bot = (
   home: string,
@@ -139,6 +140,10 @@ test("persistent channel turns receive only new messages", async () => {
     x.store.putAttachment(file);
     x.runtime.send(x.room, "@atlas First question", randomUUID(), [file]);
     await x.runtime.drive(x.a);
+    assert.equal(
+      (x.harness.inspection.sdk.callsTo("threads.spawn")[0]?.[0] as { title: string }).title,
+      "DM with Atlas · #Research",
+    );
     const first = x.store.work(x.a.id)[0]!;
     assert.match(first.text, /Members:/);
     assert.equal(first.attachments.length, 1);
@@ -2490,6 +2495,150 @@ test("retry racing with deletion returns a clear unavailable error", async () =>
     finish.resolve();
     await deleting;
     await assert.rejects(retry, /no longer available/);
+  } finally {
+    await x.close();
+  }
+});
+
+test("a bot's channel answer to a direct message gets one private-message tombstone", async () => {
+  const x = setup();
+  await plugin(x.bb);
+  try {
+    x.store.putRoom({ ...x.room, memberIds: [x.a.id] });
+    x.store.putConversation({
+      id: "direct-conversation",
+      botId: x.a.id,
+      key: `group:${x.room.id}`,
+      threadId: "thr_direct",
+      title: x.room.name,
+      kind: "group",
+      createdAt: 1,
+    });
+    x.harness.inspection.sdk.stub("threads.events.list", async () => [
+      { id: "accepted", threadId: "thr_direct", seq: 3, createdAt: 3,
+        type: "turn/input/accepted", scope: { kind: "turn", turnId: "turn-1" },
+        data: { clientRequestId: "dm-request" } },
+      { id: "started", threadId: "thr_direct", seq: 2, createdAt: 2,
+        type: "turn/started", scope: { kind: "turn", turnId: "turn-1" }, data: {} },
+      { id: "request", threadId: "thr_direct", seq: 1, createdAt: 1,
+        type: "client/turn/requested", scope: { kind: "thread" },
+        data: { requestId: "dm-request", source: "tell", initiator: "user",
+          senderThreadId: null, input: [{ type: "text", text: "A private question" }] } },
+    ] as never);
+    const input = { id: x.room.id, text: "The answer for the channel", requestId: randomUUID() };
+    const send = () => x.harness.behavior.callAgentTool("bots_channel_send", input, { threadId: "thr_direct" });
+    await send();
+    await send();
+    await assert.rejects(
+      x.harness.behavior.callAgentTool(
+        "bots_channel_send",
+        { ...input, requestId: randomUUID() },
+        { threadId: "thr_direct" },
+      ),
+      /already has a channel answer/,
+    );
+    const messages = x.store.messages(x.room.id);
+    assert.equal(messages.length, 2);
+    const tombstone = messages[0]!;
+    assert.equal(tombstone.id, directMessageId("thr_direct", "dm-request"));
+    assert.equal(tombstone.system, "bot_dm");
+    assert.equal(tombstone.sourceThreadId, "thr_direct");
+    assert.equal(messages[1]!.replyTo, tombstone.id);
+    assert.equal(messages[1]!.text, input.text);
+    assert.ok(messages.every((message) => !message.text.includes("A private question")));
+  } finally {
+    await x.close();
+  }
+});
+
+test("a channel job links its published reply to a direct-message tombstone", async () => {
+  const x = setup();
+  try {
+    const request = x.runtime.send(x.room, "@atlas Work on this", randomUUID());
+    const job = x.store.requestJobs(request.id)[0]!;
+    x.store.putJob({
+      ...job,
+      threadId: "thr_joined_direct",
+      status: "done",
+      reply: "Final channel answer",
+      directMessageRequestIds: ["dm-during-work"],
+    });
+    await x.runtime.driveRoom(x.room);
+    const tombstone = x.store.message(directMessageId("thr_joined_direct", "dm-during-work"))!;
+    assert.equal(tombstone.system, "bot_dm");
+    assert.equal(tombstone.text, "You sent a DM to Atlas.");
+    assert.equal(x.store.message(job.id)?.replyTo, tombstone.id);
+  } finally {
+    await x.close();
+  }
+});
+
+test("idle recovery keeps a channel answer joined by an owner direct message", async () => {
+  const x = setup();
+  try {
+    const trigger = x.runtime.send(x.room, "@atlas Work on this", randomUUID());
+    await x.runtime.drive(x.a);
+    const job = x.store.requestJobs(trigger.id)[0]!;
+    const threadId = job.threadId!;
+    x.harness.inspection.sdk.stub("threads.timeline", async () => ({
+      rows: [{ kind: "conversation", role: "user", text: "Private follow-up" }],
+    } as never));
+    x.harness.inspection.sdk.stub("threads.output", async () => ({
+      output: "Final channel answer",
+    }));
+    let eventReads = 0;
+    x.harness.inspection.sdk.stub("threads.events.list", async () => {
+      if (++eventReads === 1) throw new Error("Event history temporarily unavailable");
+      return [
+      { type: "turn/completed", scope: { kind: "turn", turnId: "joined" }, createdAt: 4, data: {} },
+      { type: "turn/input/accepted", scope: { kind: "turn", turnId: "joined" }, createdAt: 3, data: { clientRequestId: "owner-dm" } },
+      { type: "client/turn/requested", scope: { kind: "thread" }, createdAt: 3, data: {
+        requestId: "owner-dm", source: "tell", initiator: "user", senderThreadId: null,
+        input: [{ type: "text", text: "Private follow-up" }],
+      } },
+      { type: "turn/input/accepted", scope: { kind: "turn", turnId: "joined" }, createdAt: 2, data: { clientRequestId: "managed" } },
+      { type: "client/turn/requested", scope: { kind: "thread" }, createdAt: 1, data: {
+        requestId: "managed", source: "tell", initiator: "user", senderThreadId: null,
+        input: [{ type: "text", text: jobPrompt(job) }],
+      } },
+      ] as never;
+    });
+    await x.runtime.drive(x.a);
+    assert.equal(x.store.job(job.id)?.status, "running");
+    await x.runtime.drive(x.a);
+    assert.equal(x.store.job(job.id)?.status, "done");
+    assert.deepEqual(x.store.job(job.id)?.directMessageRequestIds, ["owner-dm"]);
+    await x.runtime.driveRoom(x.room);
+    const tombstone = x.store.message(directMessageId(threadId, "owner-dm"))!;
+    assert.equal(tombstone.system, "bot_dm");
+    assert.equal(x.store.message(job.id)?.replyTo, tombstone.id);
+    assert.equal(x.store.message(job.id)?.text, "Final channel answer");
+  } finally {
+    await x.close();
+  }
+});
+
+test("channel lookup keeps a bot thread nested under its channel", async () => {
+  const x = setup();
+  await plugin(x.bb);
+  try {
+    x.store.putConversation({
+      id: "channel-thread",
+      botId: x.a.id,
+      key: `group:${x.room.id}`,
+      threadId: "thr_channel",
+      title: x.room.name,
+      kind: "group",
+      createdAt: 1,
+    });
+    assert.equal(
+      await x.harness.behavior.callRpc("channelForThread", { threadId: "thr_channel" }),
+      x.room.id,
+    );
+    assert.equal(
+      await x.harness.behavior.callRpc("channelForThread", { threadId: "other-thread" }),
+      null,
+    );
   } finally {
     await x.close();
   }

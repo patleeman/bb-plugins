@@ -29,7 +29,12 @@ export function agentAuthor(
   const job = store
     .work(bot.id)
     .find((j) => j.threadId === threadId && isExecuting(j));
-  if (conversation.kind !== "admin" && !job)
+  const directChannelReply =
+    conversation.kind === "group" &&
+    (!targetRoom ||
+      conversation.key === `group:${targetRoom}` ||
+      conversation.key.startsWith(`group:${targetRoom}:fork:`));
+  if (conversation.kind !== "admin" && !job && !directChannelReply)
     throw new Error("This bot's response is no longer active.");
   if (job?.roomId) {
     const source = store.room(job.roomId);
@@ -202,7 +207,7 @@ export function registerChannelTools(
   };
   tool(
     "bots_channel_notify",
-    "Request the owner's attention for a decision, blocker, or important update. Creates a persistent For you item. Decisions and blockers also open a real question in your visible BB thread, eligible for built-in phone notifications; updates stay in the inbox. The owner's answer is posted back to the channel. Does not wake bots until the owner replies. Reuse requestId on retries. Do not repeat this message in your final answer. For a final response that needs an answer, use @user instead.",
+    "Request the owner's attention for a decision, blocker, or important update. Marks the channel message as needing attention. Decisions and blockers also open a real question in your visible BB thread, eligible for built-in phone notifications; updates remain in the channel. The owner's answer is posted back to the channel. Does not wake bots until the owner replies. Reuse requestId on retries. Do not repeat this message in your final answer. For a final response that needs an answer, use @user instead.",
     notifyInput,
     (input, threadId) => {
       const result = notifyOwner(store, input, threadId);
@@ -268,7 +273,7 @@ export function registerChannelTools(
   );
   tool(
     "bots_channel_send",
-    "Post as the calling agent. @handle or a reply targets a bot; @all or @channel explicitly requests everyone's input. Unaddressed messages follow the channel's Smart/Directed/Everyone behavior. Bot callers use their final answer for their current channel. Returns a request ID; use bots_channel_request to collect replies. Reuse requestId on retries.",
+    "Post to a channel as the calling agent. @handle or a reply targets a bot; @all or @channel requests every member. Unaddressed messages follow the channel's Smart/Directed/Everyone behavior. A bot's final answer posts automatically for a channel task. In a DM, the final answer stays in the DM; use this tool only when the owner asks to share an answer with the channel. Returns a request ID; use bots_channel_request to collect replies. Reuse requestId on retries.",
     rpcContract.send.input,
     (input, threadId) => send(input, threadId),
   );
