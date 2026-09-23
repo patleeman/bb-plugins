@@ -3028,6 +3028,18 @@
   }
 }
 /*
+ * Messages centre themselves and so clear the card on their own, but the
+ * channel's full-bleed bars run the whole width. Hold them off the card while
+ * the channel is wide enough that nothing else is being shifted for it.
+ */
+@container channel (min-width: 1081px) {
+  .bot-room[data-rail="open"] .channel-attention-banner,
+  .bot-room[data-rail="open"] .bot-error {
+    /* Margin, not padding: the bar's own rule has to stop short of the card. */
+    margin-right: 256px;
+  }
+}
+/*
  * The rail stays wherever it fits, including beside BB's right workbench. On a
  * tight channel it gives up its own width before the transcript's.
  */
