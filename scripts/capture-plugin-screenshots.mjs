@@ -443,18 +443,17 @@ const captures = [
     fileName: "channel-attention.png",
     setup: async (client) => {
       const { items } = await pluginRpc("bot-teams", "attentionList", { status: "open" });
-      const request = items.find(item => item.channelName === "Attention QA" && item.message.speaker === "Atlas" && item.message.text.includes("ORBIT-42 release for Thursday"));
-      if (!request) throw new Error("Seed Atlas's ORBIT-42 decision request in Attention QA before capture.");
-      await client.navigate("/");
-      await client.waitForText("For you");
+      const request = items.find(item => item.channelName === "Rail QA" && item.message.text === "Should the rail default to open on first run?");
+      if (!request) throw new Error("Seed the rail default decision request in Rail QA before capture.");
+      await client.navigate(`/plugins/bot-teams/channels/${request.roomId}/message/${encodeURIComponent(request.message.id)}`);
+      await client.evaluate(`document.querySelector('button[aria-label^="Hide right panel"]')?.click()`);
+      await sleep(600);
+      for (const text of ["Decision needed", "Should the rail default to open on first run?", "Acknowledge"]) await client.waitForText(text);
       await client.evaluate(`(() => {
-        const entry = Array.from(document.querySelectorAll('nav button')).find(button => button.textContent.includes('For you'));
-        if (!entry) throw new Error('For you must be available in the real navigation');
-        entry.click();
-      })()`);
-      for (const text of ["Decision needed", "ORBIT-42 release for Thursday", "Reply in channel", "Acknowledge", "Snooze…"]) await client.waitForText(text);
-      await client.evaluate(`(() => {
-        if (!document.querySelector('.attention-inbox') || !location.pathname.endsWith('/for-you')) throw new Error('For you inbox must be rendered');
+        if (!document.querySelector('.channel-attention-banner')) throw new Error('Channel attention banner must be rendered');
+        const message = Array.from(document.querySelectorAll('[data-channel-message]'))
+          .find(node => node.getAttribute('data-channel-message') === ${JSON.stringify(request.message.id)});
+        if (!message?.querySelector('.message-attention')) throw new Error('The live request must be marked on its channel message');
       })()`);
     },
   },
@@ -485,20 +484,29 @@ const captures = [
       // shows the channel at full width, which is when the rail is meant to show.
       await client.evaluate(`document.querySelector('button[aria-label^="Hide right panel"]')?.click()`);
       await sleep(600);
-      for (const text of ["Decision needed", "Threads", "Members", "Next automation", "Output", "Usage"])
+      for (const text of ["Decision needed", "DMs", "Members", "Output"])
         await client.waitForText(text);
       await client.evaluate(`(() => {
         const rail = document.querySelector('.channel-rail');
         if (!rail?.checkVisibility()) throw new Error('The channel rail must be visible');
         const sections = [...rail.querySelectorAll('.channel-rail-section')].map(s => s.dataset.section);
-        for (const required of ['attention', 'threads', 'members', 'automation', 'output', 'usage'])
+        for (const required of ['attention', 'threads', 'members', 'automation', 'output'])
           if (!sections.includes(required)) throw new Error('The rail is missing its ' + required + ' section');
-        if (!rail.querySelector('[data-section="members"] .channel-rail-state'))
-          throw new Error('Member rows must show a live state');
-        if (!/\\d+ \\/ \\d+ turns today/.test(rail.querySelector('.channel-rail-usage')?.innerText ?? ''))
-          throw new Error('The usage meter must show real turn counts');
-        if (/in \\d/.test(rail.querySelector('[data-section="automation"]')?.innerText ?? '') === false)
+        if (!rail.querySelector('[data-section="members"] .channel-rail-row'))
+          throw new Error('The member roster must be rendered');
+        if (!/in \\d/.test(rail.querySelector('[data-section="automation"]')?.innerText ?? ''))
           throw new Error('The automation countdown must be rendered');
+        // The rail is meant to read as text at rest: no counts, no carets, no
+        // idle tags and no controls until something is hovered.
+        const shown = el => parseFloat(getComputedStyle(el).opacity) > 0.05;
+        if (rail.querySelector('.channel-rail-count'))
+          throw new Error('Counts must only appear on a collapsed section');
+        if ([...rail.querySelectorAll('.channel-rail-chevron')].some(shown))
+          throw new Error('Section carets must wait for hover');
+        if ([...rail.querySelectorAll('.channel-rail-state')].some(e => e.innerText.trim() === 'Idle'))
+          throw new Error('Idle is the resting state and must not be labelled');
+        if ([...rail.querySelectorAll('button')].filter(b => !b.matches('.channel-rail-row, .channel-rail-section-toggle, .channel-rail-more')).some(shown))
+          throw new Error('Row and section controls must wait for hover');
         const main = document.querySelector('.bot-room-main').getBoundingClientRect().width;
         if (main < 480) throw new Error('The rail must not crush the transcript');
       })()`);

@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   experimental_Icon as Icon,
   experimental_useSidebarThreadActions as useSidebarThreadActions,
@@ -51,7 +57,7 @@ type SectionId =
 const sectionTitles: Record<SectionId, string> = {
   live: "Live now",
   attention: "Needs you",
-  threads: "Threads",
+  threads: "DMs",
   members: "Members",
   automation: "Next automation",
   output: "Output",
@@ -123,6 +129,50 @@ function useClock(active: boolean) {
   return now;
 }
 
+/**
+ * A channel nowhere near its ceiling has nothing to report. Speak up only once
+ * the day's usage is worth a glance, or something actually failed.
+ */
+const usageWorthShowing = (usage: {
+  turns: number;
+  errors: number;
+  limits: { turnsPerDay: number };
+}) =>
+  usage.errors > 0 ||
+  usage.turns >= Math.max(1, usage.limits.turnsPerDay) * 0.25;
+
+const previewLimit = 4;
+
+/** Long lists stay short; the rest is one muted click away. */
+function RailList<T>({
+  items,
+  render,
+  keyOf,
+}: {
+  items: T[];
+  render: (item: T) => ReactNode;
+  keyOf: (item: T) => string;
+}) {
+  const [all, setAll] = useState(false);
+  const shown = all ? items : items.slice(0, previewLimit);
+  return (
+    <>
+      {shown.map((item) => (
+        <Fragment key={keyOf(item)}>{render(item)}</Fragment>
+      ))}
+      {items.length > previewLimit && (
+        <button
+          type="button"
+          className="channel-rail-more"
+          onClick={() => setAll((shown) => !shown)}
+        >
+          {all ? "Show less" : `View all ${items.length}`}
+        </button>
+      )}
+    </>
+  );
+}
+
 function RailSection({
   id,
   count,
@@ -151,7 +201,8 @@ function RailSection({
             <Icon name={collapsed ? "ChevronRight" : "ChevronDown"} />
           </span>
           <span className="channel-rail-section-title">{sectionTitles[id]}</span>
-          {count !== undefined && count > 0 && (
+          {/* A count only earns its place when the rows it counts are hidden. */}
+          {collapsed && count !== undefined && count > 0 && (
             <span className="channel-rail-count">{count}</span>
           )}
         </button>
@@ -187,7 +238,7 @@ function LiveRow({
         type="button"
         className="channel-rail-row channel-rail-live-open"
         disabled={!entry.threadId}
-        title={entry.threadId ? "Open this bot's thread" : undefined}
+        title={entry.threadId ? "Open this bot's DM" : undefined}
         onClick={() =>
           entry.threadId && openWorkThread(navigate, entry.threadId, roomId)
         }
@@ -240,6 +291,8 @@ function MemberRow({ member, roomId }: { member: RailMember; roomId: string }) {
     paused: "Paused",
     idle: "Idle",
   } as const;
+  // An idle bot is the resting case; saying so on every row is just noise.
+  const showState = member.state !== "idle";
   return (
     <button
       type="button"
@@ -257,9 +310,11 @@ function MemberRow({ member, roomId }: { member: RailMember; roomId: string }) {
         {member.bot.avatar || <Icon name="Bot" />}
       </span>
       <span className="channel-rail-name">{member.bot.name}</span>
-      <span className="channel-rail-state" data-state={member.state}>
-        {stateLabels[member.state]}
-      </span>
+      {showState && (
+        <span className="channel-rail-state" data-state={member.state}>
+          {stateLabels[member.state]}
+        </span>
+      )}
     </button>
   );
 }
@@ -283,6 +338,7 @@ function ThreadRow({ thread }: { thread: ChannelThread }) {
       type="button"
       className="channel-rail-row"
       aria-current={threadId === thread.threadId ? "page" : undefined}
+      aria-label={`Open DM with ${thread.name}`}
       title={
         split.isAvailable ? "Drag or ⌘-click to open in a split" : undefined
       }
@@ -508,9 +564,11 @@ export function ChannelRail({
             collapsed={isCollapsed("threads")}
             onToggle={toggle}
           >
-            {threads.map((thread) => (
-              <ThreadRow key={thread.threadId} thread={thread} />
-            ))}
+            <RailList
+              items={threads}
+              keyOf={(thread) => thread.threadId}
+              render={(thread) => <ThreadRow thread={thread} />}
+            />
           </RailSection>
         )}
         <RailSection
@@ -532,19 +590,19 @@ export function ChannelRail({
           }
         >
           {members.length ? (
-            members.map((member) => (
-              <MemberRow key={member.bot.id} member={member} roomId={room.id} />
-            ))
+            <RailList
+              items={members}
+              keyOf={(member) => member.bot.id}
+              render={(member) => (
+                <MemberRow member={member} roomId={room.id} />
+              )}
+            />
           ) : (
             <p className="channel-rail-empty">No bots in this channel yet.</p>
           )}
         </RailSection>
         {upcoming && (
-          <RailSection
-            id="automation"
-            collapsed={isCollapsed("automation")}
-            onToggle={toggle}
-          >
+          <section className="channel-rail-section" data-section="automation">
             <div className="channel-rail-automation">
               <button
                 type="button"
@@ -586,7 +644,7 @@ export function ChannelRail({
                 <Icon name="Square" />
               </Button>
             </div>
-          </RailSection>
+          </section>
         )}
         {files.length > 0 && (
           <RailSection
@@ -595,23 +653,26 @@ export function ChannelRail({
             collapsed={isCollapsed("output")}
             onToggle={toggle}
           >
-            {files.slice(0, 8).map((file) => (
-              <a
-                key={file.id}
-                className="channel-rail-row channel-rail-file"
-                href={attachmentUrl(file)}
-                download={file.name}
-                title={file.name}
-              >
-                <span className="channel-rail-avatar" aria-hidden>
-                  <Icon name="Paperclip" />
-                </span>
-                <span className="channel-rail-name">{file.name}</span>
-              </a>
-            ))}
+            <RailList
+              items={files}
+              keyOf={(file) => file.id}
+              render={(file) => (
+                <a
+                  className="channel-rail-row channel-rail-file"
+                  href={attachmentUrl(file)}
+                  download={file.name}
+                  title={file.name}
+                >
+                  <span className="channel-rail-avatar" aria-hidden>
+                    <Icon name="Paperclip" />
+                  </span>
+                  <span className="channel-rail-name">{file.name}</span>
+                </a>
+              )}
+            />
           </RailSection>
         )}
-        {usage && (
+        {usage && usageWorthShowing(usage) && (
           <RailSection
             id="usage"
             collapsed={isCollapsed("usage")}

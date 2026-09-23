@@ -2512,25 +2512,18 @@
   color: var(--foreground);
 }
 
-.attention-inbox { width: 100%; max-width: 960px; margin: 0 auto; padding: 24px; overflow: auto; }
-.attention-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
-.attention-toolbar h1 { margin: 0; font-size: 20px; font-weight: 600; }
-.attention-filters, .attention-actions, .attention-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.attention-item { padding: 20px 0; border-bottom: 1px solid var(--border); }
 .attention-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; color: var(--muted-foreground); font-size: 12px; }
 .attention-meta strong { color: var(--foreground); font-size: 14px; }
 .attention-meta time { margin-left: auto; }
-.attention-body { margin: 12px 0; overflow-wrap: anywhere; }
-.attention-actions select { padding: 6px 10px; min-height: 36px; border-radius: 6px; border: 1px solid var(--border); background: var(--background); color: var(--foreground); font: inherit; }
-.attention-empty { padding: 32px 0; }
-.attention-count { margin-left: auto; padding: 0 6px; border-radius: 4px; background: var(--muted); font-variant-numeric: tabular-nums; }
-.attention-pagination { justify-content: flex-end; margin-top: 16px; }
+.attention-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .channel-attention-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
 .channel-attention-banner > span { margin-right: auto; }
+.channel-pending-replies { display: grid; gap: 8px; flex-basis: 100%; min-width: 0; }
+.channel-pending-replies > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.channel-pending-replies blockquote { flex-basis: 100%; max-height: 96px; margin: 0; overflow: auto; white-space: pre-wrap; }
 @media (max-width: 640px) {
-  .attention-inbox { padding: 16px; }
   .attention-meta time { margin-left: 0; }
-  .attention-actions button, .attention-actions select, .attention-filters button { min-height: 44px; }
+  .attention-actions button { min-height: 44px; }
 }
 .attention-question { display: grid; gap: 12px; min-width: 0; }
 .attention-question-text { max-height: 35vh; overflow: auto; overflow-wrap: anywhere; }
@@ -2880,7 +2873,7 @@
   height: 24px;
   padding: 0 8px;
 }
-/* Approvals forwarded from bot work threads, pinned below the transcript. */
+/* Approvals forwarded from bot DMs, pinned below the transcript. */
 .channel-approvals {
   display: flex;
   flex-direction: column;
@@ -2960,7 +2953,7 @@
   background: var(--border);
 }
 
-/* Bot threads nested under the selected channel. */
+/* Bot DMs nested under the selected channel. */
 .channel-thread-list {
   margin: 0 0 2px;
   padding: 0;
@@ -3006,13 +2999,13 @@
   display: flex;
   flex-direction: column;
   padding: 2px;
-  border: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
   border-radius: 10px;
-  background: color-mix(in oklch, var(--card, var(--background)) 88%, transparent);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 2px 12px #0000001f;
+  /* Lift the surface off the page rather than outlining it. */
+  border: 1px solid color-mix(in oklch, var(--border) 40%, transparent);
+  background: color-mix(in oklch, var(--foreground) 4%, var(--background));
+  backdrop-filter: blur(12px);
   font-size: 11.5px;
-  line-height: 1.35;
+  line-height: 1.4;
   overflow: hidden;
 }
 .bot-room-layout {
@@ -3124,24 +3117,32 @@
   display: flex;
   flex: 1;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
+  /* The caret sits in a reserved slot so revealing it never shifts the label. */
+  margin-left: -13px;
   padding: 1px 4px;
   border-radius: 5px;
   background: none;
   border: 0;
   cursor: pointer;
   color: var(--muted-foreground);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: inherit;
+  font-weight: 500;
 }
 .channel-rail-section-toggle:hover {
   color: var(--foreground);
 }
 .channel-rail-chevron {
   display: inline-flex;
-  opacity: 0.55;
+  width: 11px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.channel-rail-section:hover .channel-rail-chevron,
+.channel-rail-section-toggle:focus-visible .channel-rail-chevron,
+.channel-rail-section-toggle[aria-expanded="false"] .channel-rail-chevron {
+  opacity: 0.6;
 }
 .channel-rail-chevron svg {
   width: 11px;
@@ -3155,9 +3156,8 @@
 .channel-rail-count {
   margin-left: auto;
   color: var(--muted-foreground);
-  font-size: 10.5px;
-  font-weight: 500;
-  opacity: 0.7;
+  font-size: inherit;
+  font-weight: 400;
 }
 .channel-rail-section-body {
   display: flex;
@@ -3238,7 +3238,6 @@
 }
 .channel-rail-elapsed {
   font-variant-numeric: tabular-nums;
-  opacity: 0.8;
 }
 .channel-rail-queued {
   font-style: italic;
@@ -3246,25 +3245,37 @@
 .channel-rail-state {
   margin-left: auto;
   flex-shrink: 0;
-  opacity: 0.8;
 }
 .channel-rail-state[data-state="working"] {
   color: var(--primary, var(--foreground));
-  opacity: 1;
 }
 .channel-rail-state[data-state="attention"] {
   color: var(--destructive);
-  opacity: 1;
 }
-.channel-rail-stop {
+.channel-rail-stop,
+.channel-rail-automation > button:not(.channel-rail-row),
+.channel-rail-section-header > button:not(.channel-rail-section-toggle) {
   flex-shrink: 0;
   height: 20px;
   width: 20px;
   padding: 0;
-  opacity: 0.6;
+  opacity: 0;
+  color: var(--muted-foreground);
+  transition: opacity 120ms ease;
 }
-.channel-rail-stop:hover:not(:disabled) {
+.channel-rail-live:hover .channel-rail-stop,
+.channel-rail-live:focus-within .channel-rail-stop,
+.channel-rail-automation:hover > button:not(.channel-rail-row),
+.channel-rail-automation:focus-within > button:not(.channel-rail-row),
+.channel-rail-section:hover .channel-rail-section-header > button:not(.channel-rail-section-toggle),
+.channel-rail-section-header > button:not(.channel-rail-section-toggle):focus-visible {
+  opacity: 0.7;
+}
+.channel-rail-stop:hover:not(:disabled),
+.channel-rail-automation > button:not(.channel-rail-row):hover,
+.channel-rail-section-header > button:not(.channel-rail-section-toggle):hover {
   opacity: 1;
+  color: var(--foreground);
 }
 .channel-rail-stop svg,
 .channel-rail-automation .bot-button svg {
@@ -3294,6 +3305,21 @@
   display: flex;
   align-items: center;
   gap: 1px;
+}
+.channel-rail-more {
+  align-self: flex-start;
+  margin: 1px 0 0;
+  padding: 2px 5px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  cursor: pointer;
+  color: var(--muted-foreground);
+  font: inherit;
+}
+.channel-rail-more:hover {
+  color: var(--foreground);
+  background: var(--state-hover);
 }
 .channel-rail-empty,
 .channel-rail-usage {

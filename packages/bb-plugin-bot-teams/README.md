@@ -7,7 +7,7 @@ Persistent bots with their own files, mission, and memory, and Slack-style chann
 1. Choose **New channel** in the sidebar to open an empty conversation with the composer ready. It starts with just you. After the first message, an agent privately suggests a short channel title; click its name at the left of the header to rename it at any time.
 2. Type `@` to find a bot or choose `@all` / `@channel` to address everyone in the channel. Sending a mention invites that bot into the channel. The picker also includes **Create new bot…**, which opens a new thread with bot setup instructions prefilled. Describe what you need in chat; the agent creates the bot and invites it to this channel. Your channel draft stays saved.
 3. Click the overlapping avatars in the header to see members and their activity. **Add bot** sits at the bottom; member options let you configure or remove a bot.
-4. Open **Bot Teams** to administer profiles, `MISSION.md`, `MEMORY.md`, and activity. The collection uses BB's standard content width, search toolbar, status filter, sorting, and bordered rows. Conversations live in Channels.
+4. Open **Bot Teams** to administer profiles, `MISSION.md`, `MEMORY.md`, and activity. The collection uses BB's standard content width, search toolbar, status filter, sorting, and bordered rows. Shared conversations live in Channels. Each bot also has a DM you can open from its channel.
 
 **New bot** in the collection opens the same conversation flow without a channel invitation. Send the prefilled instructions, or add your bot’s purpose first. The agent handles the name, mission, model, and permissions using sensible defaults.
 
@@ -40,13 +40,13 @@ The **Chat mode** selector beneath the message box has three choices:
 - **Directed** calls bots you mention or reply to. A channel with just one eligible bot always routes to that bot, in every chat mode.
 - **Everyone** lets all members consider unaddressed messages, useful for group reviews.
 
-`@handle` and replies to a bot address that bot directly in every mode; `@all` and `@channel` explicitly address every current channel member (`@everyone` is also supported). Choosing a mode in the UI or owner CLI remembers it for future channels. Existing channels keep Everyone until changed. Bots work concurrently and post as they finish. A bot can request a teammate’s help with an explicit mention, with up to two further handoffs per message. `[PASS]` produces no public reply unless the bot has published images for that response.
+`@handle` and replies to a bot address that bot in the channel; they are channel messages, not DMs. `@all` and `@channel` address every current channel member (`@everyone` is also supported). Choosing a mode in the UI or owner CLI remembers it for future channels. Existing channels keep Everyone until changed. Bots work concurrently and post as they finish. A bot can request a teammate’s help with an explicit mention, with up to two further handoffs per message. `[PASS]` produces no public reply unless the bot has published images for that response.
 
 Channels do not need to be started or resumed. A working bot appears at the bottom of the transcript with its latest safe one-line activity and a muted **Stop** control for its current response. Stopping a response leaves the channel open. Each primary session handles one task at a time. Forks answer separate requests concurrently, with their own activity and Stop controls. Mentions choose the recipient; they do not imply an interruption.
 
-Hover or focus a message on desktop for **React**, **Reply**, **Copy**, or **View work**. Right-click, use Shift+F10, or long-press to open the unified message menu with **Reply**, **Add selected text to chat**, **Emoji**, **Copy**, and **See thread** where work exists. The full emoji picker supports text search, category browsing, skin tones, recently used emoji, and keyboard selection. It uses [Emoji Picker React](https://github.com/ealush/emoji-picker-react) with native emoji and BB’s theme colors. Emoji reactions persist, show who reacted, and toggle when clicked. Bots can use `bots_react` to acknowledge a message without writing another response. Reactions do not start more work. Replies link back to their original message.
+Hover or focus a message on desktop for **React**, **Reply**, **Copy**, and a link to its bot DM or source thread when available. Right-click, use Shift+F10, or long-press to open the unified message menu with **Reply**, **Add selected text to chat**, **Emoji**, **Copy**, and that same link. The full emoji picker supports text search, category browsing, skin tones, recently used emoji, and keyboard selection. It uses [Emoji Picker React](https://github.com/ealush/emoji-picker-react) with native emoji and BB’s theme colors. Emoji reactions persist, show who reacted, and toggle when clicked. Bots can use `bots_react` to acknowledge a message without writing another response. Reactions do not start more work. Replies link back to their original message.
 
-Bots receive standing guidance to write brief, conversational replies, use Markdown when it improves scanning, avoid dense walls of text and assistant boilerplate, and stay silent when they have nothing useful to add. Channel messages use BB’s native Markdown renderer, including short paragraphs, bullets, numbered steps, inline code, fenced code blocks, and links. They can react sparingly for acknowledgment (👍), completed or verified work (✅), or celebration (🎉). Direct questions and assignments still need an answer, action, or blocker.
+Bots receive standing guidance to write brief, conversational replies, use Markdown when it improves scanning, avoid dense walls of text and assistant boilerplate, and stay silent when they have nothing useful to add. Channel messages use BB’s native Markdown renderer, including short paragraphs, bullets, numbered steps, inline code, fenced code blocks, and links. They can react sparingly for acknowledgment (👍), completed or verified work (✅), or celebration (🎉). Questions and assignments addressed to a bot in the channel still need an answer, action, or blocker.
 
 Smart routing uses **Jev** through OpenCode Zen's direct structured-decision API. **Plugins → Bot Teams → Settings** controls the classifier, secret Zen API key, Jev model (default `jev-1.13`), timeout (default 5 seconds), and minimum confidence for steer/fork (default 0.7). `OPENCODE_API_KEY` on the BB server is an alternative to the secret setting. Recipient and action decisions are batched into one API request, without creating an agent session or loading tools and global instructions. Low-confidence steer/fork decisions become follow-ups. Delegation return decisions use the same API.
 
@@ -60,9 +60,10 @@ The composer uses BB’s native surface, spacing, and button conventions. Type `
 
 PNG, JPEG, GIF, and WebP images appear as composer previews and inline in sent messages, including images pasted with text. Click an image to expand it and download the original. Other file types stay downloadable. Image bytes are checked before inline display; SVG and HTML remain downloads. Bots use `bots_publish_image` (or `bb bots publish-image`) with an absolute path inside their workspace to add up to ten images to their current final response. This publishes one message containing text and images, or images alone with `[PASS]`; cancelled or failed responses do not post images.
 
-Use the archive button beside search to switch between active and archived channels. The icon changes to a list in the archived view, and the heading shows the current view. Search finds channels in both views and labels archived results. Clearing or closing search returns to the selected view. Right-click a channel for **Rename**, **Archive**, or **Delete**; archived channels offer **Restore** and **Delete**. Keyboard users can open this menu with Shift+F10. The channel menu in the header contains rename, pin, archive, and delete actions. **Automations** and **Activity** open as separate tabs in BB’s right workbench. Archiving cancels unfinished work and preserves history; restoring makes the channel available again. Deletion requires confirmation, stops unfinished responses, and permanently removes channel messages, reactions, membership, activity, and draft uploads. Bot profiles, workspaces, and other channels are kept. Existing BB work threads and sent files in BB's project storage remain under BB's own retention. Removing a bot cancels its pending channel work and preserves its messages and reactions. Channels support up to 16 bots.
+Use the archive button beside search to switch between active and archived channels. The icon changes to a list in the archived view, and the heading shows the current view. Search finds channels in both views and labels archived results. Clearing or closing search returns to the selected view. Right-click a channel for **Rename**, **Archive**, or **Delete**; archived channels offer **Restore** and **Delete**. Keyboard users can open this menu with Shift+F10. The channel menu in the header contains rename, pin, archive, and delete actions. **Automations** and **Activity** open as separate tabs in BB’s right workbench. Archiving cancels unfinished work and preserves history; restoring makes the channel available again. Deletion requires confirmation, stops unfinished responses, and permanently removes channel messages, reactions, membership, activity, and draft uploads. Bot profiles, workspaces, and other channels are kept. Existing bot DMs and sent files in BB's project storage remain under BB's own retention. Removing a bot cancels its pending channel work and preserves its messages and reactions. Channels support up to 16 bots.
 
 BB’s **Settings → Appearance** can select sidebar providers. **Channels and threads** preserves BB’s normal thread list below Channels; **Channels navigation** adds New channel alongside New thread.
+Selecting a channel shows its bot DMs directly beneath it in the sidebar. Selecting another channel shows that channel’s DMs instead.
 
 ## Channel workspace
 
@@ -72,7 +73,7 @@ resize, collapse, and split controls with Browser and Terminal. On compact scree
 its workbench drawer.
 
 - There is no shared channel context. Each bot keeps its own `MISSION.md`,
-  `MEMORY.md`, and one work thread per channel, which already holds that
+  `MEMORY.md`, and one DM per channel, which already holds that
   channel's history.
 - **Version history** compares and restores `MISSION.md` and `MEMORY.md`. Restore loads a draft before saving. Bot documents are snapshotted
   when read/saved and after completed bot turns, not on every filesystem write.
@@ -86,7 +87,7 @@ its workbench drawer.
 - Channel links store the channel ID, so renaming a channel keeps links working.
   Plain `#name` references resolve only when unambiguous and outside Markdown
   code, existing links, images, and URL fragments.
-- Activity shows each task, queue position or blocking reason, and **View work**.
+- Activity shows each task, queue position or blocking reason, and **Open DM**.
   Reading marks messages seen only while the channel is focused and at the bottom.
 
 ## Channel rail
@@ -103,23 +104,31 @@ state.
   rather than silent.
 - **Needs you** collects the channel's open decisions and the requests a bot is
   blocked on, so they can be answered without leaving the channel.
-- **Threads** lists the bot work threads this channel spawned. Click to open
+- **DMs** lists the bot DMs for this channel. Click to open
   one, or ⌘-click (drag) to open it in a split.
-- **Members** shows every bot in the channel and what it is doing: working,
-  queued, needs attention, paused, or idle.
-- **Next automation** counts down to the soonest scheduled run and can pause it.
+- **Members** shows every bot in the channel, labelled only when it is doing
+  something: working, queued, needs attention or paused. Idle is the resting
+  case and goes unsaid.
+- The soonest scheduled run counts down on its own row and can be paused.
 - **Output** collects the files bots published here.
-- **Usage** shows turns used today against the channel's limit.
+- **Usage** appears only once the day's turns are worth a glance, or something
+  failed.
 
-Sections with nothing to report are hidden, and each one collapses and
-remembers its state per device. Use the header's **Show channel details**
-control to hide or show the rail; while it is hidden, that control carries a
-dot when the channel has live work. The rail takes no column out of the channel: on a wide
-channel it lands in empty gutter. As the channel narrows the transcript and
-composer shift left to stay clear of it, and the card gives up its own width
-before it gives up theirs. It stays put wherever it fits, including alongside
-BB's right workbench, and stands down only below roughly 600px, where a
-readable transcript leaves no room for it.
+The rail reads as text at rest. Nothing is counted while you can see the rows
+themselves, a count appears only on a section you have collapsed, and the
+carets, the **Stop**, **Pause** and **Add a bot** controls stay invisible until
+you hover the row or section that owns them. Long lists stop at four entries
+behind a **View all**. Sections with nothing to report are hidden entirely, and
+each one collapses and remembers its state per device.
+
+Use the header's **Show channel details** control to hide or show the rail;
+while it is hidden, that control carries a dot when the channel has live work.
+The rail takes no column out of the channel: on a wide channel it lands in
+empty gutter. As the channel narrows the transcript and composer shift left to
+stay clear of it, and the card gives up its own width before it gives up
+theirs. It stays put wherever it fits, including alongside BB's right
+workbench, and stands down only below roughly 440px, where a readable
+transcript leaves no room for it.
 
 ## Parallel questions and tasks
 
@@ -181,7 +190,7 @@ both IDs. Bots can manage only their own schedules in channels they belong to.
 The existing **Automations** plugin must be enabled. It stores these schedules
 in the Bots project and runs a fixed dispatcher script. Automation history
 shows dispatch status alongside the actual response status, errors, and links to
-the channel answer and work thread. Retries are reflected in the response status. Pausing or deleting a schedule affects
+the channel answer and bot DM. Retries are reflected in the response status. Pausing or deleting a schedule affects
 future runs. Stop an existing response in Activity.
 
 A tick is skipped while that automation's previous response or handoffs remain
@@ -197,9 +206,9 @@ Channels always respond to explicit messages. Separately, a bot’s mission work
 
 **Retire bot** stops its current work, removes it from every channel, and keeps its profile, files, and history. Use the collection’s **Retired** filter to find it. **Restore bot** makes it available for invitations again, with scheduled mission work paused.
 
-Failed channel responses show **View work** and **Retry response**. Retrying keeps the original message and targets only that bot; repeated clicks do not start duplicate retries. A long response gets a wrap-up request at 75% of its time limit (15 minutes at the 20-minute default), asking the bot to stop new work, save its state, and report progress. If it reaches the limit without finishing, Bot Teams stops the response, posts the last recorded progress in the channel, and preserves its work thread and workspace. **Resume response** continues in that same thread. For an important checkpoint or blocker before then, bots can use `bots_channel_notify`; it leaves a durable channel message and notifies the owner without waking other bots. Restore and invite a removed bot before retrying.
+Failed channel responses show **Open DM** and **Retry response**. Retrying keeps the original message and targets only that bot; repeated clicks do not start duplicate retries. A long response gets a wrap-up request at 75% of its time limit (15 minutes at the 20-minute default), asking the bot to stop new work, save its state, and report progress. If it reaches the limit without finishing, Bot Teams stops the response, posts the last recorded progress in the channel, and preserves its bot DM and workspace. **Resume response** continues in that same DM. For an important checkpoint or blocker before then, bots can use `bots_channel_notify`; it leaves a durable channel message and notifies the owner without waking other bots. Restore and invite a removed bot before retrying.
 
-Default limits are 100 started turns per hour, 1,000 per day, 20 minutes per turn, and two concurrent forks per bot. **Usage and limits** in the channel workbench and the bot’s **Usage** tab make these editable. Both bot and channel turn budgets apply; existing work can finish while new work waits. Provider billing and token details remain in **View work**. BB’s provider and concurrency limits also apply.
+Default limits are 100 started turns per hour, 1,000 per day, 20 minutes per turn, and two concurrent forks per bot. **Usage and limits** in the channel workbench and the bot’s **Usage** tab make these editable. Both bot and channel turn budgets apply; existing work can finish while new work waits. Provider billing and token details remain in the bot DM. BB’s provider and concurrency limits also apply.
 
 ## Persistence
 
@@ -212,7 +221,7 @@ Each bot lives at `<BB data directory>/plugins/bot-teams/homes/<bot-id>/`:
 
 **Profile → Workspace** shows the exact path. Document saves detect stale editor versions. Profiles, channel history, reactions, membership, work, and draft uploads live in the plugin’s SQLite database. Sent attachments use BB’s project attachment storage. Back up `plugins/bot-teams` along with BB’s conversation and attachment storage. Migrated installations also retain `plugins/bots/homes`; the new homes path links to it so saved workspace paths stay valid.
 
-Each bot keeps one hidden primary BB thread per channel. The first turn receives bounded channel history and saved context. Later turns receive the new request, messages the bot has not seen, and saved context only when it changes. Previously delivered files are not attached again. Forks use separate hidden threads and keep their own reply history. **View work** opens the native conversation with its tools, approvals, and failures. You can type and send directly in any bot work thread, including a channel thread or fork. Direct replies stay in that BB thread; send from the channel composer when the message belongs in the channel transcript. Existing group conversations appear as Channels without losing history; old group links redirect to their channel. Existing private work sessions remain stored and accessible through BB, while the Bot Teams page is for configuration.
+Each bot has a DM for each channel, backed by a hidden BB thread. Channel tasks also run in that thread. The first turn receives bounded channel history and saved context. Later turns receive the new request, unseen channel messages, and saved context only when it changes. Previously delivered files are not attached again. Forks have separate DMs and reply histories. **Open DM** shows the native conversation with its messages, tools, approvals, and failures. Typing there sends a DM to the bot; typing in the channel composer sends a channel message. A DM reply stays in the DM unless the bot also posts an answer to the channel. In that case, the channel shows a short tombstone linking to the DM, followed by the answer. The DM text stays in the BB thread. Existing group conversations appear as Channels without losing history; old group links redirect to their channel. Existing private work sessions remain stored and accessible through BB, while the Bot Teams page is for configuration.
 
 Channels initially load 200 messages. **Load earlier messages** pages through the retained transcript. **Search channel** searches all stored message text and names; selecting a result or an older reply reference loads and focuses its message. This is a single-owner local feature. Bots use BB’s configured providers, credentials, tools, and skills on the primary machine. Separate directories provide persistent storage, not separate accounts. Shared `MEMORY.md` should contain only information appropriate for every channel the bot joins.
 
@@ -350,7 +359,7 @@ state afterward.
 
 The running BB application shows the rail floating over the staged Rail QA
 channel's right gutter:
-an open decision under **Needs you**, the bot's work thread, the member roster
+an open decision under **Needs you**, the bot DM, the member roster
 with its live state, a scheduled digest counting down, the published
 `rail-check.csv`, and the channel's turns used today. Live now is absent here
 because no bot is working at capture time.
@@ -424,7 +433,7 @@ The image workflow and chat mode selector below were captured in the running app
 
 ## Notifications
 
-Decisions and blockers use real BB questions and the existing built-in phone notification sender. Enable **Attention notifications** in **Settings → Bot Teams** and mobile delivery in **Settings → Push notifications**. See **For you** below for the complete flow.
+Decisions and blockers use real BB questions and the existing built-in phone notification sender. Enable **Attention notifications** in **Settings → Bot Teams** and mobile delivery in **Settings → Push notifications**. See **Attention requests** below for the complete flow.
 
 Ordinary channel replies and failures use a separate, optional shared notification API (`notifications.enqueue`). The installed BB build does not expose this API, so those events do not produce channel push alerts. This limitation does not affect the native decision and blocker questions.
 
@@ -438,7 +447,7 @@ The channel composer's footer carries the same control BB puts under a thread co
 - **All bots in this channel** sets one mode for work started here, overriding each member's own. This is the lever for a work session: open the gate, get the task done, set it back to **Each bot's own**. A bot whose provider cannot offer that mode keeps its own.
 - **Each bot** shows one row per member with BB's own picker bound to that bot's provider, because a channel can hold bots on different providers. A change here follows the bot into every channel, and is disabled while the channel setting applies.
 
-The channel's setting rides every dispatch, so it reaches long-lived bot threads too. It takes effect on the bot's next turn, not the one already running, and it does not retry an action that was already refused. Mission work runs outside any channel and always uses the bot's own mode.
+The channel's setting rides every dispatch, so it reaches long-lived bot DMs too. It takes effect on the bot's next turn, not the one already running, and it does not retry an action that was already refused. Mission work runs outside any channel and always uses the bot's own mode.
 
 Only the owner can change a channel's permissions. Bots have no tool for it, and the CLI refuses when a bot calls it.
 
@@ -448,11 +457,11 @@ Only the owner can change a channel's permissions. Bots have no tool for it, and
 
 ## Approvals in the channel
 
-When a bot's work thread stops for an approval, the request is forwarded to the channel that started the work, so you do not have to find the thread. A card appears below the transcript: the bot, what it wants (the command, the file change, the permission, the plan, or the tool), and the provider's reason. **Approve**, **Approve for session**, and **Deny** answer the real request in the work thread; only the decisions the provider offers are shown. A single multiple-choice question shows one button per choice. Anything else shows **Open thread** alone, so nothing is answered blind. A handled card collapses to a one-line result.
+When a bot's DM stops for an approval, the request is forwarded to the channel that started the work, so you do not have to find the DM. A card appears below the transcript: the bot, what it wants (the command, the file change, the permission, the plan, or the tool), and the provider's reason. **Approve**, **Approve for session**, and **Deny** answer the real request in the DM; only the decisions the provider offers are shown. A single multiple-choice question shows one button per choice. Anything else shows **Open DM** alone, so nothing is answered blind. A handled card collapses to a one-line result.
 
-While a bot waits, its row in the queue shelf reads **Needs approval** in amber with a **Review** button that jumps to the card. The channel's sidebar row shows the bell, and so does that bot's nested thread row.
+While a bot waits, its row in the queue shelf reads **Needs approval** in amber with a **Review** button that jumps to the card. The channel's sidebar row shows the bell, and so does that bot's nested DM row.
 
-Channel decisions and blockers that Bot Teams itself opens are not forwarded here. Those stay in **For you**, described below. Answering is restricted to a bot that is still working in that channel, so a settled or reassigned request is refused with an explanation rather than resolved.
+Channel decisions and blockers that Bot Teams itself opens are not forwarded here. Answer them in the bot DM or use the controls on the channel message, described below. Answering is restricted to a bot that is still working in that channel, so a settled or reassigned request is refused with an explanation rather than resolved.
 
 ## Delegation returns
 
@@ -460,15 +469,15 @@ When a bot directly asks another bot for work through a mention or reply, Bots r
 
 The configured classifier decides whether the exchange contains a work request and substantive results. Acknowledgments and unrelated replies do not wake the requester. Return turns use the existing maximum handoff depth and cannot start another delegation. Cross-channel consultations return to the requesting bot’s original channel and session. The state and deterministic return ID survive reloads. No new tool or CLI command is required: native channel send, `bb bots channel send --reply-to`, and final-answer mentions all use the same runtime.
 
-## For you
+## Attention requests
 
-Open **For you** in the sidebar to see decisions, blockers, and important updates from all active channels. Each request stays open until you acknowledge it. Reading its channel does not dismiss it. **Reply in channel** opens the original message and selects it as your reply target. **Snooze** hides a request for 1 hour, 4 hours, or 1 day; it returns and becomes eligible for another notification when that time ends. The CLI supports other durations from 1 minute to 30 days.
+Decisions, blockers, and important updates appear on their channel messages and in the channel details rail. Each request stays open until you acknowledge it. Reading its channel does not dismiss it. Use the channel composer to reply, or open the native question in the bot DM. The question also offers **Snooze 1 hour**. The CLI supports other durations from 1 minute to 30 days.
 
-Open requests highlight their channel message in amber with **Needs you** and an **Acknowledge** action. A bell replaces the channel’s sidebar hash while requests need attention, including when the channel is selected or working. Reading the channel does not clear the bell; acknowledge or snooze does. Historical pings from builds without attention capture show **Mentioned you** without sending old alerts.
+Open requests highlight their channel message in amber with **Needs you**, **Acknowledge**, and **Snooze 1 hour** actions. Snoozed and acknowledged messages offer **Bring back**. A bell replaces the channel’s sidebar hash while requests need attention, including when the channel is selected or working. Reading the channel does not clear the bell; acknowledge or snooze does. Historical pings from builds without attention capture show **Mentioned you** without sending old alerts.
 
-Bots can mention `@user` in a final response to request a decision. Mentions inside code, quotes, or links do not create requests. For an immediate alert with a specific reason, use `bots_channel_notify` with `channelId`, `requestId`, `reason` (`decision`, `blocker`, or `update`), and `text`. It posts one message with the caller's identity, creates the inbox item, and does not wake other bots. Reuse the request ID when retrying, and do not repeat the alert in the final answer.
+Bots can mention `@user` in a final response to request a decision. Mentions inside code, quotes, or links do not create requests. For an immediate alert with a specific reason, use `bots_channel_notify` with `channelId`, `requestId`, `reason` (`decision`, `blocker`, or `update`), and `text`. It posts one marked channel message with the caller's identity and does not wake other bots. Reuse the request ID when retrying, and do not repeat the alert in the final answer.
 
-In **Settings → Bot Teams**, **Attention notifications** controls these alerts and **Ordinary reply notifications** controls other replies. Both default to on. Delivery also respects **Settings → Push notifications**. Requests remain in the inbox when push delivery is disabled. Archived channels leave the inbox until restored; deleting a channel deletes its requests.
+In **Settings → Bot Teams**, **Attention notifications** controls these alerts and **Ordinary reply notifications** controls other replies. Both default to on. Delivery also respects **Settings → Push notifications**. Requests remain on their channel messages when push delivery is disabled. Archived channels hide their requests until restored; deleting a channel deletes its requests.
 
 - `bb bots inbox [--status open|snoozed|acknowledged] [--limit N] [--offset N]`
 - `bb bots attention MESSAGE_ID acknowledge`
@@ -476,21 +485,21 @@ In **Settings → Bot Teams**, **Attention notifications** controls these alerts
 - `bb bots attention MESSAGE_ID reopen`
 - `bb bots channel notify CHANNEL --reason blocker --text "The release needs your decision." --request-id UUID`
 
-The notify command runs from an agent or bot thread. Inbox management belongs to the owner. The plugin RPC methods `attentionList` and `attentionUpdate` expose the same inbox operations.
+The notify command runs from an agent or bot thread. Request management belongs to the owner. The plugin RPC methods `attentionList` and `attentionUpdate` expose the same operations.
 
-Decisions and blockers open a real BB question in the source work thread. A hidden Bot Teams thread becomes visible while the question is open, then returns to hidden. BB's built-in sender sends its normal phone alert; tapping it opens the question. **Send reply** posts your answer back to the original channel message and acknowledges the request. **Acknowledge** and **Snooze 1 hour** are also available. FYI updates stay in the inbox without creating a question.
+Decisions and blockers open a real BB question in the bot DM. Its hidden BB thread becomes visible while the question is open, then returns to hidden. BB's built-in sender sends its normal phone alert; tapping it opens the question. **Send reply** posts your answer back to the original channel message and acknowledges the request. **Acknowledge** and **Snooze 1 hour** are also available. FYI updates remain on their channel messages without creating a question.
 
-Questions wait behind existing input requests. Each question lasts up to 1 hour. Dismissal, timeout, or plugin reload leaves the inbox request open without repeating the same alert. Snooze or **Bring back** creates a fresh reminder. Requests without an available source thread remain in the inbox. BB's normal notification settings and read suppression still apply.
+Questions wait behind existing input requests. Each question lasts up to 1 hour. Dismissal, timeout, or plugin reload leaves the channel request open without repeating the same alert. Snooze or `bb bots attention MESSAGE_ID reopen` creates a fresh reminder. Requests without an available source thread remain on their channel messages. BB's normal notification settings and read suppression still apply.
 
-Answers persist before delivery. If sending fails, **For you** shows the answer and error while delivery retries. You can discard that failed reply when it is not being sent. The feature uses the public Plugin SDK and works with the installed BB build; no core or mobile update is required.
+Answers persist before delivery. If sending fails, the channel shows the error while delivery retries. You can discard that failed reply when it is not being sent. The feature uses the public Plugin SDK and works with the installed BB build; no core or mobile update is required.
 
 ![A real channel question in the staged BB application](assets/channel-attention-question.png)
 
 The live capture shows Atlas asking for the ORBIT-42 release date, with reply, acknowledge, and snooze actions.
 
-![For you inbox in the staged BB application](assets/channel-attention.png)
+![Attention request in a channel in the staged BB application](assets/channel-attention.png)
 
-The live capture shows Atlas requesting a release decision in the seeded Attention QA channel.
+The live capture shows a marked decision about the channel rail in the seeded Rail QA channel.
 
 ![Highlighted owner ping and channel attention bell](assets/channel-ping-highlight.png)
 
