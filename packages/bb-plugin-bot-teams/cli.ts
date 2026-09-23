@@ -8,7 +8,7 @@ import {
   type PluginRpcHandlers,
 } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { rpcContract, type Bot, type ProfileInput } from "./contract";
+import { rpcContract, notifyInput, type Bot, type ProfileInput } from "./contract";
 import type { Store } from "./store";
 import type { ChannelAutomations } from "./channel-automations";
 import {
@@ -23,6 +23,7 @@ import {
   creatorMembers,
   authorizeChannel,
   agentAuthor,
+  notifyOwner,
   type SendMessage,
 } from "./agent-channels";
 
@@ -40,6 +41,9 @@ const profileFlags = [
   "interval",
 ];
 const commands = [
+  ["inbox", "List your attention requests", "[--status open|snoozed|acknowledged] [--limit N] [--offset N]"],
+  ["attention", "Acknowledge, snooze, or reopen an attention request", "<message-id> <acknowledge|snooze|reopen> [--minutes N]"],
+  ["channel notify", "Request the owner's attention without waking bots", "<channel> --text TEXT --reason decision|blocker|update [--request-id UUID]"],
   [
     "channel schedule-update",
     "Edit a scheduled task",
@@ -516,6 +520,26 @@ export function registerCli(
             throw new UsageError(
               "Only the channel owner can rename, change membership, archive, restore, or delete a channel.",
             );
+        }
+        if (command === "inbox" || command === "attention") {
+          if (caller?.botId) throw new UsageError("Only the owner can manage the For you inbox.");
+          if (command === "inbox") {
+            const a = argumentsFor(rest, ["status", "limit", "offset"]);
+            a.positional(0);
+            return emit(await call("attentionList", { status: a.text("status") ?? "open", ...a.page() }));
+          }
+          const a = argumentsFor(rest, ["minutes"]);
+          const [id, action] = a.positional(2);
+          return emit(await call("attentionUpdate", { id, action, ...(a.has("minutes") ? { minutes: Number(a.text("minutes")) } : {}) }));
+        }
+        if (command === "channel notify") {
+          if (!ctx.threadId) throw new UsageError("Run notify from an agent or bot thread.");
+          const a = argumentsFor(rest, ["text", "reason", "request-id"]);
+          const [selector] = a.positional(1);
+          const result = notifyOwner(store, notifyInput.parse({ channelId: channel(selector!, ctx.threadId).id,
+            requestId: a.text("request-id") ?? randomUUID(), reason: a.required("reason"), text: a.required("text") }), ctx.threadId);
+          bb.realtime.publish("changed", {});
+          return emit(result);
         }
         if (
           [

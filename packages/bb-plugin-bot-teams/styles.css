@@ -2079,3 +2079,71 @@
   background: var(--background);
   color: var(--foreground);
 }
+
+.attention-inbox { width: 100%; max-width: 960px; margin: 0 auto; padding: 24px; overflow: auto; }
+.attention-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.attention-toolbar h1 { margin: 0; font-size: 20px; font-weight: 600; }
+.attention-filters, .attention-actions, .attention-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.attention-item { padding: 20px 0; border-bottom: 1px solid var(--border); }
+.attention-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; color: var(--muted-foreground); font-size: 12px; }
+.attention-meta strong { color: var(--foreground); font-size: 14px; }
+.attention-meta time { margin-left: auto; }
+.attention-body { margin: 12px 0; overflow-wrap: anywhere; }
+.attention-actions select { padding: 6px 10px; min-height: 36px; border-radius: 6px; border: 1px solid var(--border); background: var(--background); color: var(--foreground); font: inherit; }
+.attention-empty { padding: 32px 0; }
+.attention-count { margin-left: auto; padding: 0 6px; border-radius: 4px; background: var(--muted); font-variant-numeric: tabular-nums; }
+.attention-pagination { justify-content: flex-end; margin-top: 16px; }
+.channel-attention-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.channel-attention-banner > span { margin-right: auto; }
+@media (max-width: 640px) {
+  .attention-inbox { padding: 16px; }
+  .attention-meta time { margin-left: 0; }
+  .attention-actions button, .attention-actions select, .attention-filters button { min-height: 44px; }
+}
+.attention-question { display: grid; gap: 12px; min-width: 0; }
+.attention-question-text { max-height: 35vh; overflow: auto; overflow-wrap: anywhere; }
+.attention-question textarea { width: 100%; min-height: 88px; border: 1px solid var(--border); border-radius: 6px; background: var(--background); color: var(--foreground); padding: 8px 12px; font: inherit; resize: vertical; }
+.attention-question .attention-actions { flex-wrap: wrap; }
+@media (pointer: coarse) { .attention-question button { min-height: 44px; } .attention-question textarea { font-size: 16px; } }
+
+/* Owner requests stay distinct from channel unread and running-work indicators. */
+.channel-needs-attention {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+  color: var(--warning, #bf973f);
+}
+.channel-needs-attention [data-icon-root] { width: 17px; height: 17px; }
+.bot-room-message.needs-owner-attention {
+  background: color-mix(in srgb, var(--warning, #bf973f) 13%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning, #bf973f) 35%, transparent);
+}
+.bot-room-message.needs-owner-attention:where(:hover, :focus-within) {
+  background: color-mix(in srgb, var(--warning, #bf973f) 20%, transparent);
+}
+.bot-room-message.needs-owner-attention:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.message-attention {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.message-attention-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.message-attention-label [data-icon-root] { width: 14px; height: 14px; }
+.message-attention[data-open] .message-attention-label {
+  color: var(--foreground);
+}
+.message-attention[data-open] .message-attention-label [data-icon-root] {
+  color: var(--warning, #bf973f);
+}
+.message-attention button { height: 28px; min-height: 28px; padding: 0 8px; font-size: 12px; }
+@media (pointer: coarse) { .message-attention button { min-height: 44px; } }

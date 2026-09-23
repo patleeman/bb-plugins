@@ -1,5 +1,7 @@
 import { classifyJevReturn } from "./jev";
 import { ChannelNotifications, notificationSchema } from "./notifications";
+import { AttentionQuestions } from "./attention-questions";
+import { ATTENTION_QUESTION_RENDERER } from "./attention-question-contract";
 import { contextContent, usageLimits } from "./workspace-contract";
 import { isExecuting } from "./job-state";
 import { createHash, randomUUID } from "node:crypto";
@@ -81,12 +83,21 @@ export default async function plugin(bb: BbPluginApi) {
     },
   );
   bb.events.on("interaction.pending", ({ thread, interaction }) => {
-    notifications.interaction(thread.id, interaction.id);
+    if (interaction.origin?.kind !== "plugin" || interaction.origin.pluginId !== "bot-teams" || interaction.origin.rendererId !== ATTENTION_QUESTION_RENDERER)
+      notifications.interaction(thread.id, interaction.id);
     runtime.changed();
   });
 
   const automations = new ChannelAutomations(bb, store, runtime);
   const settings = bb.settings.define({
+    attentionNotifications: {
+      type: "boolean", label: "Attention notifications", default: true,
+      description: "Open real BB questions for decisions and blockers. Uses BB's existing phone notifications. The bot's work thread is visible while the question is open; requests also stay in For you.",
+    },
+    replyNotifications: {
+      type: "boolean", label: "Ordinary reply notifications", default: true,
+      description: "Notify for other channel replies. Turn off to receive only attention requests, failures, and questions.",
+    },
     defaultResponseBehavior: {
       type: "select",
       label: "New channel response behavior",
@@ -153,6 +164,7 @@ export default async function plugin(bb: BbPluginApi) {
       default: "gpt-5.6-luna",
     },
   });
+  notifications.preferences = () => settings.get();
   runtime.route = async (
     message,
     room,
@@ -499,7 +511,20 @@ export default async function plugin(bb: BbPluginApi) {
       );
     });
   };
+  const questions = new AttentionQuestions(bb, store,
+    input => sendMessage(rpcContract.send.input.parse(input)), () => runtime.changed());
+  questions.preferences = () => settings.get();
   const handlers: PluginRpcHandlers<typeof rpcContract> = {
+    attentionList: ({ status, limit, offset, channelId }) => {
+      if (store.attention.wake()) runtime.changed();
+      return store.attention.list(status, limit, offset, channelId);
+    },
+    attentionUpdate: ({ id, action, minutes }) => {
+      const value = store.attention.update(id, action, minutes);
+      runtime.changed();
+      return value;
+    },
+    attentionDiscardReply: ({ id }) => questions.discardReply(id),
     channelContext: ({ id }) => runtime.data.context(id),
     saveChannelContext: ({ id, version, ...content }) =>
       runtime.locked(`room:${id}`, async () => {
@@ -602,6 +627,7 @@ export default async function plugin(bb: BbPluginApi) {
       bots: store.all(),
       rooms: store.rooms(),
       activeRoomIds: store.activeRoomIds(),
+      attentionCounts: store.attention.counts(),
       botCreateRequests: store.botCreateRequests().map(botCreateRequestView),
     }),
     create: (input) =>
@@ -1387,9 +1413,21 @@ export default async function plugin(bb: BbPluginApi) {
       }
     },
   });
+  bb.background.service("channel-questions", {
+    async start(signal) {
+      try {
+        while (!signal.aborted) {
+          if (store.attention.wake()) runtime.changed();
+          await questions.tick(signal);
+          try { await delay(1500, undefined, { signal }); } catch { break; }
+        }
+      } finally { await questions.dispose(); }
+    },
+  });
   bb.background.service("channel-notifications", {
     async start(signal) {
       while (!signal.aborted) {
+        if (store.attention.wake()) runtime.changed();
         await notifications.flush(signal);
         try {
           await delay(1500, undefined, { signal });

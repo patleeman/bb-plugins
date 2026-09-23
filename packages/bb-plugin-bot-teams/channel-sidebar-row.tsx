@@ -25,6 +25,7 @@ export function ChannelSidebarRow({
   room,
   selected,
   working,
+  attentionCount = 0,
   pending,
   onOpen,
   onRename,
@@ -35,6 +36,7 @@ export function ChannelSidebarRow({
   room: Room;
   selected: boolean;
   working: boolean;
+  attentionCount?: number;
   pending: boolean;
   onOpen: () => void;
   onRename: () => void;
@@ -68,7 +70,13 @@ export function ChannelSidebarRow({
             aria-current={selected ? "page" : undefined}
             onClick={onOpen}
           >
-            {room.pinned ? (
+            {attentionCount > 0 ? (
+              <span className="channel-needs-attention" role="img"
+                aria-label={`${attentionCount} ${attentionCount === 1 ? "request needs" : "requests need"} your attention`}
+                title={`${attentionCount} ${attentionCount === 1 ? "request needs" : "requests need"} your attention`}>
+                <Icon name="BellDot" />
+              </span>
+            ) : room.pinned ? (
               <Icon name="Pin" />
             ) : (
               <span className="channel-hash" aria-hidden>

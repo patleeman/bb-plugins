@@ -56,7 +56,8 @@
         "agents",
         "collaboration",
         "channels",
-        "automation"
+        "automation",
+        "notifications"
       ],
       "author": {
         "name": "Patrick Lee",

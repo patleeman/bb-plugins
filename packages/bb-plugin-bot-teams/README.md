@@ -377,13 +377,9 @@ The image workflow and chat mode selector below were captured in the running app
 
 ## Notifications
 
-Channel replies, failures, and requests for input use **Settings → Push notifications**, with the same mobile, browser, and desktop switches as regular threads. Replies open their channel message; questions open their work thread. Read or archived channels, system notices, and silent PASS responses do not notify. Events persist across plugin restarts, with duplicate suppression and a 24-hour expiry.
+Decisions and blockers use real BB questions and the existing built-in phone notification sender. Enable **Attention notifications** in **Settings → Bot Teams** and mobile delivery in **Settings → Push notifications**. See **For you** below for the complete flow.
 
-This requires the shared notification source API in BB’s built-in Push notifications plugin (`notifications.enqueue`). Older BB builds keep channel events pending until they expire; installing Bots alone cannot update that built-in plugin. Mobile channel links require the corresponding mobile update; older mobile clients fall back to the backing thread when available.
-
-![A channel message focused after opening its notification](assets/channel-notifications.jpg)
-
-The capture shows the real staged BB application after clicking a channel reply notification.
+Ordinary channel replies and failures use a separate, optional shared notification API (`notifications.enqueue`). The installed BB build does not expose this API, so those events do not produce channel push alerts. This limitation does not affect the native decision and blocker questions.
 
 
 ## Delegation returns
@@ -391,3 +387,39 @@ The capture shows the real staged BB application after clicking a channel reply 
 When a bot directly asks another bot for work through a mention or reply, Bots records the handoff. After every direct delegate settles, the requester receives one synthesis turn with each result, failure, cancellation, or timeout. Separate consultation messages from the same response join one return. Nested handoffs finish their own synthesis first; retries retain their ancestry and renew the wait deadline.
 
 The configured classifier decides whether the exchange contains a work request and substantive results. Acknowledgments and unrelated replies do not wake the requester. Return turns use the existing maximum handoff depth and cannot start another delegation. Cross-channel consultations return to the requesting bot’s original channel and session. The state and deterministic return ID survive reloads. No new tool or CLI command is required: native channel send, `bb bots channel send --reply-to`, and final-answer mentions all use the same runtime.
+
+## For you
+
+Open **For you** in the sidebar to see decisions, blockers, and important updates from all active channels. Each request stays open until you acknowledge it. Reading its channel does not dismiss it. **Reply in channel** opens the original message and selects it as your reply target. **Snooze** hides a request for 1 hour, 4 hours, or 1 day; it returns and becomes eligible for another notification when that time ends. The CLI supports other durations from 1 minute to 30 days.
+
+Open requests highlight their channel message in amber with **Needs you** and an **Acknowledge** action. A bell replaces the channel’s sidebar hash while requests need attention, including when the channel is selected or working. Reading the channel does not clear the bell; acknowledge or snooze does. Historical pings from builds without attention capture show **Mentioned you** without sending old alerts.
+
+Bots can mention `@user` in a final response to request a decision. Mentions inside code, quotes, or links do not create requests. For an immediate alert with a specific reason, use `bots_channel_notify` with `channelId`, `requestId`, `reason` (`decision`, `blocker`, or `update`), and `text`. It posts one message with the caller's identity, creates the inbox item, and does not wake other bots. Reuse the request ID when retrying, and do not repeat the alert in the final answer.
+
+In **Settings → Bot Teams**, **Attention notifications** controls these alerts and **Ordinary reply notifications** controls other replies. Both default to on. Delivery also respects **Settings → Push notifications**. Requests remain in the inbox when push delivery is disabled. Archived channels leave the inbox until restored; deleting a channel deletes its requests.
+
+- `bb bots inbox [--status open|snoozed|acknowledged] [--limit N] [--offset N]`
+- `bb bots attention MESSAGE_ID acknowledge`
+- `bb bots attention MESSAGE_ID snooze --minutes 60`
+- `bb bots attention MESSAGE_ID reopen`
+- `bb bots channel notify CHANNEL --reason blocker --text "The release needs your decision." --request-id UUID`
+
+The notify command runs from an agent or bot thread. Inbox management belongs to the owner. The plugin RPC methods `attentionList` and `attentionUpdate` expose the same inbox operations.
+
+Decisions and blockers open a real BB question in the source work thread. A hidden Bot Teams thread becomes visible while the question is open, then returns to hidden. BB's built-in sender sends its normal phone alert; tapping it opens the question. **Send reply** posts your answer back to the original channel message and acknowledges the request. **Acknowledge** and **Snooze 1 hour** are also available. FYI updates stay in the inbox without creating a question.
+
+Questions wait behind existing input requests. Each question lasts up to 1 hour. Dismissal, timeout, or plugin reload leaves the inbox request open without repeating the same alert. Snooze or **Bring back** creates a fresh reminder. Requests without an available source thread remain in the inbox. BB's normal notification settings and read suppression still apply.
+
+Answers persist before delivery. If sending fails, **For you** shows the answer and error while delivery retries. You can discard that failed reply when it is not being sent. The feature uses the public Plugin SDK and works with the installed BB build; no core or mobile update is required.
+
+![A real channel question in the staged BB application](assets/channel-attention-question.png)
+
+The live capture shows Atlas asking for the ORBIT-42 release date, with reply, acknowledge, and snooze actions.
+
+![For you inbox in the staged BB application](assets/channel-attention.png)
+
+The live capture shows Atlas requesting a release decision in the seeded Attention QA channel.
+
+![Highlighted owner ping and channel attention bell](assets/channel-ping-highlight.png)
+
+The staged channel shows an open ORBIT-42 request and a quoted `@user` example that does not trigger attention.

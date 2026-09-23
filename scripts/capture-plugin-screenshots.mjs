@@ -402,6 +402,63 @@ const threadUrl = `/projects/${projectId}/threads/${threadId}`;
 
 const captures = [
   {
+    id: "bots-ping-highlight",
+    showSidebar: true,
+    packageDir: "bb-plugin-bot-teams",
+    fileName: "channel-ping-highlight.png",
+    setup: async (client) => {
+      const { items } = await pluginRpc("bot-teams", "attentionList", { status: "open" });
+      const request = items.find(item => item.id === "ping-highlight-qa" && item.channelName === "Attention QA");
+      if (!request) throw new Error("Seed the open ORBIT-42 @user ping in Attention QA before capture.");
+      await client.navigate(`/plugins/bot-teams/channels/${request.roomId}/message/${request.id}`);
+      for (const text of ["Needs you", "Should we release on Friday or Monday?", "Acknowledge"]) await client.waitForText(text);
+      await client.evaluate(`(() => {
+        document.querySelector('button[aria-label^="Hide right panel"]')?.click();
+        document.querySelector('button[aria-label^="Toggle sidebar"][aria-expanded="false"]')?.click();
+      })()`);
+      await sleep(350);
+      await client.evaluate(`(() => {
+        const m = document.getElementById('channel-message-ping-highlight-qa');
+        const bell = document.querySelector('.channel-needs-attention[aria-label="1 request needs your attention"]');
+        if (!m?.classList.contains('needs-owner-attention') || !bell?.checkVisibility() || bell.getBoundingClientRect().left < 0) throw new Error('The ping highlight and persistent channel bell must both be visible');
+        if (document.querySelector('[aria-label="Channel conversation"] [role="alert"]')) throw new Error('The staged channel must not contain a live error');
+      })()`);
+    },
+  },
+  {
+    id: "bots-attention-question",
+    packageDir: "bb-plugin-bot-teams",
+    fileName: "channel-attention-question.png",
+    setup: async (client) => {
+      await client.navigate(threadUrl);
+      for (const text of ["Atlas in #Attention QA", "Which day should we release ORBIT-42?", "Your answer", "Send reply", "Snooze 1 hour"]) await client.waitForText(text);
+      await client.evaluate(`(() => {
+        if (!document.querySelector('.attention-question textarea')) throw new Error('The real pending channel question must be open');
+      })()`);
+    },
+  },
+  {
+    id: "bots-attention",
+    packageDir: "bb-plugin-bot-teams",
+    fileName: "channel-attention.png",
+    setup: async (client) => {
+      const { items } = await pluginRpc("bot-teams", "attentionList", { status: "open" });
+      const request = items.find(item => item.channelName === "Attention QA" && item.message.speaker === "Atlas" && item.message.text.includes("ORBIT-42 release for Thursday"));
+      if (!request) throw new Error("Seed Atlas's ORBIT-42 decision request in Attention QA before capture.");
+      await client.navigate("/");
+      await client.waitForText("For you");
+      await client.evaluate(`(() => {
+        const entry = Array.from(document.querySelectorAll('nav button')).find(button => button.textContent.includes('For you'));
+        if (!entry) throw new Error('For you must be available in the real navigation');
+        entry.click();
+      })()`);
+      for (const text of ["Decision needed", "ORBIT-42 release for Thursday", "Reply in channel", "Acknowledge", "Snooze…"]) await client.waitForText(text);
+      await client.evaluate(`(() => {
+        if (!document.querySelector('.attention-inbox') || !location.pathname.endsWith('/for-you')) throw new Error('For you inbox must be rendered');
+      })()`);
+    },
+  },
+  {
     id: "bots-native-tabs",
     packageDir: "bb-plugin-bot-teams",
     fileName: "channel-workbench.png",
@@ -1419,7 +1476,7 @@ try {
       const outputPath = join(repoRoot, "packages", capture.packageDir, "assets", capture.fileName ?? "staged-preview.png");
       // Use BB's real collapsed-sidebar state so publication does not expose
       // unrelated local projects/threads alongside the deterministic fixtures.
-      const privateSidebar = (capture.packageDir === "bb-plugin-bot-teams" && capture.id !== "bots-forks") || capture.id === "spool";
+      const privateSidebar = !capture.showSidebar && ((capture.packageDir === "bb-plugin-bot-teams" && capture.id !== "bots-forks") || capture.id === "spool");
       if (privateSidebar) {
         await client.evaluate(`document.querySelector('button[aria-label^="Toggle sidebar"]')?.click()`);
         await sleep(350);

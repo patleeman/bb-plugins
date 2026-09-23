@@ -26,6 +26,10 @@ type Notice = {
 
 export class ChannelNotifications {
   private retryAt = 0;
+  preferences = async () => ({
+    attentionNotifications: true,
+    replyNotifications: true,
+  });
   constructor(
     private bb: BbPluginApi,
     private store: Store,
@@ -53,10 +57,49 @@ export class ChannelNotifications {
       .get(id) as Notice | undefined;
     if (!n || n.created_at < Date.now() - 86400000) return null;
     const room = this.store.findRoom(n.room_id);
-    if (!room || room.archived || (room.lastReadAt ?? 0) >= n.created_at)
-      return null;
+    if (!room || room.archived) return null;
     const path = `/plugins/bot-teams/channels/${room.id}`;
+    const preferences = await this.preferences();
+    if (n.kind === "attention") {
+      const attention = this.store.attention.get(n.subject_id);
+      if (
+        !preferences.attentionNotifications ||
+        !attention ||
+        attention.status !== "open" ||
+        id !== `attention:${attention.id}:${attention.revision}`
+      )
+        return null;
+      const m = this.store.message(attention.id);
+      if (!m || m.system) return null;
+      const bot = m.botId ? this.store.get(m.botId) : null;
+      if (bot && (bot.retired || !room.memberIds.includes(bot.id))) return null;
+      const threadId =
+        this.store.job(m.id)?.threadId ?? m.sourceThreadId ?? null;
+      const projectId =
+        bot?.projectId ??
+        (threadId
+          ? await this.bb.sdk.threads
+              .get({ threadId, signal })
+              .then((thread) => thread.projectId)
+              .catch((cause) => {
+                if (missingThread(cause)) return null;
+                throw cause;
+              })
+          : null);
+      if (!projectId) return null;
+      return {
+        coalesceKey: `attention:${attention.id}`,
+        title: `#${room.name} needs you · ${m.speaker}`,
+        body: m.text,
+        kind: "turn-finished",
+        threadId,
+        projectId,
+        path: `${path}/message/${encodeURIComponent(m.id)}`,
+      };
+    }
+    if ((room.lastReadAt ?? 0) >= n.created_at) return null;
     if (n.kind === "reply") {
+      if (!preferences.replyNotifications) return null;
       const m = this.store.message(n.subject_id);
       if (!m?.botId || m.system || !room.memberIds.includes(m.botId))
         return null;
@@ -148,7 +191,8 @@ export class ChannelNotifications {
         const requestSignal = signal
           ? AbortSignal.any([signal, deadline])
           : deadline;
-        if (await this.resolve(id, requestSignal))
+        // Decisions and blockers use real BB questions, handled independently of this optional API.
+        if (!id.startsWith("attention:") && await this.resolve(id, requestSignal))
           await this.bb.sdk.plugins.callRpc({
             signal: requestSignal,
             pluginId: "push-notifications",

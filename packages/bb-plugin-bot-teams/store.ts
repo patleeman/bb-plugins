@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile, rename, lstat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
+import { AttentionStore, mentionsOwner } from "./attention";
 import {
   TRANSCRIPT_PAGE_SIZE,
   TRANSCRIPT_WINDOW_SIZE,
@@ -31,6 +32,7 @@ export function newId() {
 }
 export class Store {
   readonly root: string;
+  readonly attention: AttentionStore;
   constructor(readonly db: Database.Database) {
     this.root = join(dirname(db.name), "homes");
     db.exec(`CREATE TABLE IF NOT EXISTS bots (id TEXT PRIMARY KEY, json TEXT NOT NULL);
@@ -62,6 +64,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS messages_by_source_job ON room_messages(room_id,json_extract(json,'$.sourceJobId'));
       CREATE INDEX IF NOT EXISTS messages_by_source ON room_messages(json_extract(json,'$.sourceThreadId'));
       CREATE INDEX IF NOT EXISTS attachments_by_room ON attachments(json_extract(json,'$.roomId'));`);
+    this.attention = new AttentionStore(this);
   }
   all(): Bot[] {
     return (
@@ -349,6 +352,8 @@ export class Store {
         .prepare("DELETE FROM conversations WHERE key=? OR substr(key,1,?)=?")
         .run(`group:${id}`, `group:${id}:`.length, `group:${id}:`);
       this.db.prepare("DELETE FROM room_runs WHERE room_id=?").run(id);
+      this.db.prepare("DELETE FROM channel_attention WHERE room_id=?").run(id);
+      this.db.prepare("DELETE FROM attention_question_replies WHERE room_id=?").run(id);
       this.db.prepare("DELETE FROM room_messages WHERE room_id=?").run(id);
       return (
         this.db.prepare("DELETE FROM rooms WHERE id=?").run(id).changes > 0
@@ -514,9 +519,13 @@ export class Store {
         cursor?.rowid,
       ).reverse();
     }
-    const messages = rows.map((row) =>
-      messageSchema.parse(JSON.parse(row.json)),
-    );
+    const messages = rows.map((row) => {
+      const m = messageSchema.parse(JSON.parse(row.json));
+      const attention = this.attention.get(m.id);
+      delete m.attentionStatus;
+      return { ...m, ...(attention ? { attentionStatus: attention.status } : {}),
+        ownerMention: !!m.botId && !m.system && mentionsOwner(m.text) };
+    });
     const boundary = (operator: string, value: number | undefined) =>
       value !== undefined &&
       !!this.db
@@ -544,7 +553,7 @@ export class Store {
   queueNotification(
     id: string,
     roomId: string,
-    kind: "reply" | "error" | "interaction",
+    kind: "reply" | "error" | "interaction" | "attention",
     subjectId: string,
   ) {
     const room = this.findRoom(roomId);
@@ -563,7 +572,7 @@ export class Store {
         this.db
           .prepare("INSERT OR IGNORE INTO room_messages VALUES (?,?,?)")
           .run(m.id, m.roomId, JSON.stringify(m)).changes > 0;
-      if (inserted && m.botId && !m.system)
+      if (inserted && !this.attention.capture(m) && m.botId && !m.system)
         this.queueNotification(`reply:${m.id}`, m.roomId, "reply", m.id);
       return inserted;
     })();

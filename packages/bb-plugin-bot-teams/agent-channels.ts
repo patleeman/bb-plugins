@@ -1,7 +1,7 @@
 import { isExecuting } from "./job-state";
 import { z } from "zod";
 import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
-import { rpcContract, idSchema } from "./contract";
+import { rpcContract, idSchema, notifyInput, messageSchema } from "./contract";
 import type { Store } from "./store";
 import type { MessageAuthor } from "./runtime";
 
@@ -63,6 +63,23 @@ export function authorizeChannel(
       "This bot must be invited to the channel before accessing it.",
     );
   return author;
+}
+export function notifyOwner(store: Store, input: z.output<typeof notifyInput>, threadId: string) {
+  const author = authorizeChannel(store, threadId, input.channelId);
+  const room = store.room(input.channelId);
+  if (room.archived) throw new Error("Restore the channel before requesting attention.");
+  const id = `notify:${input.requestId}`;
+  const existing = store.message(id);
+  if (existing) {
+    if (existing.roomId !== room.id || existing.text !== input.text || existing.attentionReason !== input.reason ||
+      existing.botId !== author.botId || existing.sourceThreadId !== threadId)
+      throw new Error("This request ID was already used for a different attention request.");
+    return store.attention.view(store.attention.get(id)!);
+  }
+  store.putMessage(messageSchema.parse({ id, roomId: room.id, runId: input.requestId,
+    botId: author.botId, speaker: author.speaker, sourceThreadId: threadId,
+    sourceJobId: author.jobId, text: input.text, attentionReason: input.reason, createdAt: Date.now() }));
+  return store.attention.view(store.attention.get(id)!);
 }
 export function creatorMembers(
   store: Store,
@@ -183,6 +200,16 @@ export function registerChannelTools(
     limit: z.number().int().min(1).max(50).default(20),
     offset: z.number().int().min(0).default(0),
   };
+  tool(
+    "bots_channel_notify",
+    "Request the owner's attention for a decision, blocker, or important update. Creates a persistent For you item. Decisions and blockers also open a real question in your visible BB thread, eligible for built-in phone notifications; updates stay in the inbox. The owner's answer is posted back to the channel. Does not wake bots until the owner replies. Reuse requestId on retries. Do not repeat this message in your final answer. For a final response that needs an answer, use @user instead.",
+    notifyInput,
+    (input, threadId) => {
+      const result = notifyOwner(store, input, threadId);
+      bb.realtime.publish("changed", {});
+      return result;
+    },
+  );
   tool(
     "bots_channels",
     "Discover available bots and channels for a group consultation. Returns IDs, handles, roles, and channel membership. Page with offset.",

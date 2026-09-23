@@ -224,7 +224,12 @@ export const roomSchema = z.object({
   updatedAt: z.number(),
 });
 export type Room = z.infer<typeof roomSchema>;
+export const attentionReason = z.enum(["decision", "blocker", "update"]);
 export const messageSchema = z.object({
+  // Derived from the attention inbox when reading a transcript.
+  attentionStatus: z.enum(["open", "snoozed", "acknowledged"]).optional(),
+  ownerMention: z.boolean().optional(),
+  attentionReason: attentionReason.optional(),
   saved: z.boolean().optional(),
   editedAt: z.number().optional(),
   sentText: z.string().optional(),
@@ -245,6 +250,29 @@ export const messageSchema = z.object({
   createdAt: z.number(),
 });
 export type RoomMessage = z.infer<typeof messageSchema>;
+export const attentionSchema = z.object({
+  id: z.string(),
+  roomId: z.string(),
+  reason: attentionReason,
+  status: z.enum(["open", "snoozed", "acknowledged"]),
+  snoozedUntil: z.number().nullable(),
+  revision: z.number().int(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export const attentionView = attentionSchema.extend({
+  channelName: z.string(),
+  message: messageSchema,
+  pendingReply: z.object({ id: z.string(), text: z.string(), error: z.string().nullable() }).nullable().default(null),
+});
+export type Attention = z.infer<typeof attentionSchema>;
+export type AttentionView = z.infer<typeof attentionView>;
+export const notifyInput = z.object({
+  channelId: z.string().uuid(),
+  requestId: z.string().uuid(),
+  reason: attentionReason,
+  text: z.string().trim().min(1).max(2000),
+});
 /** Scheduled prompts are execution records, not chat messages. */
 export const isAutomationTrigger = (
   message: Pick<RoomMessage, "automationId" | "botId">,
@@ -281,6 +309,32 @@ const roomInput = z.object({
   memberIds: z.array(idSchema).max(16),
 });
 export const rpcContract = defineRpcContract({
+  attentionList: {
+    input: z.object({
+      status: attentionSchema.shape.status.default("open"),
+      channelId: z.string().uuid().optional(),
+      limit: z.number().int().min(1).max(50).default(30),
+      offset: z.number().int().min(0).default(0),
+    }),
+    output: z.object({
+      items: z.array(attentionView),
+      openCount: z.number(),
+      nextOffset: z.number().nullable(),
+    }),
+  },
+  attentionUpdate: {
+    input: z.object({
+      id: z.string().min(1).max(200),
+      action: z.enum(["acknowledge", "snooze", "reopen"]),
+      minutes: z.number().int().min(1).max(43200).optional(),
+    }).refine((v) => v.action === "snooze" ? v.minutes !== undefined : v.minutes === undefined,
+      "Supply minutes only when snoozing."),
+    output: attentionView,
+  },
+  attentionDiscardReply: {
+    input: z.object({ id: z.string().uuid() }),
+    output: z.object({ ok: z.literal(true) }),
+  },
   channelContext: {
     input: z.object({ id: z.string().uuid() }),
     output: channelContext,
@@ -377,6 +431,7 @@ export const rpcContract = defineRpcContract({
       bots: z.array(botSchema),
       rooms: z.array(roomSchema),
       activeRoomIds: z.array(z.string()),
+      attentionCounts: z.record(z.string(), z.number().int().nonnegative()),
       botCreateRequests: z.array(botCreateRequestViewSchema),
     }),
   },

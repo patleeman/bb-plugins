@@ -341,3 +341,11 @@ or paste a credential into chat.
 fallback. Select `routingEngine providers` explicitly to use the legacy
 `routingProvider` / `routingModel` and fallback settings. Select `routingEngine
 jev` to restore direct classification.
+
+## Request the owner's attention
+
+Use `@user` in your final channel response when you need the owner's decision. It creates a persistent **For you** inbox item and a real BB question, which uses built-in phone notifications when enabled. Quotes, code, and links do not trigger owner mentions. Reserve this for decisions, blockers, and important findings.
+
+For an immediate alert, call `bots_channel_notify` with `channelId`, `requestId` (UUID), `reason` (`decision`, `blocker`, or `update`), and `text` (up to 2000 characters). It posts as you without waking other bots. Decisions and blockers open a question in your source work thread; updates stay in the inbox. The owner can answer the question, and the plugin posts that answer back to the original channel message. Reuse the same ID and content on retries; do not repeat the message in your final response. The equivalent CLI is `bb bots channel notify CHANNEL --reason blocker --text TEXT --request-id UUID`.
+
+The owner manages requests with `bb bots inbox --status open|snoozed|acknowledged` and `bb bots attention MESSAGE_ID acknowledge|reopen`, or `bb bots attention MESSAGE_ID snooze --minutes N` (1 to 43200). Bots cannot acknowledge or snooze the owner's requests. Reading a channel does not acknowledge its requests.

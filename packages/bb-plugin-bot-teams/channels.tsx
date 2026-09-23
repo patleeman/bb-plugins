@@ -53,6 +53,7 @@ import {
 import { ProfileForm, WorkList, ErrorMessage, message } from "./bot-ui";
 import { channelWork, channelWorkActivity } from "./channel-work";
 import { ChannelSearch } from "./channel-search";
+import { useAttention, ChannelAttentionBanner, MessageAttention } from "./attention-view";
 import { ChannelSidebarRow } from "./channel-sidebar-row";
 import {
   channelLinkDestination,
@@ -81,10 +82,12 @@ function useRoster(reconcile = false) {
     bots: Bot[];
     rooms: Room[];
     activeRoomIds: string[];
+    attentionCounts: Record<string, number>;
   }>({
     bots: [],
     rooms: [],
     activeRoomIds: [],
+    attentionCounts: {},
   });
   const [error, setError] = useState<string | null>(null);
   const request = useRef(0);
@@ -558,14 +561,16 @@ export function ChannelRedirect({ subPath }: { subPath?: string }) {
 }
 export function ChannelsNavigation(props: ExperimentalSidebarNavigationProps) {
   const [expanded, setExpanded] = useState(false);
+  const { data: attention } = useAttention("open", 1);
+  const inbox = props.items.find(item => item.action.kind === "open-plugin-panel" && item.action.pluginId === "bot-teams" && item.action.panelId === "for-you");
   const channel = props.items.find(
     (item) =>
       item.action.kind === "open-plugin-panel" &&
       item.action.pluginId === "bot-teams" &&
       item.action.panelId === "channels",
   );
-  const rest = props.items.filter((item) => item !== channel);
-  const ordered = channel ? [rest[0]!, channel, ...rest.slice(1)] : rest;
+  const rest = props.items.filter((item) => item !== channel && item !== inbox);
+  const ordered = [rest[0], inbox, channel, ...rest.slice(1)].filter((item): item is typeof props.items[number] => !!item);
   const visible = expanded ? ordered : ordered.slice(0, 10);
   return (
     <nav className="channels-navigation" aria-label="Main navigation">
@@ -600,6 +605,7 @@ export function ChannelsNavigation(props: ExperimentalSidebarNavigationProps) {
           >
             <Icon name={icon} />
             <span>{item === channel ? "New channel" : item.label}</span>
+            {item === inbox && !!attention?.openCount && <span className="attention-count" aria-label={`${attention.openCount} requests need you`}>{attention.openCount}</span>}
           </button>
         );
       })}
@@ -620,7 +626,7 @@ export function ChannelsSidebar({
   onNavigate,
   activeThreadId,
 }: PluginThreadListProps) {
-  const { rooms, activeRoomIds, error } = useRoster(true),
+  const { rooms, activeRoomIds, attentionCounts, error } = useRoster(true),
     rpc = useRpc<typeof rpcContract>(),
     navigate = useBbNavigate();
   const [selected, setSelected] = useState<string | null>(null),
@@ -741,6 +747,7 @@ export function ChannelsSidebar({
             room={r}
             selected={selected === r.id}
             working={activeRoomIds.includes(r.id)}
+            attentionCount={attentionCounts[r.id] ?? 0}
             pending={pending}
             onOpen={() => open(r.id)}
             onRename={() => setRenaming(r)}
@@ -1348,15 +1355,15 @@ export function ChannelsPage({ subPath }: PluginNavPanelProps) {
   let messageId: string | undefined;
   try {
     if (subPath.split("/")[1] === "message")
-      messageId = decodeURIComponent(subPath.split("/").slice(2).join("/"));
+      messageId = decodeURIComponent(subPath.split("/").slice(2, subPath.endsWith("/reply") ? -1 : undefined).join("/"));
   } catch {}
   return id ? (
-    <ChannelChat key={id} id={id} messageId={messageId} />
+    <ChannelChat key={id} id={id} messageId={messageId} replyToMessage={subPath.endsWith("/reply")} />
   ) : (
     <CreateChannel />
   );
 }
-function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
+function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?: string; replyToMessage?: boolean }) {
   const {
       data,
       error,
@@ -1535,13 +1542,17 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
     if (el) {
       el.scrollIntoView({ block: "center" });
       el.focus();
+      if (replyToMessage) {
+        const target = data.messages.find(m => m.id === jumpTarget);
+        if (target) setReply(target);
+      }
       setJumpTarget(null);
     } else
       void loadAround(jumpTarget).catch((e) => {
         setFailure(message(e));
         setJumpTarget(null);
       });
-  }, [jumpTarget, data, loadAround, loadingOlder]);
+  }, [jumpTarget, data, loadAround, loadingOlder, replyToMessage]);
   useEffect(() => {
     const el = transcript.current;
     if (el && atBottom.current && !jumpTarget) el.scrollTop = el.scrollHeight;
@@ -1664,6 +1675,7 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
       )}
       <div className="bot-room-layout">
         <div className="bot-room-main">
+          <ChannelAttentionBanner roomId={id} messageId={messageId} />
           <div
             ref={transcript}
             className="bot-room-messages"
@@ -1736,6 +1748,7 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
                 !previous ? "is-first-message" : "",
                 newDay ? "is-day-start" : "",
                 isUser ? "is-user-message" : "is-bot-message",
+                m.attentionStatus === "open" ? "needs-owner-attention" : "",
               ]
                 .filter(Boolean)
                 .join(" ");
@@ -1895,6 +1908,7 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
                                 </header>
                               )}
                               <div className="bot-message-content">
+                                {(m.attentionStatus || m.ownerMention) && <MessageAttention id={m.id} status={m.attentionStatus} />}
                                 {parent && (
                                   <button
                                     className="bot-message-reference"
