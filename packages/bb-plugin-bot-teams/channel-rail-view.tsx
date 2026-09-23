@@ -2,6 +2,7 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -140,6 +141,9 @@ const usageWorthShowing = (usage: {
 }) =>
   usage.errors > 0 ||
   usage.turns >= Math.max(1, usage.limits.turnsPerDay) * 0.25;
+
+/** Mirrors the container query that switches the card to a full-width sheet. */
+const overlayBelow = 560;
 
 const previewLimit = 4;
 
@@ -393,6 +397,9 @@ export function ChannelRail({
   const rpc = useRpc<typeof rpcContract>();
   const navigate = useBbNavigate();
   const { collapsed, toggle } = useCollapsed();
+  const card = useRef<HTMLElement>(null);
+  // Too narrow for a gutter, the card becomes a sheet over the whole channel.
+  const [overlay, setOverlay] = useState(false);
   const [stopping, setStopping] = useState<string | null>(null);
   const [automationsOpen, setAutomationsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -439,6 +446,24 @@ export function ChannelRail({
     };
   }, [rpc, room.id, signature, messageIds.length]);
 
+  useEffect(() => {
+    const host = card.current?.parentElement;
+    if (!host) return;
+    const observer = new ResizeObserver(([entry]) =>
+      setOverlay(entry!.contentRect.width < overlayBelow),
+    );
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!overlay) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", dismiss);
+    return () => window.removeEventListener("keydown", dismiss);
+  }, [overlay, onClose]);
+
   const stop = async (jobId: string) => {
     setStopping(jobId);
     setError(null);
@@ -457,7 +482,12 @@ export function ChannelRail({
     (attention.data?.items.length ?? 0) + pendingApprovals.length;
 
   return (
-    <aside className="channel-rail" aria-label={`#${room.name} details`}>
+    <aside
+      ref={card}
+      className="channel-rail"
+      data-overlay={overlay ? "" : undefined}
+      aria-label={`#${room.name} details`}
+    >
       <div className="channel-rail-header">
         <Button
           variant="ghost"

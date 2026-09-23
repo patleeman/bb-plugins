@@ -127,8 +127,13 @@ The rail takes no column out of the channel: on a wide channel it lands in
 empty gutter. As the channel narrows the transcript and composer shift left to
 stay clear of it, and the card gives up its own width before it gives up
 theirs. It stays put wherever it fits, including alongside BB's right
-workbench, and stands down only below roughly 440px, where a readable
-transcript leaves no room for it.
+workbench.
+
+Below roughly 560px there is no gutter left, so the card becomes a sheet over
+the whole channel instead. The header's control opens and closes it there like
+anywhere else, and the sheet is dismissed by its close button, that control, or
+Escape. Its own controls stay visible in this mode, since nothing reveals on
+hover on a touch screen.
 
 ## Parallel questions and tasks
 
@@ -221,7 +226,7 @@ Each bot lives at `<BB data directory>/plugins/bot-teams/homes/<bot-id>/`:
 
 **Profile → Workspace** shows the exact path. Document saves detect stale editor versions. Profiles, channel history, reactions, membership, work, and draft uploads live in the plugin’s SQLite database. Sent attachments use BB’s project attachment storage. Back up `plugins/bot-teams` along with BB’s conversation and attachment storage. Migrated installations also retain `plugins/bots/homes`; the new homes path links to it so saved workspace paths stay valid.
 
-Each bot has a DM for each channel, backed by a hidden BB thread. Channel tasks also run in that thread. The first turn receives bounded channel history and saved context. Later turns receive the new request, unseen channel messages, and saved context only when it changes. Previously delivered files are not attached again. Forks have separate DMs and reply histories. **Open DM** shows the native conversation with its messages, tools, approvals, and failures. Typing there sends a DM to the bot; typing in the channel composer sends a channel message. A DM reply stays in the DM unless the bot also posts an answer to the channel. In that case, the channel shows a short tombstone linking to the DM, followed by the answer. The DM text stays in the BB thread. Existing group conversations appear as Channels without losing history; old group links redirect to their channel. Existing private work sessions remain stored and accessible through BB, while the Bot Teams page is for configuration.
+Each bot has a DM for each channel, backed by a hidden BB thread. Channel tasks also run in that thread. The first turn receives bounded channel history and saved context. Later turns receive the new request, unseen channel messages, and saved context only when it changes. Previously delivered files are not attached again. Forks have separate DMs and reply histories. **Open DM** shows the native conversation with its messages, tools, approvals, and failures. Typing there sends a DM to the bot; typing in the channel composer sends a channel message. After a channel task ends, a bot's DM reply stays in the DM unless the bot posts an answer to the channel. A DM sent during an active channel task may be addressed in its final channel answer. When an answer goes to the channel, it shows a short tombstone linking to the DM, followed by the answer. The DM text stays in the BB thread. Existing group conversations appear as Channels without losing history; old group links redirect to their channel. Existing private work sessions remain stored and accessible through BB, while the Bot Teams page is for configuration.
 
 Channels initially load 200 messages. **Load earlier messages** pages through the retained transcript. **Search channel** searches all stored message text and names; selecting a result or an older reply reference loads and focuses its message. This is a single-owner local feature. Bots use BB’s configured providers, credentials, tools, and skills on the primary machine. Separate directories provide persistent storage, not separate accounts. Shared `MEMORY.md` should contain only information appropriate for every channel the bot joins.
 

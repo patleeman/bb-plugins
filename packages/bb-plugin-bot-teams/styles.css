@@ -2242,37 +2242,6 @@
   max-height: 320px;
   object-fit: contain;
 }
-.group-attachments-draft {
-  margin: 8px 10px 0;
-  gap: 8px;
-}
-.group-attachments-draft .channel-image img {
-  width: auto;
-  max-width: 160px;
-  height: 96px;
-  object-fit: contain;
-}
-.channel-attachment-remove {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-.channel-image .channel-attachment-remove {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  color: var(--foreground);
-  background: var(--popover);
-  border: 1px solid var(--border);
-}
-.channel-attachment-remove svg {
-  width: 14px;
-  height: 14px;
-}
 .channel-image-viewer {
   position: fixed;
   z-index: 102;
@@ -3052,13 +3021,39 @@
     padding-right: 200px;
   }
 }
-/* Only when the transcript would be squeezed to nothing does the rail go. */
-@container channel (max-width: 440px) {
+/*
+ * Too narrow for a gutter. Rather than leave the header's toggle pressed but
+ * inert, the card becomes a sheet over the whole channel, dismissed by its own
+ * close control, the toggle, or Escape.
+ */
+@container channel (max-width: 560px) {
   .channel-rail {
-    display: none;
+    inset: 0;
+    width: auto;
+    max-height: none;
+    padding: 4px;
+    border: 0;
+    border-radius: 0;
+    background: var(--background);
+    backdrop-filter: none;
   }
   .bot-room[data-rail="open"] .bot-room-main {
     padding-right: 0;
+  }
+  /* Nothing hover-reveals on a touch screen. */
+  .channel-rail .channel-rail-close,
+  .channel-rail .channel-rail-chevron,
+  .channel-rail-stop,
+  .channel-rail-automation > button:not(.channel-rail-row),
+  .channel-rail-section-header > button:not(.channel-rail-section-toggle) {
+    opacity: 0.7;
+  }
+  .channel-rail-header {
+    height: 24px;
+  }
+  .channel-rail-close {
+    width: 24px;
+    height: 24px;
   }
 }
 /* No panel title: the section labels already say what each group is. */
