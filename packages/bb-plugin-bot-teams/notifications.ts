@@ -97,6 +97,29 @@ export class ChannelNotifications {
         path: `${path}/message/${encodeURIComponent(m.id)}`,
       };
     }
+    if (n.kind === "timeout") {
+      const job = this.store.job(n.subject_id);
+      if (
+        !job?.timedOut ||
+        job.status !== "cancelled" ||
+        job.roomId !== room.id ||
+        !room.memberIds.includes(job.botId)
+      )
+        return null;
+      const bot = this.store.get(job.botId);
+      if (bot.retired) return null;
+      return {
+        coalesceKey: `timeout:${job.id}`,
+        title: `#${room.name} · ${bot.name} needs a check-in`,
+        body: job.activitySnippet
+          ? `Stopped before final report. Last progress: ${job.activitySnippet}`
+          : job.error ?? "The response timed out.",
+        kind: "thread-error",
+        threadId: job.threadId,
+        projectId: bot.projectId,
+        path: `${path}/message/${encodeURIComponent(`system:timeout:${job.id}`)}`,
+      };
+    }
     if ((room.lastReadAt ?? 0) >= n.created_at) return null;
     if (n.kind === "reply") {
       if (!preferences.replyNotifications) return null;

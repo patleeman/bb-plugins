@@ -49,51 +49,117 @@ const defaults: ProfileInput = {
   permissionMode: "auto",
   intervalMinutes: 0,
 };
-function ConfigRow({
+export function FormRow({
   label,
   htmlFor,
   hint,
   children,
+  className = "",
 }: {
   label: string;
   htmlFor?: string;
   hint?: string;
   children: ReactNode;
+  className?: string;
 }) {
   return (
-    <div className="bot-config-row">
+    <div className={`bot-form-row ${className}`}>
       {htmlFor ? (
         <label htmlFor={htmlFor}>{label}</label>
       ) : (
-        <div className="bot-config-label">{label}</div>
+        <div className="bot-form-row-label">{label}</div>
       )}
-      <div className="min-w-0">
+      <div className="bot-form-row-control">
         {children}
-        {hint && (
-          <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
-            {hint}
-          </p>
-        )}
+        {hint && <p className="bot-form-row-hint">{hint}</p>}
       </div>
     </div>
   );
 }
-function ConfigSection({
+
+export function Section({
   title,
   children,
+  className = "",
 }: {
   title: string;
   children: ReactNode;
+  className?: string;
 }) {
   return (
-    <section className="space-y-2">
-      <h2 className="text-sm font-medium leading-5 text-muted-foreground">
-        {title}
-      </h2>
-      <div className="overflow-hidden rounded-md border border-border bg-card divide-y divide-border">
-        {children}
-      </div>
+    <section className={`bot-ui-section ${className}`}>
+      <h2 className="bot-ui-section-title">{title}</h2>
+      <div className="bot-ui-section-content">{children}</div>
     </section>
+  );
+}
+
+export function EmptyState({
+  title,
+  description,
+  action,
+  role,
+}: {
+  title: string;
+  description?: string;
+  action?: ReactNode;
+  role?: "status";
+}) {
+  return (
+    <div className="bot-empty-state" role={role}>
+      <p>{title}</p>
+      {description && <p className="bot-empty-state-description">{description}</p>}
+      {action}
+    </div>
+  );
+}
+
+export type StatusKind = "ready" | "working" | "paused" | "error";
+export function StatusBadge({
+  status,
+  label,
+}: {
+  status: StatusKind;
+  label?: string;
+}) {
+  const labels: Record<StatusKind, string> = {
+    ready: "Ready",
+    working: "Working",
+    paused: "Paused",
+    error: "Error",
+  };
+  return (
+    <span className="bot-status-badge" data-status={status}>
+      <span className="bot-status-badge-dot" aria-hidden="true" />
+      {label ?? labels[status]}
+    </span>
+  );
+}
+
+export function ActionBar({
+  status,
+  secondary,
+  primary,
+  className = "",
+}: {
+  status?: ReactNode;
+  secondary?: ReactNode;
+  primary?: ReactNode;
+  className?: string;
+}) {
+  if (!status && !secondary && !primary) return null;
+  return (
+    <div className={`bot-action-bar ${className}`}>
+      <div className="bot-action-bar-start">
+        {status && (
+          <span className="bot-action-bar-status" role="status">
+            {status}
+          </span>
+        )}
+        {secondary && <div className="bot-action-bar-secondary">{secondary}</div>}
+      </div>
+      {primary && <div className="bot-action-bar-primary">{primary}</div>}
+    </div>
   );
 }
 export function ErrorMessage({ error }: { error: string | null }) {
@@ -107,9 +173,11 @@ export function ErrorMessage({ error }: { error: string | null }) {
 export function ProfileForm({
   bot,
   onSaved,
+  onRetire,
 }: {
   bot: Bot;
   onSaved: (bot: Bot) => void | Promise<void>;
+  onRetire?: () => void;
 }) {
   const rpc = useRpc<typeof rpcContract>();
   const draftKey = `bb:bots:profile:${bot.id}`;
@@ -207,18 +275,19 @@ export function ProfileForm({
       aria-label="Bot profile"
     >
       <fieldset disabled={pending} className="min-w-0 space-y-5 border-0 p-0">
-        <ConfigSection title="Identity">
-          <ConfigRow label="Name" htmlFor={`${id}-name`}>
+        <Section title="Identity">
+          <FormRow label="Name" htmlFor={`${id}-name`}>
             <Input
               id={`${id}-name`}
               aria-label="Bot name"
               required
               maxLength={80}
               value={draft.name}
+              className="max-w-[360px]"
               onChange={(e) => set("name", e.target.value)}
             />
-          </ConfigRow>
-          <ConfigRow label="Avatar" htmlFor={`${id}-avatar`}>
+          </FormRow>
+          <FormRow label="Avatar" htmlFor={`${id}-avatar`}>
             <Input
               id={`${id}-avatar`}
               aria-label="Avatar"
@@ -227,8 +296,8 @@ export function ProfileForm({
               value={draft.avatar}
               onChange={(e) => set("avatar", e.target.value)}
             />
-          </ConfigRow>
-          <ConfigRow label="Role" htmlFor={`${id}-role`}>
+          </FormRow>
+          <FormRow label="Role" htmlFor={`${id}-role`}>
             <Input
               id={`${id}-role`}
               aria-label="Bot role"
@@ -237,13 +306,13 @@ export function ProfileForm({
               onChange={(e) => set("description", e.target.value)}
               placeholder="What this bot is responsible for"
             />
-          </ConfigRow>
-        </ConfigSection>
-        <ConfigSection title="Behavior">
-          <ConfigRow label="Model">
+          </FormRow>
+        </Section>
+        <Section title="Behavior">
+          <FormRow label="Model">
             <ProviderModelPicker
               disabled={pending}
-              className="h-9 max-w-full justify-start"
+              className="profile-picker-control max-w-[360px]"
               allowProviderChange={false}
               value={{
                 providerId: draft.providerId,
@@ -256,19 +325,19 @@ export function ProfileForm({
               }}
               routing={{ kind: "host", hostId: bot.hostId }}
             />
-          </ConfigRow>
-          <ConfigRow label="Permissions">
+          </FormRow>
+          <FormRow label="Permissions">
             <PermissionModePicker
               disabled={pending}
-              className="h-9 max-w-full justify-start"
+              className="profile-picker-control max-w-[360px]"
               align="start"
               providerId={draft.providerId}
               value={draft.permissionMode}
               onChange={(v) => set("permissionMode", v)}
               routing={{ kind: "host", hostId: bot.hostId }}
             />
-          </ConfigRow>
-          <ConfigRow
+          </FormRow>
+          <FormRow
             label="Mission schedule"
             htmlFor={`${id}-schedule`}
             hint="Channel replies are always available. Scheduled work follows the mission's pause setting."
@@ -281,6 +350,7 @@ export function ProfileForm({
               <SelectTrigger
                 id={`${id}-schedule`}
                 aria-label="Mission schedule"
+                className="profile-picker-control max-w-[360px]"
               >
                 <SelectValue />
               </SelectTrigger>
@@ -299,8 +369,8 @@ export function ProfileForm({
                 )}
               </SelectContent>
             </Select>
-          </ConfigRow>
-        </ConfigSection>
+          </FormRow>
+        </Section>
       </fieldset>
       <ErrorMessage error={error} />
       {conflict && (
@@ -321,33 +391,58 @@ export function ProfileForm({
           </Button>
         </div>
       )}
-      <div className="flex min-h-8 flex-wrap items-center justify-end gap-2">
-        <span role="status" className="mr-auto text-xs text-muted-foreground">
-          {pending
+      <ActionBar
+        status={
+          pending
             ? "Saving…"
             : dirty
               ? "Unsaved changes · draft saved"
               : saved
                 ? "Saved"
-                : ""}
-        </span>
-        <Button
-          size="sm"
-          disabled={pending || conflict || !draft.name.trim() || !dirty}
-        >
-          {pending ? "Saving…" : "Save profile"}
-        </Button>
-      </div>
-      <details className="bot-config-workspace">
-        <summary className="cursor-pointer text-sm text-muted-foreground">
-          Workspace
-        </summary>
-        <p className="bot-path">{bot.home}</p>
-        <p className="text-xs leading-5 text-muted-foreground">
-          MISSION.md, MEMORY.md, and working files live here and persist
-          across conversations and BB restarts.
-        </p>
-      </details>
+                : ""
+        }
+        primary={dirty || pending ? (
+          <Button
+            size="sm"
+            disabled={pending || conflict || !draft.name.trim() || !dirty}
+          >
+            {pending ? "Saving…" : "Save profile"}
+          </Button>
+        ) : undefined}
+      />
+      {bot && (
+        <details className="bot-config-workspace">
+          <summary className="cursor-pointer text-sm text-muted-foreground">
+            Workspace
+          </summary>
+          <p className="bot-path">{bot.home}</p>
+          <p className="text-xs leading-5 text-muted-foreground">
+            MISSION.md, MEMORY.md, and working files live here and persist
+            across conversations and BB restarts.
+          </p>
+        </details>
+      )}
+      {bot && onRetire && (
+        <Section title="Danger zone" className="bot-danger-zone">
+          <div className="bot-danger-zone-content">
+            <p>
+              {bot.retired
+                ? "This bot is retired. Restore it to make it available again."
+                : "Retiring stops this bot and removes it from every channel. Its workspace and history are preserved."}
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              variant={bot.retired ? "outline" : "destructive"}
+              className={bot.retired ? undefined : "bot-retire-button"}
+              disabled={pending}
+              onClick={onRetire}
+            >
+              {bot.retired ? "Restore bot" : "Retire bot"}
+            </Button>
+          </div>
+        </Section>
+      )}
     </form>
   );
 }
@@ -484,46 +579,49 @@ export function DocumentEditor({
             : error
         }
       />
-      <div className="bot-document-actions">
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={pending}
-          onClick={() => {
-            if (dirty) setReloading(true);
-            else load();
-          }}
-        >
-          <Icon name="RotateCcw" /> Reload file
-        </Button>
-        <span
-          role="status"
-          className="bot-document-status text-xs text-muted-foreground"
-        >
-          {pending
+      <ActionBar
+        status={
+          pending
             ? operation
             : dirty
               ? "Unsaved changes · draft saved"
               : saved
                 ? "Saved"
-                : ""}
-        </span>
-        <Button
-          size="sm"
-          disabled={!doc || pending || !dirty || remoteConflict || tooLong}
-          onClick={save}
-        >
-          Save {file === "MISSION.md" ? "mission" : "memory"}
-        </Button>
-      </div>
-      <Button
-        className="self-start"
-        size="sm"
-        variant="ghost"
-        onClick={() => void loadHistory()}
-      >
-        Version history
-      </Button>
+                : ""
+        }
+        secondary={
+          <>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => {
+                if (dirty) setReloading(true);
+                else load();
+              }}
+            >
+              <Icon name="RotateCcw" /> Reload
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={historyPending}
+              onClick={() => void loadHistory()}
+            >
+              Version history
+            </Button>
+          </>
+        }
+        primary={dirty || pending ? (
+          <Button
+            size="sm"
+            disabled={!doc || pending || !dirty || remoteConflict || tooLong}
+            onClick={save}
+          >
+            {pending ? "Saving…" : `Save ${file === "MISSION.md" ? "mission" : "memory"}`}
+          </Button>
+        ) : undefined}
+      />
       {revisions && (
         <RevisionList
           revisions={revisions}
@@ -629,75 +727,80 @@ export function WorkList({
   onCancel: (id: string) => void;
 }) {
   const navigate = useBbNavigate();
+  if (!jobs.length) return <EmptyState title="No activity yet" />;
   return (
     <div className="bot-work-list">
-      {!jobs.length ? (
-        <p className="bot-help">No activity yet.</p>
-      ) : (
-        jobs.map((j) => (
-          <article key={j.id}>
-            <span
-              className={`bot-presence-dot state-${j.status}`}
-              aria-hidden
-            />
-            <div>
-              <strong>
-                {bots.find((b) => b.id === j.botId)?.name ?? "Bot"}
-              </strong>
-              <span className="bot-help">
-                {j.status === "running"
-                  ? j.startedAt
-                    ? "Working"
-                    : "Waiting to start"
-                  : j.status === "done"
-                    ? "Finished"
-                    : j.status === "queued"
-                      ? "Waiting"
-                      : j.status}
-              </span>
-              {j.taskTitle && (
+      {jobs.map((job) => {
+        const bot = bots.find((candidate) => candidate.id === job.botId);
+        const isActive = ["queued", "dispatching", "running"].includes(job.status);
+        const isFork = isForkConversation(job.conversationKey);
+        const status =
+          job.status === "error"
+            ? { kind: "error" as const, label: "Failed" }
+            : job.status === "done"
+              ? { kind: "ready" as const, label: "Finished" }
+              : job.status === "cancelled"
+                ? { kind: "paused" as const, label: "Cancelled" }
+                : { kind: "working" as const, label: job.status === "queued" ? "Queued" : job.status === "dispatching" ? "Starting" : job.startedAt ? "Working" : "Waiting" };
+        return (
+          <article className="bot-work-row" key={job.id}>
+            <div className="bot-work-row-main">
+              <div className="bot-work-row-heading">
+                <strong>{bot?.name ?? "Bot"}</strong>
+                <StatusBadge status={status.kind} label={status.label} />
+                <time>
+                  {new Intl.DateTimeFormat(undefined, {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  }).format(job.updatedAt || job.createdAt)}
+                </time>
+              </div>
+              {(job.taskTitle || job.text) && (
                 <button
-                  className="bot-message-reference"
-                  disabled={!onJump || !j.triggerMessageId}
+                  className="bot-work-row-title"
+                  disabled={!onJump || !job.triggerMessageId}
                   onClick={() =>
-                    j.triggerMessageId && onJump?.(j.triggerMessageId)
+                    job.triggerMessageId && onJump?.(job.triggerMessageId)
                   }
                 >
-                  {j.taskTitle}
+                  {job.taskTitle || job.text}
                 </button>
               )}
-              <span className="text-xs text-muted-foreground">
-                {isForkConversation(j.conversationKey) ? "Fork" : "Primary"}
-                {j.queuePosition ? ` · Queue ${j.queuePosition}` : ""}
-              </span>
-              {j.queueReason && (
-                <p className="text-xs text-muted-foreground">{j.queueReason}</p>
+              {(isFork || job.queuePosition || job.queueReason) && (
+                <div className="bot-work-row-meta">
+                  {isFork && <span>Fork</span>}
+                  {job.queuePosition && <span>Queue {job.queuePosition}</span>}
+                  {job.queueReason && <span>{job.queueReason}</span>}
+                </div>
               )}
-              {j.error && <ErrorMessage error={j.error} />}
-              <time>
-                {new Intl.DateTimeFormat(undefined, {
-                  dateStyle: "short",
-                  timeStyle: "short",
-                }).format(j.createdAt)}
-              </time>
+              {job.error && <ErrorMessage error={job.error} />}
             </div>
-            {j.threadId && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => navigate.toThread(j.threadId!)}
-              >
-                View work
-              </Button>
-            )}
-            {["queued", "running", "dispatching"].includes(j.status) && (
-              <Button variant="ghost" size="sm" onClick={() => onCancel(j.id)}>
-                Stop
-              </Button>
+            {(job.threadId || isActive) && (
+              <div className="bot-work-row-actions">
+                {job.threadId && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => navigate.toThread(job.threadId!)}
+                  >
+                    View work
+                  </Button>
+                )}
+                {isActive && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={job.cancellationPending}
+                    onClick={() => onCancel(job.id)}
+                  >
+                    {job.cancellationPending ? "Stopping…" : "Stop"}
+                  </Button>
+                )}
+              </div>
             )}
           </article>
-        ))
-      )}
+        );
+      })}
     </div>
   );
 }

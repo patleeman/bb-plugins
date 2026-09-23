@@ -62,6 +62,11 @@ export const botSchema = profileInput.extend({
   error: z.string().nullable(),
 });
 export type Bot = z.infer<typeof botSchema>;
+export const botListItemSchema = botSchema.extend({
+  working: z.boolean(),
+  lastActivityAt: z.number().nullable(),
+});
+export type BotListItem = z.infer<typeof botListItemSchema>;
 export type ProfileInput = z.infer<typeof profileInput>;
 export const botCreateInput = profileInput.extend({
   mission: z.string().min(1).max(64000),
@@ -148,6 +153,7 @@ export const jobSchema = z.object({
   delegationId: z.string().optional(),
   returnOf: z.string().optional(),
   timedOut: z.boolean().optional(),
+  timeoutNoticePending: z.boolean().optional(),
   taskTitle: z.string().optional(),
   queueReason: z.string().optional(),
   queuePosition: z.number().optional(),
@@ -157,6 +163,7 @@ export const jobSchema = z.object({
   pendingSteer: z
     .object({ priorPrompt: z.string(), attemptedAt: z.number().optional() })
     .optional(),
+  wrapUpRequestedAt: z.number().optional(),
   automationId: z.string().optional(),
   id: z.string(),
   botId: idSchema,
@@ -242,7 +249,7 @@ export const messageSchema = z.object({
   runId: z.string(),
   botId: idSchema.nullable(),
   speaker: z.string(),
-  system: z.enum(["bot_joined"]).optional(),
+  system: z.enum(["bot_joined", "bot_timeout"]).optional(),
   sourceThreadId: z.string().optional(),
   sourceJobId: z.string().optional(),
   replyTo: z.string().nullable().default(null),
@@ -433,7 +440,7 @@ export const rpcContract = defineRpcContract({
   list: {
     input: z.null(),
     output: z.object({
-      bots: z.array(botSchema),
+      bots: z.array(botListItemSchema),
       rooms: z.array(roomSchema),
       activeRoomIds: z.array(z.string()),
       attentionCounts: z.record(z.string(), z.number().int().nonnegative()),
