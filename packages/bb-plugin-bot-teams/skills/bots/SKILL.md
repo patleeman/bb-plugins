@@ -188,7 +188,7 @@ bb bots channel automation 'Release planning' AUTOMATION_ID run --request-id UUI
 bb bots channel automation 'Release planning' AUTOMATION_ID delete --yes --json
 ```
 
-Channel options → **Automations** lists schedules and offers Pause/Resume, Run now,
+The **Automations** workbench tab lists schedules and offers Pause/Resume, Run now,
 Run history, and Delete. Ask the bot to edit its task or schedule. These are real
 BB Automations in the Bots project, backed by a fixed script that queues channel
 work. Run history records **dispatch**, while channel Activity records the bot's

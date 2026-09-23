@@ -56,14 +56,16 @@ The composer uses BB’s native surface, spacing, and button conventions. Type `
 
 PNG, JPEG, GIF, and WebP images appear as composer previews and inline in sent messages, including images pasted with text. Click an image to expand it and download the original. Other file types stay downloadable. Image bytes are checked before inline display; SVG and HTML remain downloads. Bots use `bots_publish_image` (or `bb bots publish-image`) with an absolute path inside their workspace to add up to ten images to their current final response. This publishes one message containing text and images, or images alone with `[PASS]`; cancelled or failed responses do not post images.
 
-Use the archive button beside search to switch between active and archived channels. The icon changes to a list in the archived view, and the heading shows the current view. Search finds channels in both views and labels archived results. Clearing or closing search returns to the selected view. Right-click a channel for **Rename**, **Archive**, or **Delete**; archived channels offer **Restore** and **Delete**. Keyboard users can open this menu with Shift+F10. The channel menu in the header also contains activity, rename, pin, archive, and delete actions. **Automations** and **Activity** open in a channel workbench beside the transcript instead of hiding the conversation behind a modal. Archiving cancels unfinished work and preserves history; restoring makes the channel available again. Deletion requires confirmation, stops unfinished responses, and permanently removes channel messages, reactions, membership, activity, and draft uploads. Bot profiles, workspaces, and other channels are kept. Existing BB work threads and sent files in BB's project storage remain under BB's own retention. Removing a bot cancels its pending channel work and preserves its messages and reactions. Channels support up to 16 bots.
+Use the archive button beside search to switch between active and archived channels. The icon changes to a list in the archived view, and the heading shows the current view. Search finds channels in both views and labels archived results. Clearing or closing search returns to the selected view. Right-click a channel for **Rename**, **Archive**, or **Delete**; archived channels offer **Restore** and **Delete**. Keyboard users can open this menu with Shift+F10. The channel menu in the header contains rename, pin, archive, and delete actions. **Automations** and **Activity** open as separate tabs in BB’s right workbench. Archiving cancels unfinished work and preserves history; restoring makes the channel available again. Deletion requires confirmation, stops unfinished responses, and permanently removes channel messages, reactions, membership, activity, and draft uploads. Bot profiles, workspaces, and other channels are kept. Existing BB work threads and sent files in BB's project storage remain under BB's own retention. Removing a bot cancels its pending channel work and preserves its messages and reactions. Channels support up to 16 bots.
 
 BB’s **Settings → Appearance** can select sidebar providers. **Channels and threads** preserves BB’s normal thread list below Channels; **Channels navigation** adds New channel alongside New thread.
 
 ## Channel workspace
 
-**Channel options** opens context, files, saved decisions, usage, automations, or
-activity beside the conversation.
+Context, files, saved decisions, usage, automations, and activity have separate
+tabs in BB’s right workbench. Use **Show right panel** to open the workbench. The labeled tabs share its
+resize, collapse, and split controls with Browser and Terminal. On compact screens, BB opens them in
+its workbench drawer.
 
 - **Channel context** holds the owner’s brief, decisions, channel-specific memory,
   and up to ten sent reference files. Bots receive it on their next task and can
@@ -137,7 +139,7 @@ this channel.” The bot can create a recurring schedule or a one-time reminder
 for itself. Each run reads the latest channel context, mission, and memory, and
 posts its answer in the same channel using its current model and permissions.
 
-Open **Channel options → Automations** to create or edit a task with weekday, daily,
+Open the **Automations** workbench tab to create or edit a task with weekday, daily,
 hourly, one-time, or custom schedules. New schedules start paused unless enabled.
 Review tasks, pause/resume schedules, run them now, view run history, or delete them. Native tools infer the active bot and channel; top-level agents supply
 both IDs. Bots can manage only their own schedules in channels they belong to.
@@ -306,14 +308,13 @@ The renamed Bot Teams collection in BB, filtered to the staged Atlas research
 bot. Atlas has mission schedules off; the capture restores its prior retirement
 state afterward.
 
-![Channel context, reference files, and published report](assets/channel-workbench.png)
+![Channel context and six native workbench tabs](assets/channel-workbench.png)
 
-The running BB application shows the staged ORBIT-42 release conversation, a CSV
-published by a real bot, completed scheduled responses, and the channel brief,
-decisions, memory, and retained reference file. The capture also checks context
-history, Files, Saved decisions, usage limits, schedule editing/results, and the
-390-pixel layout. See [verification notes](docs/QA.md).
-
+The running BB application shows a staged ORBIT-42 release brief and saved
+SQLite decision, with six labeled tabs in the native right workbench. The
+capture uses temporary channels with no member bots and removes them afterward.
+The UI regression also checks drafts, channel switching, reopening the panel,
+and the 390-pixel layout. See [verification notes](docs/QA.md).
 
 ![Parallel questions and send modes](assets/channel-forks.png)
 

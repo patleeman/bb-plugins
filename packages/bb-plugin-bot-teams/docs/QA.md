@@ -437,6 +437,38 @@ excluded from this fix's commit.
 - Repeat the browser regression with an open Browser Automation session and the staged fixture described in `scripts/qa-bot-teams-transcript.mjs`: `BB_TRANSCRIPT_QA_SESSION=<session> BB_TRANSCRIPT_QA_CHANNEL=<fixture-uuid> node scripts/qa-bot-teams-transcript.mjs`. The script refuses channels with bots, another name, or an archived state; it sends only to the empty test channel. Restore the archived fixture before rerunning.
 - All **213 tests**, package typecheck/build, and focused read-only review pass. New regressions cover bounded bidirectional windows, associated-data eviction, direct seeks, cross-channel/hidden/missing cursor rejection, historical refreshes, reactions, and indexed query plans.
 
+## Native channel workbench — 22 September 2026
+
+Context, files, saved decisions, activity, automations, and usage each have a
+labeled native tab. A lifecycle-managed content script reveals BB’s existing
+tab labels because BB currently replaces every plugin tab icon with the same
+branding icon. BB retains tab selection, resizing, splits, and the mobile drawer.
+
+The live UI regression verifies all six tabs, opening with Show right panel,
+a channel menu containing only management actions, selection when closing/reopening
+the panel, local context drafts, channel
+switching, the 390px mobile layout, and saved-message and automation-response
+navigation, including jumps to the message already in the URL. A simulated
+completed automation run checks drawer dismissal without
+creating a schedule or dispatching bot work. Current BB
+resets these fixed tabs to the first tab on a full page reload.
+
+```sh
+BB_WORKBENCH_QA_SESSION=<browser-automation-session> \
+BB_WORKBENCH_QA_ORIGIN=http://127.0.0.1:38886 \
+node scripts/qa-bot-teams-workbench.mjs
+```
+
+The script creates two temporary channels without member bots, seeds a release
+brief and saved decision, then deletes its fixtures. It never requests bot work.
+Set `BB_WORKBENCH_QA_CAPTURE=1` and the normal `BB_CAPTURE_PROJECT_ID` /
+`BB_CAPTURE_THREAD_ID` variables to run the `bots-native-tabs` capture definition.
+The README screenshot shows that ORBIT-42 brief and saved decision in the full
+BB UI with six labeled workbench tabs.
+
+Plugin build, TypeScript checks, marketplace schema/index checks, and focused
+read-only review passed.
+
 ## Channel archive discovery — 22 September 2026
 
 Replaced the hidden Channels-heading toggle with an archive icon beside search.

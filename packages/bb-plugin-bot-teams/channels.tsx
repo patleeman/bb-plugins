@@ -29,6 +29,7 @@ import {
   useRpc,
   Markdown,
   experimental_Icon as Icon,
+  type PluginFixedTabRegistration,
   type PluginNavPanelProps,
   type PluginThreadListProps,
   type ExperimentalSidebarNavigationProps,
@@ -894,6 +895,79 @@ function stateFor(bot: Bot, data: ChannelData) {
         ? "Needs attention"
         : "Idle";
 }
+// BB owns tab selection, persistence, resizing, splits, and the compact drawer.
+export const channelWorkbenchTabs: PluginFixedTabRegistration[] = (
+  ["context", "files", "saved", "activity", "automations", "usage"] as const
+).map((panel) => ({
+  id: panel,
+  panelId: "channels",
+  title: workbenchLabels[panel],
+  icon: {
+    context: "NotebookPen",
+    files: "Files",
+    saved: "Bookmark",
+    activity: "Activity",
+    automations: "Clock",
+    usage: "ChartNoAxesCombined",
+  }[panel],
+  layout: "flush",
+  component: function ChannelWorkbenchTab({ subPath }) {
+    const id = channelId(subPath);
+    return id ? (
+      <ChannelWorkbench key={id} id={id} panel={panel} />
+    ) : (
+      <p className="p-4 text-sm text-muted-foreground">Open a channel to see its details.</p>
+    );
+  },
+}));
+
+function ChannelWorkbench({ id, panel }: { id: string; panel: WorkbenchPanel }) {
+  const { data, error } = useChannel(id, panel === "activity");
+  const { bots } = useRoster();
+  const rpc = useRpc<typeof rpcContract>();
+  const navigate = useBbNavigate();
+  const [failure, setFailure] = useState<string | null>(null);
+  const jump = (messageId: string) => {
+    navigate.toPluginPanel("channels", {
+      subPath: `${id}/message/${encodeURIComponent(messageId)}`,
+    });
+    window.dispatchEvent(new CustomEvent("bb:bots:jump", { detail: { roomId: id, messageId } }));
+  };
+  return (
+    <section className="channel-workbench" data-channel-id={id} aria-label={workbenchLabels[panel]}>
+      <ErrorMessage error={failure || error} />
+      {!data ? (
+        !error && <p role="status">Loading channel…</p>
+      ) : panel === "context" ? (
+        <ContextPanel id={id} />
+      ) : panel === "files" ? (
+        <FilesPanel id={id} />
+      ) : panel === "usage" ? (
+        <UsagePanel id={id} kind="channel" />
+      ) : panel === "saved" ? (
+        <SavedPanel id={id} onJump={jump} />
+      ) : panel === "automations" ? (
+        <ChannelAutomationsView
+          id={id}
+          bots={bots.filter((b) => data.room.memberIds.includes(b.id))}
+          open
+          onOpenChange={() => {}}
+          presentation="panel"
+        />
+      ) : (
+        <WorkList
+          jobs={data.jobs}
+          bots={bots}
+          onJump={jump}
+          onCancel={(jobId) =>
+            void rpc.call("cancelJob", { id: jobId }).catch((e) => setFailure(message(e)))
+          }
+        />
+      )}
+    </section>
+  );
+}
+
 function NewBot({
   room,
   open,
@@ -964,14 +1038,6 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
     } finally {
       setPending(false);
     }
-  };
-  const openWorkbench = (panel: WorkbenchPanel) => {
-    setOptionsOpen(false);
-    window.dispatchEvent(
-      new CustomEvent("bots:channel-workbench", {
-        detail: { roomId: room.id, panel },
-      }),
-    );
   };
   const removeBot = (botId: string) =>
     void act(async () => {
@@ -1135,28 +1201,6 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
           </Button>
         }
       >
-        {(["context", "files", "saved", "usage"] as const).map((panel) => (
-          <button
-            className="channel-menu-row"
-            key={panel}
-            onClick={() => openWorkbench(panel)}
-          >
-            {workbenchLabels[panel]}
-          </button>
-        ))}
-        <button
-          className="channel-menu-row"
-          onClick={() => openWorkbench("automations")}
-        >
-          <Icon name="Calendar" /> Automations
-        </button>
-        <button
-          className="channel-menu-row"
-          onClick={() => openWorkbench("activity")}
-        >
-          <Icon name="Clock" />
-          Activity
-        </button>
         <button
           className="channel-menu-row"
           onClick={() => setSettingsOpen(true)}
@@ -1355,7 +1399,6 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
     string | null
   >(null);
   const [contextSelection, setContextSelection] = useState("");
-  const [workbench, setWorkbench] = useState<WorkbenchPanel | null>(null);
   const transcript = useRef<HTMLDivElement>(null),
     atBottom = useRef(!messageId),
     marked = useRef(0);
@@ -1473,19 +1516,6 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
       document.removeEventListener("visibilitychange", visible);
     };
   }, []);
-  useEffect(() => {
-    const listener = (event: Event) => {
-      const detail = (
-        event as CustomEvent<{
-          roomId: string;
-          panel: WorkbenchPanel;
-        }>
-      ).detail;
-      if (detail.roomId === id) setWorkbench(detail.panel);
-    };
-    window.addEventListener("bots:channel-workbench", listener);
-    return () => window.removeEventListener("bots:channel-workbench", listener);
-  }, [id]);
   useEffect(() => {
     const onJump = (event: Event) => {
       const detail = (
@@ -2310,53 +2340,6 @@ function ChannelChat({ id, messageId }: { id: string; messageId?: string }) {
             }}
           />
         </div>
-        {workbench && (
-          <aside className="channel-workbench" aria-label="Channel workbench">
-            <header>
-              <h2>{workbenchLabels[workbench]}</h2>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Close channel workbench"
-                onClick={() => setWorkbench(null)}
-              >
-                <Icon name="X" />
-              </Button>
-            </header>
-            {workbench === "context" ? (
-              <ContextPanel id={id} />
-            ) : workbench === "files" ? (
-              <FilesPanel id={id} />
-            ) : workbench === "usage" ? (
-              <UsagePanel id={id} kind="channel" />
-            ) : workbench === "saved" ? (
-              <SavedPanel id={id} onJump={jump} />
-            ) : workbench === "automations" ? (
-              <ChannelAutomationsView
-                id={room.id}
-                bots={bots.filter((b) => room.memberIds.includes(b.id))}
-                open
-                onOpenChange={(open) => {
-                  if (!open) setWorkbench(null);
-                }}
-                presentation="panel"
-              />
-            ) : (
-              <div className="bot-work-list">
-                <WorkList
-                  jobs={data.jobs}
-                  bots={bots}
-                  onJump={jump}
-                  onCancel={(jobId) =>
-                    void rpc
-                      .call("cancelJob", { id: jobId })
-                      .catch((e) => setFailure(message(e)))
-                  }
-                />
-              </div>
-            )}
-          </aside>
-        )}
       </div>
       <Modal
         title="Edit message"

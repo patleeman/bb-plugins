@@ -1,3 +1,4 @@
+import { channelTabLabels } from "./channel-tab-labels";
 import { UsagePanel } from "./channel-workbench";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -23,6 +24,7 @@ import {
 import {
   ChannelsPage,
   ChannelsHeader,
+  channelWorkbenchTabs,
   ChannelsSidebar,
   ChannelsNavigation,
   ChannelRedirect,
@@ -302,6 +304,7 @@ function BotsPage({ subPath }: PluginNavPanelProps) {
   );
 }
 export default definePluginApp((app) => {
+  app.contentScripts.register(channelTabLabels);
   app.slots.experimental_appOverlay({
     id: "channel-links",
     component: ChannelLinkNavigation,
@@ -320,6 +323,7 @@ export default definePluginApp((app) => {
     path: "channels",
     component: ChannelsPage,
     headerContent: ChannelsHeader,
+    fixedTabs: channelWorkbenchTabs,
   });
   app.slots.experimental_threadList({
     id: "channels",

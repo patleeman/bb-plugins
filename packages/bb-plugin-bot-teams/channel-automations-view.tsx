@@ -310,7 +310,10 @@ export function ChannelAutomationsView({
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() =>
+                        onClick={() => {
+                          navigate.toPluginPanel("channels", {
+                            subPath: `${id}/message/${encodeURIComponent(run.responseMessageId!)}`,
+                          });
                           window.dispatchEvent(
                             new CustomEvent("bb:bots:jump", {
                               detail: {
@@ -318,8 +321,8 @@ export function ChannelAutomationsView({
                                 messageId: run.responseMessageId,
                               },
                             }),
-                          )
-                        }
+                          );
+                        }}
                       >
                         View response
                       </Button>

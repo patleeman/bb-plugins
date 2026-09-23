@@ -93,6 +93,17 @@ class CdpClient {
     return result.result?.value;
   }
 
+  async openChannelTab(name) {
+    await this.evaluate(`document.querySelector('button[aria-label^="Show right panel"]')?.click()`);
+    await this.waitForAriaButton(name);
+    await this.evaluate(`(() => {
+      const tab = [...document.querySelectorAll('[aria-label="Right panel views"] button')]
+        .find(button => button.getAttribute('aria-label') === ${JSON.stringify(name)});
+      if (!tab) throw new Error('Missing native channel tab');
+      tab.click();
+    })()`);
+  }
+
   async navigate(path) {
     await this.command("Page.navigate", { url: `${serverUrl}${path}` });
     await sleep(900);
@@ -391,6 +402,32 @@ const threadUrl = `/projects/${projectId}/threads/${threadId}`;
 
 const captures = [
   {
+    id: "bots-native-tabs",
+    packageDir: "bb-plugin-bot-teams",
+    fileName: "channel-workbench.png",
+    setup: async (client) => {
+      const id = process.env.BB_CAPTURE_CHANNEL_ID;
+      if (!id) throw new Error("Set BB_CAPTURE_CHANNEL_ID to a Workbench tabs QA fixture.");
+      const { room, messages } = await pluginRpc("bot-teams", "room", { id });
+      if (room.name !== "Workbench tabs QA" || room.memberIds.length ||
+          !messages.some(m => m.saved && m.text.includes("ORBIT-42")))
+        throw new Error("Expected the memberless Workbench tabs QA fixture with a saved release decision.");
+      await client.navigate(`/plugins/bot-teams/channels/${id}`);
+      await client.waitForText("ORBIT-42 release planning.");
+      await client.openChannelTab("Channel context");
+      await client.waitForInputValue("Brief and instructions", "This is a staged release-planning channel. The release code is ORBIT-42.");
+      await client.evaluate(`(() => {
+        const tabs = [...document.querySelectorAll('[aria-label="Right panel views"] button[aria-pressed]')];
+        if (tabs.length !== 6 || tabs.some(tab => {
+          const label = tab.querySelector('.sr-only');
+          return !label || label.getBoundingClientRect().width < 10 || getComputedStyle(label).clipPath !== 'none';
+        })) throw new Error('Expected six native tabs with readable labels');
+        if (document.querySelector('.channel-workbench').closest('.bot-room') || document.querySelector('select[aria-label="Channel detail view"]'))
+          throw new Error('Channel details must use native workbench tabs');
+      })()`);
+    },
+  },
+  {
     id: "bots-workbench",
     packageDir: "bb-plugin-bot-teams",
     fileName: "channel-workbench.png",
@@ -413,15 +450,7 @@ const captures = [
         if (!button) throw new Error('Missing staged channel in the sidebar'); button.click();
       })()`);
       await client.waitForText("ORBIT-42 release report is ready.");
-      const openPanel = async (name) => {
-        await client.clickFirstButtonWithAria("Channel options");
-        await client.evaluate(`(() => {
-          const b=Array.from(document.querySelectorAll('.channel-popover button')).find(b=>b.textContent.trim()===${JSON.stringify(name)});
-          if(!b)throw new Error('Channel panel menu item missing');b.click();
-        })()`);
-        await sleep(500);
-        await client.waitForText(name);
-      };
+      const openPanel = (name) => client.openChannelTab(name);
       const fill = async (label,value) => {
         await client.evaluate(`(() => {
           const e=Array.from(document.querySelectorAll('input,textarea,select')).find(e=>e.getAttribute('aria-label')===${JSON.stringify(label)});
@@ -434,6 +463,17 @@ const captures = [
       };
       await openPanel("Channel context");
       await client.waitForInputValue("Brief and instructions",context.brief);
+      await client.evaluate(`(() => {
+        const panel = document.querySelector('.channel-workbench');
+        const tab = document.querySelector('[aria-label="Right panel views"] button[aria-label="Channel context"]');
+        if (!tab || tab.getAttribute('aria-pressed') !== 'true' || panel.closest('.bot-room'))
+          throw new Error('Channel details must be in the native BB workbench, outside the conversation');
+        if (document.querySelector('select[aria-label="Channel detail view"]'))
+          throw new Error('The channel dropdown must be replaced with native tabs');
+        const tabs = [...document.querySelectorAll('[aria-label="Right panel views"] button[aria-pressed]')];
+        if (tabs.length !== 6 || tabs.some(tab => tab.querySelector('.sr-only')?.getBoundingClientRect().width < 10))
+          throw new Error('Expected six native channel tabs with visible labels');
+      })()`);
       await client.clickButtonText("Version history");
       await client.evaluate(`(() => {
         const versions=document.querySelectorAll('.channel-revisions details');
@@ -446,7 +486,7 @@ const captures = [
       if(process.env.BB_CAPTURE_QA_ACTIONS === "1") {
         const memoryDraft=context.memory.startsWith("Release preview")?"Release context verified in this channel. Keep these facts scoped here.":"Release preview verified in this channel. Keep these facts scoped here.";
         await fill("Channel memory",memoryDraft);
-        await client.clickFirstButtonWithAria("Close channel workbench");
+        await client.evaluate(`document.querySelector('button[aria-label^="Hide right panel"]').click()`);
         await openPanel("Channel context");
         await client.waitForInputValue("Channel memory",memoryDraft);
         await client.clickButtonText("Save context");
@@ -539,14 +579,7 @@ const captures = [
       })()`);
       await client.waitForText("Scheduled channel verified: ORBIT-42.");
       const openAutomations = async () => {
-        await client.clickFirstButtonWithAria("Channel options");
-        await client.evaluate(`(() => {
-          const button = Array.from(document.querySelectorAll('.channel-popover button'))
-            .find(b => b.textContent.trim() === 'Automations');
-          if (!button) throw new Error('Channel Automations menu item is missing');
-          button.click();
-        })()`);
-        await client.waitForText("Channel automations");
+        await client.openChannelTab("Automations");
         await client.waitForText("Task details");
         await client.waitForText("America/New_York");
       };
