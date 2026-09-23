@@ -496,6 +496,7 @@ export function ProfileForm({
               type="button"
               size="sm"
               variant={bot.retired ? "outline" : "destructive"}
+              className={bot.retired ? undefined : "bot-retire-button"}
               disabled={pending}
               onClick={onRetire}
             >

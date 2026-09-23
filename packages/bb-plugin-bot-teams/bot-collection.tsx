@@ -355,10 +355,17 @@ export function BotCollection({
                     ) : bot.paused ? (
                       <StatusBadge status="paused" />
                     ) : null}
-                    <span className="bot-last-active">
+                    <span
+                      className="bot-last-active"
+                      title={
+                        bot.lastActivityAt === null
+                          ? undefined
+                          : `Last active ${new Date(bot.lastActivityAt).toLocaleString()}`
+                      }
+                    >
                       {bot.lastActivityAt === null
-                        ? "No activity yet"
-                        : `Last active ${relativeActivity(bot.lastActivityAt)}`}
+                        ? "Never"
+                        : relativeActivity(bot.lastActivityAt)}
                     </span>
                   </span>
                 }
