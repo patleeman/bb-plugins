@@ -26,15 +26,13 @@ export type WorkbenchPanel =
   | "activity"
   | "context"
   | "files"
-  | "usage"
-  | "saved";
+  | "usage";
 export const workbenchLabels: Record<WorkbenchPanel, string> = {
   automations: "Automations",
   activity: "Activity",
   context: "Context",
   files: "Files",
   usage: "Usage",
-  saved: "Decisions",
 };
 import { RevisionList, type Revision } from "./revision-list";
 
@@ -529,73 +527,3 @@ export function UsagePanel({
   );
 }
 
-export function SavedPanel({
-  id,
-  onJump,
-}: {
-  id: string;
-  onJump: (id: string) => void;
-}) {
-  const rpc = useRpc<typeof rpcContract>();
-  const [items, setItems] = useState<RoomMessage[]>([]),
-    [error, setError] = useState<string | null>(null),
-    [more, setMore] = useState(false),
-    [pending, setPending] = useState(false);
-  const busy = useRef(false);
-  const load = async (before?: string) => {
-    if (busy.current) return;
-    busy.current = true;
-    setPending(true);
-    try {
-      const p = await rpc.call("savedMessages", {
-        id,
-        ...(before !== undefined ? { before } : {}),
-      });
-      setItems((old) =>
-        before
-          ? [...new Map([...old, ...p].map((m) => [m.id, m])).values()]
-          : p,
-      );
-      setMore(p.length === 50);
-    } catch (e) {
-      setError(message(e));
-    } finally {
-      busy.current = false;
-      setPending(false);
-    }
-  };
-  useEffect(() => {
-    void load();
-  }, [id, rpc]);
-  return (
-    <div className="channel-workbench-panel">
-      <ErrorMessage error={error} />
-      {!items.length && (
-        <EmptyState
-          title="No saved decisions"
-          description="Save a message from its menu to keep it here."
-        />
-      )}
-      {items.map((m) => (
-        <button
-          className="channel-search-result"
-          key={m.id}
-          onClick={() => onJump(m.id)}
-        >
-          <strong>{m.speaker}</strong>
-          <span className="line-clamp-3">{m.text}</span>
-        </button>
-      ))}
-      {more && (
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={pending}
-          onClick={() => void load(items.at(-1)!.id)}
-        >
-          Earlier decisions
-        </Button>
-      )}
-    </div>
-  );
-}

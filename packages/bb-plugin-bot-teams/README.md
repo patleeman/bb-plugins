@@ -64,7 +64,7 @@ BB’s **Settings → Appearance** can select sidebar providers. **Channels and 
 
 ## Channel workspace
 
-Context, files, saved decisions, usage, automations, and activity have separate
+Context, files, usage, automations, and activity have separate
 tabs in BB’s right workbench. Use **Show right panel** to open the workbench. The labeled tabs share its
 resize, collapse, and split controls with Browser and Terminal. On compact screens, BB opens them in
 its workbench drawer.
@@ -80,9 +80,10 @@ its workbench drawer.
 - **Files** collects files from posted messages. Bots can use `bots_publish_file`
   or `bb bots publish-file` to attach reports, CSVs, PDFs, and images from their
   workspace (8 MB each); failed responses do not publish their outputs.
-- Message menus offer **Save decision**, **Copy message link**, and **Edit message**
-  for your own posts. Editing changes the transcript; already queued or running
-  work keeps the original task. Saved messages remain available in **Saved decisions**.
+- Message menus offer **Copy message link**, and **Edit message** for your own
+  posts. Editing changes the transcript; already queued or running work keeps the
+  original task. Record settled choices in **Context → Decisions**, which every bot
+  in the channel reads.
 - Channel links store the channel ID, so renaming a channel keeps links working.
   Plain `#name` references resolve only when unambiguous and outside Markdown
   code, existing links, images, and URL fragments.

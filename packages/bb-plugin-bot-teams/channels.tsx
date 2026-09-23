@@ -2,7 +2,6 @@ import {
   ContextPanel,
   FilesPanel,
   UsagePanel,
-  SavedPanel,
   workbenchLabels,
   type WorkbenchPanel,
 } from "./channel-workbench";
@@ -272,8 +271,6 @@ function MessageActionButtons({
 }
 
 function MessageContextActions({
-  saved,
-  onSave,
   onPermalink,
   onEdit,
   hasWork,
@@ -285,8 +282,6 @@ function MessageContextActions({
   onCopy,
   onView,
 }: {
-  saved?: boolean;
-  onSave: () => void;
   onPermalink: () => void;
   onEdit?: () => void;
   hasWork: boolean;
@@ -326,9 +321,6 @@ function MessageContextActions({
       </ContextMenuItem>
       <ContextMenuItem onSelect={onPermalink}>
         Copy message link
-      </ContextMenuItem>
-      <ContextMenuItem onSelect={onSave}>
-        {saved ? "Unsave decision" : "Save decision"}
       </ContextMenuItem>
       {onEdit && (
         <ContextMenuItem onSelect={onEdit}>Edit message</ContextMenuItem>
@@ -904,7 +896,7 @@ function stateFor(bot: Bot, data: ChannelData) {
 }
 // BB owns tab selection, persistence, resizing, splits, and the compact drawer.
 export const channelWorkbenchTabs: PluginFixedTabRegistration[] = (
-  ["context", "files", "saved", "activity", "automations", "usage"] as const
+  ["context", "files", "activity", "automations", "usage"] as const
 ).map((panel) => ({
   id: panel,
   panelId: "channels",
@@ -912,7 +904,6 @@ export const channelWorkbenchTabs: PluginFixedTabRegistration[] = (
   icon: {
     context: "NotebookPen",
     files: "Files",
-    saved: "Bookmark",
     activity: "Activity",
     automations: "Clock",
     usage: "ChartNoAxesCombined",
@@ -951,8 +942,6 @@ function ChannelWorkbench({ id, panel }: { id: string; panel: WorkbenchPanel }) 
         <FilesPanel id={id} />
       ) : panel === "usage" ? (
         <UsagePanel id={id} kind="channel" />
-      ) : panel === "saved" ? (
-        <SavedPanel id={id} onJump={jump} />
       ) : panel === "automations" ? (
         <ChannelAutomationsView
           id={id}
@@ -1604,14 +1593,6 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
       setFailure(message(e));
     }
   };
-  const saveDecision = async (m: RoomMessage) => {
-    try {
-      await rpc.call("saveMessage", { id, messageId: m.id, saved: !m.saved });
-      await load();
-    } catch (e) {
-      setFailure(message(e));
-    }
-  };
   const edit = (m: RoomMessage) => {
     setEditing(m);
     setEditedText(m.text);
@@ -1896,11 +1877,9 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                                     Fork
                                   </span>
                                 )}
-                                {(m.saved || m.editedAt) && (
+                                {m.editedAt && (
                                   <small className="text-muted-foreground">
-                                    {m.saved ? "Saved decision" : null}
-                                    {m.saved && m.editedAt ? " · " : null}
-                                    {m.editedAt ? "Edited" : null}
+                                    Edited
                                   </small>
                                 )}
                                 {m.text && (
@@ -2013,16 +1992,6 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                             >
                               Copy link
                             </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => {
-                                setMobileActionsMessage(null);
-                                void saveDecision(m);
-                              }}
-                            >
-                              {m.saved ? "Unsave" : "Save decision"}
-                            </Button>
                             {!m.botId &&
                               !m.sourceThreadId &&
                               !m.automationId &&
@@ -2079,8 +2048,6 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                       }}
                     >
                       <MessageContextActions
-                        saved={m.saved}
-                        onSave={() => void saveDecision(m)}
                         onPermalink={() => void permalink(m)}
                         onEdit={
                           !m.botId &&
