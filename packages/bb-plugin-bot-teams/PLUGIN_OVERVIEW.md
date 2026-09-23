@@ -1,10 +1,10 @@
 ## Give each bot a lasting purpose
 
-Create a bot with a name, role, model, mission, and its own directory. Configure its profile, MISSION.md, MEMORY.md, and activity from Bot Teams.
+Choose New bot to open a thread with setup instructions prefilled. Describe its purpose in chat; the agent creates its profile, mission, and workspace. Configure its profile, MISSION.md, MEMORY.md, and activity from Bot Teams.
 
 ## Invite bots into Channels
 
-Choose New channel in the sidebar. Type @ to invite an existing bot or create a new one without losing your draft. Click the header’s avatar stack for the member list and Add bot. Ordinary BB threads remain in their own sidebar sections.
+Choose New channel in the sidebar. Type @ to invite an existing bot or start a bot setup thread without losing your draft. The setup instructions include the channel invitation. Click the header’s avatar stack for the member list and Add bot. Ordinary BB threads remain in their own sidebar sections.
 
 Messages have avatars, timestamps, linked replies, and persistent emoji reactions. Hover for message actions. Share files or dictate using BB’s composer styling. Bots work independently and post as they finish; each working bot has a Stop button beside its animated response indicator. Channels always accept messages without run or pause controls.
 

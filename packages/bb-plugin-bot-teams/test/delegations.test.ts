@@ -105,6 +105,32 @@ test("a direct delegate returns to its requester once without mentioning it", as
   }
 });
 
+test("broadcast final answers delegate to channel members and return once", async () => {
+  for (const alias of ["all", "channel", "everyone"]) {
+    const x = setup();
+    try {
+      await x.finish(x.source, `@${alias} Review the query performance`);
+      const delegates = x.store
+        .requestJobs(x.request.id)
+        .filter((job) => job.id !== x.source.id);
+      assert.deepEqual(
+        delegates.map((job) => job.botId).sort(),
+        x.bots.slice(1).map((bot) => bot.id).sort(),
+      );
+      await x.finish(delegates[0]!, "First review complete.");
+      assert.equal(x.returns().length, 0);
+      await x.finish(delegates[1]!, "Second review complete.");
+      assert.equal(x.returns().length, 1);
+      assert.equal(x.returns()[0]!.botId, x.source.botId);
+      // A synthesis turn must not start another broadcast handoff.
+      await x.finish(x.returns()[0]!, `@${alias} Both reviews complete.`);
+      assert.equal(x.store.requestJobs(x.request.id).length, 4);
+    } finally {
+      await x.close();
+    }
+  }
+});
+
 test("fan-out waits for every direct delegate and returns all outcomes once", async () => {
   const x = setup();
   try {

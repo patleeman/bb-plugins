@@ -18,8 +18,8 @@ export const revisionSchema = z.object({
   actor: z.string(),
 });
 export const usageLimits = z.object({
-  turnsPerHour: z.number().int().min(1).max(1000).default(30),
-  turnsPerDay: z.number().int().min(1).max(10000).default(300),
+  turnsPerHour: z.number().int().min(1).max(1000).default(100),
+  turnsPerDay: z.number().int().min(1).max(10000).default(1000),
   minutesPerTurn: z.number().int().min(1).max(180).default(20),
   concurrentForks: z.number().int().min(1).max(16).default(2),
 });

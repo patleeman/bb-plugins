@@ -18,6 +18,8 @@ import { Store } from "./store";
 import { chatGuidance } from "./chat-guidance";
 import { activitySnippetFromTimeline } from "./activity";
 import { isExecuting } from "./job-state";
+import { mentioned, mentionsEveryone, isBroadcastHandle } from "./mentions";
+export { mentioned } from "./mentions";
 import {
   parseSendMode,
   isForkConversation,
@@ -32,20 +34,11 @@ export const missingThread = (cause: unknown) =>
   /(?:^|\b)(?:thread not found|thread does not exist|HTTP 404)(?:\b|$)/i.test(
     errorText(cause),
   );
-export function mentioned(text: string, handle: string) {
-  const escaped = handle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(
-    `(^|[^a-zA-Z0-9_.-])@${escaped}(?![a-zA-Z0-9_.-])`,
-    "i",
-  ).test(text);
-}
 export function recipients(text: string, members: Bot[]) {
   const selected = members
     .filter((b) => mentioned(text, b.handle))
     .map((b) => b.id);
-  return mentioned(text, "all") ||
-    mentioned(text, "everyone") ||
-    !selected.length
+  return mentionsEveryone(text) || !selected.length
     ? members.map((b) => b.id)
     : selected;
 }
@@ -471,7 +464,12 @@ export class Runtime {
     // so editing a draft or retrying a lost response cannot change membership.
     if (
       !scheduled &&
-      this.store.all().some((bot) => bot.retired && mentioned(text, bot.handle))
+      this.store.all().some(
+        (bot) =>
+          bot.retired &&
+          !isBroadcastHandle(bot.handle) &&
+          mentioned(text, bot.handle),
+      )
     )
       throw new Error("Restore the retired bot before mentioning it.");
     const invited = this.store
@@ -480,6 +478,7 @@ export class Runtime {
         (bot) =>
           !scheduled &&
           !bot.retired &&
+          !isBroadcastHandle(bot.handle) &&
           !room.memberIds.includes(bot.id) &&
           mentioned(text, bot.handle),
       );
@@ -542,7 +541,7 @@ export class Runtime {
     const explicit = members
       .filter((b) => mentioned(text, b.handle) || b.id === replyBot)
       .map((b) => b.id);
-    const all = mentioned(text, "all") || mentioned(text, "everyone");
+    const all = mentionsEveryone(text);
     const returnOnly =
       !all &&
       !explicit.length &&
@@ -667,8 +666,7 @@ export class Runtime {
             this.store.get(job.botId).handle,
           ) ||
             job.botId === replyBot ||
-            mentioned(message.text, "all") ||
-            mentioned(message.text, "everyone")),
+            mentionsEveryone(message.sentText ?? message.text)),
       );
     this.delegations.track(message, run, jobs, sourceJob);
   }
@@ -1981,7 +1979,8 @@ export class Runtime {
             if (
               id !== bot.id &&
               !ancestors.has(id) &&
-              mentioned(reply.text, this.store.get(id).handle)
+              (mentionsEveryone(reply.text) ||
+                mentioned(reply.text, this.store.get(id).handle))
             )
               this.invite(room, run, reply, id, job.depth + 1);
           this.trackDelegation(reply, run, undefined, job);

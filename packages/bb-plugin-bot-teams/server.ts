@@ -4,6 +4,7 @@ import { AttentionQuestions } from "./attention-questions";
 import { ATTENTION_QUESTION_RENDERER } from "./attention-question-contract";
 import { contextContent, usageLimits } from "./workspace-contract";
 import { isExecuting } from "./job-state";
+import { broadcastHandles } from "./mentions";
 import { createHash, randomUUID } from "node:crypto";
 import { join, basename, isAbsolute, relative } from "node:path";
 import { mkdir } from "node:fs/promises";
@@ -285,8 +286,7 @@ export default async function plugin(bb: BbPluginApi) {
           .replace(/[^a-z0-9]+/g, "-")
           .replace(/^-|-$/g, "") || "bot";
       const reserved = new Set([
-        "all",
-        "everyone",
+        ...broadcastHandles,
         "user",
         ...store.all().map((b) => b.handle),
       ]);
@@ -515,6 +515,16 @@ export default async function plugin(bb: BbPluginApi) {
     input => sendMessage(rpcContract.send.input.parse(input)), () => runtime.changed());
   questions.preferences = () => settings.get();
   const handlers: PluginRpcHandlers<typeof rpcContract> = {
+    createBotSetupThread: async (request) => {
+      const thread = await bb.sdk.threads.spawn({
+        ...request,
+        // This is the owner's setup conversation, not a managed bot session.
+        // Plugin-origin bot sessions wait for registration in the dispatch hook.
+        origin: "app",
+        title: "Create a bot",
+      });
+      return { threadId: thread.id };
+    },
     attentionList: ({ status, limit, offset, channelId }) => {
       if (store.attention.wake()) runtime.changed();
       return store.attention.list(status, limit, offset, channelId);

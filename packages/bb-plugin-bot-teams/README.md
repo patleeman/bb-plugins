@@ -5,16 +5,18 @@ Persistent bots with their own files, mission, and memory, and Slack-style chann
 ## Use
 
 1. Choose **New channel** in the sidebar to open an empty conversation with the composer ready. It starts with just you. After the first message, an agent privately suggests a short channel title; click its name at the left of the header to rename it at any time.
-2. Type `@` to find a bot. Sending a mention invites that bot into the channel. The picker also includes **Create new bot…**, which preserves your draft while you choose a name, mission, model, and permissions.
+2. Type `@` to find a bot or choose `@all` / `@channel` to address everyone in the channel. Sending a mention invites that bot into the channel. The picker also includes **Create new bot…**, which opens a new thread with bot setup instructions prefilled. Describe what you need in chat; the agent creates the bot and invites it to this channel. Your channel draft stays saved.
 3. Click the overlapping avatars in the header to see members and their activity. **Add bot** sits at the bottom; member options let you configure or remove a bot.
 4. Open **Bot Teams** to administer profiles, `MISSION.md`, `MEMORY.md`, and activity. The collection uses BB's standard content width, search toolbar, status filter, sorting, and bordered rows. Conversations live in Channels.
+
+**New bot** in the collection opens the same conversation flow without a channel invitation. Send the prefilled instructions, or add your bot’s purpose first. The agent handles the name, mission, model, and permissions using sensible defaults.
 
 Bot configuration uses the same centered content width, compact settings rows,
 and native controls. Mission and memory use a Markdown editor with syntax
 highlighting, line numbers, formatting controls, find and replace, undo/redo,
 and a rendered preview. Use ⌘S / Ctrl+S to save. The editor adapts to the viewport
 and shows unsaved/saved state. Reloading with unsaved edits asks before
-discarding them. Profile, mission, memory, and new-bot drafts survive navigation and reloads on the same device. Profile and document saves reject stale versions instead of overwriting newer edits. Interrupted host cancellation stays visible and retries automatically.
+discarding them. Profile, mission, and memory drafts survive navigation and reloads on the same device. Profile and document saves reject stale versions instead of overwriting newer edits. Interrupted host cancellation stays visible and retries automatically.
 
 Your channel messages appear in right-aligned bubbles, like regular threads.
 Bot and BB agent messages stay left-aligned with their names and avatars.
@@ -38,7 +40,7 @@ The **Chat mode** selector beneath the message box has three choices:
 - **Directed** calls bots you mention or reply to. A channel with just one eligible bot always routes to that bot, in every chat mode.
 - **Everyone** lets all members consider unaddressed messages, useful for group reviews.
 
-`@handle` and replies to a bot address that bot directly in every mode; `@all` explicitly addresses everyone. Choosing a mode in the UI or owner CLI remembers it for future channels. Existing channels keep Everyone until changed. Bots work concurrently and post as they finish. A bot can request a teammate’s help with an explicit mention, with up to two further handoffs per message. `[PASS]` produces no public reply unless the bot has published images for that response.
+`@handle` and replies to a bot address that bot directly in every mode; `@all` and `@channel` explicitly address every current channel member (`@everyone` is also supported). Choosing a mode in the UI or owner CLI remembers it for future channels. Existing channels keep Everyone until changed. Bots work concurrently and post as they finish. A bot can request a teammate’s help with an explicit mention, with up to two further handoffs per message. `[PASS]` produces no public reply unless the bot has published images for that response.
 
 Channels do not need to be started or resumed. A working bot appears at the bottom of the transcript with its latest safe one-line activity and a muted **Stop** control for its current response. Stopping a response leaves the channel open. Each primary session handles one task at a time. Forks answer separate requests concurrently, with their own activity and Stop controls. Mentions choose the recipient; they do not imply an interruption.
 
@@ -159,13 +161,13 @@ and CLI commands.
 
 ## Mission work
 
-Channels always respond to explicit messages. Separately, a bot’s mission work can be paused from its administration page. New bots created there start with scheduled mission work paused. **Wake now** asks for one bounded step toward the mission. Schedules are off by default and do not replay missed intervals after downtime. Pausing mission work does not disable channel replies.
+Channels always respond to explicit messages. Separately, a bot’s mission work can be paused from its administration page. New bots start with scheduled mission work paused. **Wake now** asks for one bounded step toward the mission. Schedules are off by default and do not replay missed intervals after downtime. Pausing mission work does not disable channel replies.
 
 **Retire bot** stops its current work, removes it from every channel, and keeps its profile, files, and history. Use the collection’s **Retired** filter to find it. **Restore bot** makes it available for invitations again, with scheduled mission work paused.
 
 Failed channel responses show **View work** and **Retry response**. Retrying keeps the original message and targets only that bot; repeated clicks do not start duplicate retries. Restore and invite a removed bot before retrying.
 
-Default limits are 30 started turns per hour, 300 per day, 20 minutes per turn, and two concurrent forks per bot. **Usage and limits** in the channel workbench and the bot’s **Usage** tab make these editable. Both bot and channel turn budgets apply; existing work can finish while new work waits. Provider billing and token details remain in **View work**. BB’s provider and concurrency limits also apply.
+Default limits are 100 started turns per hour, 1,000 per day, 20 minutes per turn, and two concurrent forks per bot. **Usage and limits** in the channel workbench and the bot’s **Usage** tab make these editable. Both bot and channel turn budgets apply; existing work can finish while new work waits. Provider billing and token details remain in **View work**. BB’s provider and concurrency limits also apply.
 
 ## Persistence
 
@@ -301,6 +303,10 @@ bb plugin install ./packages/bb-plugin-bot-teams --yes
 Rebuild and run `bb plugin reload bot-teams` after changes. Inspect state with `bb bots list --json`.
 
 ## Staged preview
+
+![Bot creation through a prefilled BB thread](assets/bot-creation-thread.png)
+
+The running BB app shows the setup instructions in its standard new-thread composer.
 
 ![Bot Teams in the running BB application](assets/staged-preview.png)
 

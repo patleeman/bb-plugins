@@ -31,7 +31,7 @@ rounds, voting tools, or automatic majority verdicts.
    compact brief: the proposal, relevant evidence/file locations, constraints,
    questions, and requested response length. Bots work in their own directories;
    provide absolute repository paths or attachments when asking them to inspect code.
-   Ordinary text follows the channel chat mode; `@all` requests every member. A single eligible bot receives all messages. `@handle` selects specific members.
+   Ordinary text follows the channel chat mode; `@all` or `@channel` requests every member. A single eligible bot receives all messages. `@handle` selects specific members.
 3. Use `bots_channel_request` with `channelId` and the returned message ID as
    `requestId`. It returns each response, status, errors, and pending work. Check
    periodically while doing useful independent work; do not busy-poll. Give the
@@ -119,7 +119,7 @@ bb bots channel react 'Release planning' MESSAGE_ID '✅' --remove
 ```
 
 Creating without a name assigns an available `New channel` name. `--bot` may be
-repeated at creation. Mentioning a known bot invites it when sending; `@all`
+repeated at creation. Mentioning a known bot invites it when sending; `@all` or `@channel`
 addresses all members. Ordinary messages address the current membership.
 Channels work without run or pause controls. Bots post independently as they
 finish. Explicit bot handoffs are limited to two further hops.
@@ -266,7 +266,7 @@ other bots’ missions or share unrelated private conversation data.
 `bb bots channel behavior CHANNEL [smart|directed|everyone]` reads or changes the
 mode. `channel create --behavior MODE` sets it at creation. Smart is the new-channel
 default and selects relevant bots through a configured routing model; Directed only
-responds to mentions/replies; Everyone addresses all members. `@all` explicitly
+responds to mentions/replies; Everyone addresses all members. `@all` or `@channel` explicitly
 requests everyone regardless of mode. Use it for a full advisory panel. With multiple bots, a plain message may select no bots. A channel with just one
 eligible bot routes every message to it automatically. Native tools `bots_channel_behavior` and
 `bots_channel_retry_routing` provide the same channel controls.

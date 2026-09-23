@@ -1246,10 +1246,10 @@ test("idle recovery settles a running no-output job as an error", async () => {
   }
 });
 
-test("hourly limits count dispatches that never became active", async () => {
+test("default hourly limits count dispatches that never became active", async () => {
   const x = setup();
   try {
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 100; i++) {
       const id = `dispatch-${i}`;
       x.runtime.enqueue(x.a, {
         id,
@@ -1268,7 +1268,7 @@ test("hourly limits count dispatches that never became active", async () => {
     });
     await assert.rejects(
       x.runtime.drive(x.a),
-      /Bot limit reached \(30 turns per hour\)/,
+      /Bot limit reached \(100 turns per hour\)/,
     );
     assert.equal(x.store.job("over-limit")!.status, "queued");
   } finally {
@@ -2557,7 +2557,7 @@ test("resolved retries no longer count as failed consultation responses", async 
   }
 });
 
-test("Directed routes reply targets and mentions; @all overrides every mode", async () => {
+test("Directed routes reply targets and mentions", async () => {
   const x = setup();
   try {
     const room = { ...x.room, responseBehavior: "directed" as const };
@@ -2599,6 +2599,44 @@ test("Directed routes reply targets and mentions; @all overrides every mode", as
     assert.equal(x.store.requestJobs(everyone.id).length, 2);
   } finally {
     await x.close();
+  }
+});
+
+test("broadcast mentions override every mode and address only channel members", async () => {
+  for (const responseBehavior of ["directed", "smart", "everyone"] as const) {
+    const x = setup();
+    try {
+      const room = { ...x.room, responseBehavior };
+      x.store.putRoom(room);
+      // Older installations may have a bot whose handle is now reserved.
+      const outsider = bot("/tmp/channel", "bot_2123456789abcdef", "Channel");
+      x.store.put(outsider);
+      x.runtime.route = async () => {
+        throw new Error("Broadcast must bypass selection");
+      };
+      for (const alias of ["all", "channel", "everyone"]) {
+        const message = x.runtime.send(
+          room,
+          `@atlas @${alias} Review`,
+          randomUUID(),
+        );
+        assert.deepEqual(
+          x.store.requestJobs(message.id).map((j) => j.botId).sort(),
+          [x.a.id, x.b.id].sort(),
+        );
+        assert.deepEqual(x.store.room(room.id).memberIds, room.memberIds);
+      }
+      x.store.put({ ...outsider, retired: true });
+      const message = x.runtime.send(room, "@CHANNEL Review", randomUUID());
+      assert.equal(x.store.requestJobs(message.id).length, 2);
+      const empty = { ...room, id: randomUUID(), memberIds: [] };
+      x.store.putRoom(empty);
+      const emptyMessage = x.runtime.send(empty, "@channel Review", randomUUID());
+      assert.equal(x.store.requestJobs(emptyMessage.id).length, 0);
+      assert.deepEqual(x.store.room(empty.id).memberIds, []);
+    } finally {
+      await x.close();
+    }
   }
 });
 

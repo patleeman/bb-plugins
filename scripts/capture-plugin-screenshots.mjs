@@ -792,6 +792,104 @@ const captures = [
     },
   },
   {
+    id: "bots-creation",
+    packageDir: "bb-plugin-bot-teams",
+    fileName: "bot-creation-thread.png",
+    setup: async (client) => {
+      const room = await pluginRpc("bot-teams", "createRoom", {
+        name: "Bot creation QA", memberIds: [], requestId: crypto.randomUUID(),
+      });
+      const channelPath = `/plugins/bot-teams/channels/${room.id}`;
+      const setupPath = `/plugins/bot-teams/bots/new/${room.id}`;
+      const draftText = "Keep this channel draft @";
+      const checkComposer = async (channel = false) => {
+        await client.waitForText("Help me create a persistent bot in BB Bot Teams");
+        if (channel) await client.waitForText(room.id);
+        await client.evaluate(`(() => {
+          const editor = document.querySelector('[data-bot-creation-thread] [contenteditable="true"]');
+          if (!editor || !editor.textContent.includes('bb bots') || document.activeElement !== editor)
+            throw new Error('Expected focused native thread composer with bot setup instructions');
+          if (document.querySelector('input[aria-label="Bot name"], textarea[aria-label="Mission"]'))
+            throw new Error('Bot creation form is still present');
+          if (${channel} !== editor.textContent.includes(${JSON.stringify(room.id)}))
+            throw new Error('Wrong channel context in setup draft');
+        })()`);
+      };
+      try {
+        await client.navigate("/plugins/bot-teams/bots");
+        await client.waitForText("New bot");
+        await client.clickButtonText("New bot");
+        await checkComposer();
+        // Direct links and reload must show the same native composer.
+        await client.navigate("/plugins/bot-teams/bots/new");
+        await checkComposer();
+        await client.navigate(channelPath);
+        await client.waitForAriaButton("Channel members: 0 bots");
+        await client.evaluate(`(() => {
+          const editor = document.querySelector('textarea[aria-label="Message channel"]');
+          Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(editor, ${JSON.stringify(draftText)});
+          editor.dispatchEvent(new Event('input', { bubbles: true }));
+          editor.focus();
+        })()`);
+        await client.waitForText("Create new bot…");
+        await client.clickButtonText("Create new bot…");
+        await checkComposer(true);
+        await client.clickFirstButtonWithAria("Back to channel");
+        await client.waitForInputValue("Message channel", draftText);
+        await client.clickFirstButtonWithAria("Channel members: 0 bots");
+        await client.clickButtonText("Add bot");
+        await client.waitForText("Create new bot…");
+        await client.clickButtonText("Create new bot…");
+        await checkComposer(true);
+        await client.navigate(setupPath);
+        await checkComposer(true);
+        await client.command("Emulation.setDeviceMetricsOverride", {
+          width: 390, height: 844, deviceScaleFactor: 1, mobile: true,
+        });
+        await client.evaluate(`(() => {
+          const surface = document.querySelector('[data-bot-creation-thread]');
+          if (surface.scrollWidth > surface.clientWidth + 1)
+            throw new Error('Bot setup overflows on mobile');
+        })()`);
+        await client.command("Emulation.setDeviceMetricsOverride", {
+          width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false,
+        });
+        await client.navigate("/plugins/bot-teams/bots/new");
+        await checkComposer();
+        // Exercise a failed submit without dispatching an agent or creating a bot.
+        await client.evaluate(`(() => {
+          window.botSetupQaFetch = window.fetch;
+          window.fetch = async (input, init) => {
+            const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+            if (url.includes('/rpc/createBotSetupThread')) {
+              return new Response(JSON.stringify({ ok: false, error: { message: 'QA host unavailable' } }), {
+                status: 503, headers: { 'content-type': 'application/json' },
+              });
+            }
+            return window.botSetupQaFetch(input, init);
+          };
+        })()`);
+        try {
+          await client.clickFirstButtonWithAria("Submit (Enter)");
+          await client.waitForText("QA host unavailable");
+          await client.evaluate(`(() => {
+            if (!document.querySelector('[contenteditable="true"]')?.textContent.includes('Help me create') ||
+                document.querySelector('button[aria-label="Submit (Enter)"]').disabled)
+              throw new Error('Failed setup must preserve the draft and allow retry');
+          })()`);
+        } finally {
+          await client.evaluate('window.fetch = window.botSetupQaFetch');
+        }
+        await client.navigate("/plugins/bot-teams/bots/new");
+        await checkComposer();
+        return async () => { await pluginRpc("bot-teams", "deleteRoom", { id: room.id }); };
+      } catch (error) {
+        await pluginRpc("bot-teams", "deleteRoom", { id: room.id });
+        throw error;
+      }
+    },
+  },
+  {
     id: "bots-profile",
     packageDir: "bb-plugin-bot-teams",
     fileName: "bot-profile.png",

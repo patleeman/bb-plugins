@@ -1,5 +1,21 @@
 # Agent instructions
 
+## Marketplace maintenance
+
+Keep the root `marketplace.json` current in the same change as the plugins it
+lists.
+
+- When adding, renaming, moving, or removing a plugin, update both
+  `marketplace.json` and `.bb/plugins.json`.
+- When changing a plugin's display name, description, icon, or author, update
+  its marketplace entry to match. Keep tags accurate for its capabilities.
+- Keep each entry's ID aligned with the plugin's installed ID. Use this
+  repository's Git URL, the correct package subdirectory, and the intended
+  branch or release selector in its source.
+- Before handoff, validate `marketplace.json` against BB's marketplace schema.
+  Confirm that both indexes list the same plugins, IDs are unique, and all
+  referenced package directories and local icon assets exist.
+
 ## Plugin documentation
 
 All new plugins must include at least one screenshot captured from the running

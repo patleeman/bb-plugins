@@ -50,7 +50,7 @@ import {
   ContextMenuContent,
   ContextMenuItem,
 } from "./components/ui/context-menu";
-import { ProfileForm, WorkList, ErrorMessage, message } from "./bot-ui";
+import { WorkList, ErrorMessage, message } from "./bot-ui";
 import { channelWork, channelWorkActivity } from "./channel-work";
 import { ChannelSearch } from "./channel-search";
 import { useAttention, ChannelAttentionBanner, MessageAttention } from "./attention-view";
@@ -975,38 +975,6 @@ function ChannelWorkbench({ id, panel }: { id: string; panel: WorkbenchPanel }) 
   );
 }
 
-function NewBot({
-  room,
-  open,
-  onClose,
-  onSaved,
-}: {
-  room: Room;
-  open: boolean;
-  onClose: () => void;
-  onSaved?: (bot: Bot) => void;
-}) {
-  return (
-    <Modal
-      title="Create a bot"
-      open={open}
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      {open && (
-        <ProfileForm
-          roomId={room.id}
-          onSaved={(b) => {
-            onSaved?.(b);
-            onClose();
-          }}
-          onCancel={onClose}
-        />
-      )}
-    </Modal>
-  );
-}
 export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
   const id = channelId(subPath),
     { data, error, load } = useChannel(id, false),
@@ -1017,7 +985,6 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false),
     [inviteOpen, setInviteOpen] = useState(false),
-    [createOpen, setCreateOpen] = useState(false),
     [deleteOpen, setDeleteOpen] = useState(false),
     [settingsOpen, setSettingsOpen] = useState(false);
   const [failure, setFailure] = useState<string | null>(null),
@@ -1025,7 +992,6 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
   useEffect(() => {
     setMembersOpen(false);
     setInviteOpen(false);
-    setCreateOpen(false);
     setOptionsOpen(false);
     setDeleteOpen(false);
     setSettingsOpen(false);
@@ -1268,16 +1234,11 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
           }
           onCreate={() => {
             setInviteOpen(false);
-            setCreateOpen(true);
+            navigate.toPluginPanel("bots", { subPath: `new/${room.id}` });
           }}
         />
         <ErrorMessage error={failure} />
       </Modal>
-      <NewBot
-        room={room}
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-      />
       {settingsOpen && (
         <RenameChannel
           key={room.id}
@@ -1382,11 +1343,9 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
     [insertion, setInsertion] = useState<{
       text: string;
       nonce: number;
-      replaceMention?: boolean;
       sendMode?: SendMode;
       reply?: RoomMessage;
     } | null>(null),
-    [createOpen, setCreateOpen] = useState(false),
     [failure, setFailure] = useState<string | null>(null),
     [copied, setCopied] = useState<string | null>(null);
   const [jumpTarget, setJumpTarget] = useState<string | null>(
@@ -2340,7 +2299,9 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
             memberIds={room.memberIds}
             rooms={rooms}
             footer={<ChannelModePicker room={room} onChanged={load} />}
-            onCreateBot={() => setCreateOpen(true)}
+            onCreateBot={() =>
+              navigate.toPluginPanel("bots", { subPath: `new/${room.id}` })
+            }
             reply={reply}
             onClearReply={() => setReply(null)}
             insertion={insertion}
@@ -2409,18 +2370,6 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
         </div>
         <ErrorMessage error={failure} />
       </Modal>
-      <NewBot
-        room={room}
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onSaved={(b) =>
-          setInsertion({
-            text: `@${b.handle} `,
-            nonce: Date.now(),
-            replaceMention: true,
-          })
-        }
-      />
     </div>
   );
 }

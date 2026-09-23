@@ -6,6 +6,7 @@ import {
   usageSummary,
 } from "./workspace-contract";
 import { defineRpcContract } from "@get-bb/plugin-sdk";
+import { botSetupThreadRequest } from "./bot-creation-contract";
 import { z } from "zod";
 import { sendModes } from "./send-mode";
 export const sendModeSchema = z.enum(sendModes);
@@ -309,6 +310,10 @@ const roomInput = z.object({
   memberIds: z.array(idSchema).max(16),
 });
 export const rpcContract = defineRpcContract({
+  createBotSetupThread: {
+    input: botSetupThreadRequest,
+    output: z.object({ threadId: z.string() }),
+  },
   attentionList: {
     input: z.object({
       status: attentionSchema.shape.status.default("open"),

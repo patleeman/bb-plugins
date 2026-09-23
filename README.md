@@ -4,7 +4,23 @@ Plugins for [bb](https://github.com/patleeman/bb).
 
 ## Marketplace
 
-Add this repository as a BB marketplace to browse and install its plugins:
+In BB's **Plugin marketplaces** settings, paste this into **Marketplace source**:
+
+```text
+git:github.com/patleeman/bb-plugins@main
+```
+
+You can also use the raw manifest URL:
+
+```text
+https://raw.githubusercontent.com/patleeman/bb-plugins/main/marketplace.json
+```
+
+GitHub's `/blob/main/marketplace.json` page returns a `meta`/`payload` wrapper
+when BB requests JSON, which fails marketplace validation. Use either source
+above.
+
+To add the marketplace from the CLI:
 
 ```sh
 bb marketplace add git:github.com/patleeman/bb-plugins@main

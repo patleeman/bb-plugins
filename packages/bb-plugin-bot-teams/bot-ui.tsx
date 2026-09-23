@@ -20,7 +20,6 @@ import {
 import type { Bot, Job, ProfileInput, rpcContract } from "./contract";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
-import { Textarea } from "./components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -108,46 +107,39 @@ export function ErrorMessage({ error }: { error: string | null }) {
 export function ProfileForm({
   bot,
   onSaved,
-  onCancel,
-  roomId,
 }: {
-  roomId?: string;
-  bot?: Bot;
+  bot: Bot;
   onSaved: (bot: Bot) => void | Promise<void>;
-  onCancel?: () => void;
 }) {
   const rpc = useRpc<typeof rpcContract>();
-  const draftKey = `bb:bots:profile:${bot?.id ?? roomId ?? "new"}`;
+  const draftKey = `bb:bots:profile:${bot.id}`;
   const [restored] = useState(() => readConfigDraft(draftKey, profileDraft));
   const [draft, setDraft] = useState<ProfileInput>(
-    restored?.draft ?? bot ?? defaults,
+    restored?.draft ?? bot,
   );
   const [version, setVersion] = useState<number | null>(
-    restored?.version ?? bot?.updatedAt ?? null,
+    restored?.version ?? bot.updatedAt,
   );
   const submitting = useRef(false);
   const id = useId();
   const [baseline, setBaseline] = useState<ProfileInput>(
-    restored?.baseline ?? bot ?? defaults,
+    restored?.baseline ?? bot,
   );
-  const [mission, setMission] = useState(restored?.mission ?? "");
   const [pending, setPending] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dirty = (Object.keys(defaults) as (keyof ProfileInput)[]).some(
     (key) => draft[key] !== baseline[key],
   );
-  const changedProfile =
-    !!bot &&
-    (Object.keys(defaults) as (keyof ProfileInput)[]).some(
-      (key) => bot[key] !== baseline[key],
-    );
+  const changedProfile = (Object.keys(defaults) as (keyof ProfileInput)[]).some(
+    (key) => bot[key] !== baseline[key],
+  );
   const conflict = changedProfile && dirty;
   useEffect(() => {
-    if (bot && !changedProfile) setVersion(bot.updatedAt);
+    if (!changedProfile) setVersion(bot.updatedAt);
   }, [bot, changedProfile]);
   useEffect(() => {
-    if (bot && !dirty && !submitting.current) {
+    if (!dirty && !submitting.current) {
       setDraft(bot);
       setBaseline(bot);
       setVersion(bot.updatedAt);
@@ -157,16 +149,14 @@ export function ProfileForm({
     try {
       writeConfigDraft(
         draftKey,
-        dirty || (!bot && mission)
-          ? { draft, baseline, mission, version }
-          : null,
+        dirty ? { draft, baseline, version } : null,
       );
     } catch {
       setError(
         "Draft could not be saved on this device. Save your changes before leaving.",
       );
     }
-  }, [draftKey, draft, baseline, mission, version, dirty, bot]);
+  }, [draftKey, draft, baseline, version, dirty]);
   const set = <K extends keyof ProfileInput>(
     key: K,
     value: ProfileInput[K],
@@ -181,13 +171,11 @@ export function ProfileForm({
     setPending(true);
     setError(null);
     try {
-      const result = bot
-        ? await rpc.call("update", {
-            ...draft,
-            id: bot.id,
-            expectedUpdatedAt: version ?? undefined,
-          })
-        : await rpc.call("create", { ...draft, mission, roomId });
+      const result = await rpc.call("update", {
+        ...draft,
+        id: bot.id,
+        expectedUpdatedAt: version ?? undefined,
+      });
       setDraft(result);
       setBaseline(result);
       setSaved(true);
@@ -197,7 +185,6 @@ export function ProfileForm({
       } catch {
         /* Saving succeeded even if local storage is unavailable. */
       }
-      setMission("");
       await onSaved(result);
     } catch (e) {
       setError(message(e));
@@ -217,7 +204,7 @@ export function ProfileForm({
     <form
       onSubmit={submit}
       className="bot-config-form"
-      aria-label={bot ? "Bot profile" : "Create bot"}
+      aria-label="Bot profile"
     >
       <fieldset disabled={pending} className="min-w-0 space-y-5 border-0 p-0">
         <ConfigSection title="Identity">
@@ -252,33 +239,12 @@ export function ProfileForm({
             />
           </ConfigRow>
         </ConfigSection>
-        {!bot && (
-          <section className="space-y-2">
-            <label
-              htmlFor={`${id}-mission`}
-              className="block text-sm font-medium text-muted-foreground"
-            >
-              Mission
-            </label>
-            <Textarea
-              id={`${id}-mission`}
-              aria-label="Mission"
-              required
-              rows={5}
-              maxLength={64000}
-              value={mission}
-              onChange={(e) => setMission(e.target.value)}
-              className="resize-y leading-relaxed"
-              placeholder="Give this bot a lasting purpose, priorities, and boundaries."
-            />
-          </section>
-        )}
         <ConfigSection title="Behavior">
           <ConfigRow label="Model">
             <ProviderModelPicker
               disabled={pending}
               className="h-9 max-w-full justify-start"
-              allowProviderChange={!bot}
+              allowProviderChange={false}
               value={{
                 providerId: draft.providerId,
                 model: draft.model,
@@ -288,9 +254,7 @@ export function ProfileForm({
                 setDraft((d) => ({ ...d, ...v }));
                 setSaved(false);
               }}
-              {...(bot
-                ? { routing: { kind: "host", hostId: bot.hostId } }
-                : {})}
+              routing={{ kind: "host", hostId: bot.hostId }}
             />
           </ConfigRow>
           <ConfigRow label="Permissions">
@@ -301,19 +265,13 @@ export function ProfileForm({
               providerId={draft.providerId}
               value={draft.permissionMode}
               onChange={(v) => set("permissionMode", v)}
-              {...(bot
-                ? { routing: { kind: "host", hostId: bot.hostId } }
-                : {})}
+              routing={{ kind: "host", hostId: bot.hostId }}
             />
           </ConfigRow>
           <ConfigRow
             label="Mission schedule"
             htmlFor={`${id}-schedule`}
-            hint={
-              bot
-                ? "Channel replies are always available. Scheduled work follows the mission's pause setting."
-                : "Bots respond when invited to a channel. Scheduled mission work starts paused."
-            }
+            hint="Channel replies are always available. Scheduled work follows the mission's pause setting."
           >
             <Select
               disabled={pending}
@@ -353,12 +311,10 @@ export function ProfileForm({
             variant="ghost"
             size="sm"
             onClick={() => {
-              if (bot) {
-                setDraft(bot);
-                setBaseline(bot);
-                setVersion(bot.updatedAt);
-                setError(null);
-              }
+              setDraft(bot);
+              setBaseline(bot);
+              setVersion(bot.updatedAt);
+              setError(null);
             }}
           >
             Discard draft and load latest
@@ -369,53 +325,29 @@ export function ProfileForm({
         <span role="status" className="mr-auto text-xs text-muted-foreground">
           {pending
             ? "Saving…"
-            : dirty && bot
+            : dirty
               ? "Unsaved changes · draft saved"
               : saved
                 ? "Saved"
                 : ""}
         </span>
-        {onCancel && (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={pending}
-            onClick={onCancel}
-          >
-            Cancel
-          </Button>
-        )}
         <Button
           size="sm"
-          disabled={
-            pending ||
-            conflict ||
-            !draft.name.trim() ||
-            (bot ? !dirty : !mission.trim())
-          }
+          disabled={pending || conflict || !draft.name.trim() || !dirty}
         >
-          {pending
-            ? "Saving…"
-            : bot
-              ? "Save profile"
-              : roomId
-                ? "Create and invite"
-                : "Create bot"}
+          {pending ? "Saving…" : "Save profile"}
         </Button>
       </div>
-      {bot && (
-        <details className="bot-config-workspace">
-          <summary className="cursor-pointer text-sm text-muted-foreground">
-            Workspace
-          </summary>
-          <p className="bot-path">{bot.home}</p>
-          <p className="text-xs leading-5 text-muted-foreground">
-            MISSION.md, MEMORY.md, and working files live here and persist
-            across conversations and BB restarts.
-          </p>
-        </details>
-      )}
+      <details className="bot-config-workspace">
+        <summary className="cursor-pointer text-sm text-muted-foreground">
+          Workspace
+        </summary>
+        <p className="bot-path">{bot.home}</p>
+        <p className="text-xs leading-5 text-muted-foreground">
+          MISSION.md, MEMORY.md, and working files live here and persist
+          across conversations and BB restarts.
+        </p>
+      </details>
     </form>
   );
 }
@@ -641,15 +573,18 @@ export function DocumentEditor({
   );
 }
 
-export function BackButton() {
+export function BackButton({
+  onClick,
+  label = "All bots",
+}: { onClick?: () => void; label?: string } = {}) {
   const navigate = useBbNavigate();
   return (
     <Button
       variant="ghost"
       size="icon"
       className={COARSE_POINTER_HEADER_ICON_BUTTON_CLASS}
-      aria-label="All bots"
-      onClick={() => navigate.toPluginPanel("bots")}
+      aria-label={label}
+      onClick={onClick ?? (() => navigate.toPluginPanel("bots"))}
     >
       <Icon name="ChevronLeft" />
     </Button>

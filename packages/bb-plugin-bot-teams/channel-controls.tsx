@@ -13,6 +13,7 @@ import type { Bot, Room } from "./contract";
 import { channelSlug, matchingChannels } from "./channel-references";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
+import { matchingBroadcastMentions, type BroadcastMention } from "./mentions";
 
 export function Menu({
   trigger,
@@ -117,6 +118,7 @@ export function BotOptions({
   onCreate,
   listId,
   onHover,
+  onBroadcast,
 }: {
   bots: Bot[];
   memberIds: string[];
@@ -126,15 +128,39 @@ export function BotOptions({
   onCreate: () => void;
   listId?: string;
   onHover?: (index: number) => void;
+  onBroadcast?: (mention: BroadcastMention) => void;
 }) {
   const matches = matchingBots(bots, memberIds, query);
+  const broadcasts = onBroadcast ? matchingBroadcastMentions(query) : [];
+  const optionCount = broadcasts.length + matches.length;
   return (
     <div
       id={listId}
       role="listbox"
-      aria-label="Bots"
+      aria-label={onBroadcast ? "Mentions" : "Bots"}
       className="channel-bot-options"
     >
+      {broadcasts.map((mention, i) => (
+        <button
+          key={mention.handle}
+          type="button"
+          role="option"
+          aria-selected={selected === i}
+          id={listId ? `${listId}-${i}` : undefined}
+          className="channel-menu-row"
+          onMouseDown={(e) => e.preventDefault()}
+          onMouseEnter={() => onHover?.(i)}
+          onClick={() => onBroadcast?.(mention)}
+        >
+          <span className="channel-avatar" aria-hidden>
+            @
+          </span>
+          <span className="channel-bot-name">
+            @{mention.handle}
+            <small>Everyone in this channel</small>
+          </span>
+        </button>
+      ))}
       {matches.map((bot, i) => (
         <div key={bot.id}>
           {(i === 0 ||
@@ -147,11 +173,11 @@ export function BotOptions({
           <button
             type="button"
             role="option"
-            aria-selected={selected === i}
-            id={listId ? `${listId}-${i}` : undefined}
+            aria-selected={selected === broadcasts.length + i}
+            id={listId ? `${listId}-${broadcasts.length + i}` : undefined}
             className="channel-menu-row"
             onMouseDown={(e) => e.preventDefault()}
-            onMouseEnter={() => onHover?.(i)}
+            onMouseEnter={() => onHover?.(broadcasts.length + i)}
             onClick={() => onSelect(bot)}
           >
             <span className="channel-avatar" aria-hidden>
@@ -165,17 +191,17 @@ export function BotOptions({
           </button>
         </div>
       ))}
-      {!matches.length && (
+      {!optionCount && (
         <p className="channel-menu-label">No matching bots</p>
       )}
       <button
         type="button"
         role="option"
-        aria-selected={selected === matches.length}
-        id={listId ? `${listId}-${matches.length}` : undefined}
+        aria-selected={selected === optionCount}
+        id={listId ? `${listId}-${optionCount}` : undefined}
         className="channel-menu-row channel-menu-footer"
         onMouseDown={(e) => e.preventDefault()}
-        onMouseEnter={() => onHover?.(matches.length)}
+        onMouseEnter={() => onHover?.(optionCount)}
         onClick={onCreate}
       >
         <Icon name="Plus" /> Create new bot…

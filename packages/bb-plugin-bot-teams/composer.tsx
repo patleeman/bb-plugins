@@ -14,6 +14,7 @@ import {
 } from "./draft";
 import { SendModePicker } from "./send-mode-picker";
 import { parseSendMode, type SendMode } from "./send-mode";
+import { matchingBroadcastMentions, type BroadcastMention } from "./mentions";
 
 const errorText = (e: unknown) => {
   if (e instanceof DOMException && e.name === "NotAllowedError")
@@ -60,7 +61,6 @@ export function GroupComposer({
   insertion: {
     text: string;
     nonce: number;
-    replaceMention?: boolean;
     sendMode?: SendMode;
     reply?: RoomMessage;
   } | null;
@@ -102,9 +102,13 @@ export function GroupComposer({
       query: string;
     } | null>(null),
     [selection, setSelection] = useState(0);
-  const creatingMention = useRef<{ start: number; end: number } | null>(null);
   const options =
-    mention?.kind === "bot" ? matchingBots(bots, memberIds, mention.query) : [];
+    mention?.kind === "bot"
+      ? [
+          ...matchingBroadcastMentions(mention.query),
+          ...matchingBots(bots, memberIds, mention.query),
+        ]
+      : [];
   const channelOptions =
     mention?.kind === "channel"
       ? matchingChannels(rooms, roomId, mention.query)
@@ -136,12 +140,10 @@ export function GroupComposer({
     );
     setSelection(0);
   };
-  const insertMention = (item: Bot | Room) => {
+  const insertMention = (item: Bot | Room | BroadcastMention) => {
     if (!mention) return;
     const text =
-      mention.kind === "bot"
-        ? `@${(item as Bot).handle} `
-        : `${channelReference(item as Room)} `;
+      "handle" in item ? `@${item.handle} ` : `${channelReference(item)} `;
     setDraft((d) => ({
       ...d,
       text: d.text.slice(0, mention.start) + text + d.text.slice(mention.end),
@@ -155,7 +157,6 @@ export function GroupComposer({
   };
   const createMention = () => {
     if (!mention || mention.kind !== "bot") return;
-    creatingMention.current = mention;
     setMention(null);
     onCreateBot();
   };
@@ -176,18 +177,12 @@ export function GroupComposer({
   }, [rpc]);
   useEffect(() => {
     if (insertion) {
-      const range = insertion.replaceMention ? creatingMention.current : null;
       setDraft((d) => ({
         ...d,
         ...(insertion.sendMode ? { sendMode: insertion.sendMode } : {}),
         ...(insertion.reply ? { reply: insertion.reply } : {}),
-        text: range
-          ? d.text.slice(0, range.start) +
-            insertion.text +
-            d.text.slice(range.end)
-          : `${d.text}${d.text && !d.text.endsWith(" ") ? " " : ""}${insertion.text}`,
+        text: `${d.text}${d.text && !d.text.endsWith(" ") ? " " : ""}${insertion.text}`,
       }));
-      creatingMention.current = null;
       setMention(null);
       onInserted();
       editor.current?.focus();
@@ -388,6 +383,7 @@ export function GroupComposer({
               onHover={setSelection}
               onSelect={insertMention}
               onCreate={createMention}
+              onBroadcast={insertMention}
             />
           )}
         </div>

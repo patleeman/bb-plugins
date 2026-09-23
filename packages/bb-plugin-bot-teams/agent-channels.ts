@@ -268,13 +268,13 @@ export function registerChannelTools(
   );
   tool(
     "bots_channel_send",
-    "Post as the calling agent. @handle or a reply targets a bot; @all explicitly requests everyone's input. Unaddressed messages follow the channel's Smart/Directed/Everyone behavior. Bot callers use their final answer for their current channel. Returns a request ID; use bots_channel_request to collect replies. Reuse requestId on retries.",
+    "Post as the calling agent. @handle or a reply targets a bot; @all or @channel explicitly requests everyone's input. Unaddressed messages follow the channel's Smart/Directed/Everyone behavior. Bot callers use their final answer for their current channel. Returns a request ID; use bots_channel_request to collect replies. Reuse requestId on retries.",
     rpcContract.send.input,
     (input, threadId) => send(input, threadId),
   );
   tool(
     "bots_channel_behavior",
-    "Set a channel's response behavior. Smart chooses relevant bots, Directed only responds to mentions/replies, Everyone invites all members. @all always requests all bots.",
+    "Set a channel's response behavior. Smart chooses relevant bots, Directed only responds to mentions/replies, Everyone invites all members. @all and @channel always request all bots.",
     z.object({
       id: z.string().uuid(),
       responseBehavior: z.enum(["smart", "directed", "everyone"]),

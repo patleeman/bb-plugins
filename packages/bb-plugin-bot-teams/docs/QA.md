@@ -469,6 +469,21 @@ BB UI with six labeled workbench tabs.
 Plugin build, TypeScript checks, marketplace schema/index checks, and focused
 read-only review passed.
 
+
+## Bot creation through a thread
+
+- All creation entry points use BB’s native new-thread composer: the collection,
+  the channel member picker, and the composer’s mention picker.
+- Live capture `bots-creation` checks the prefilled instructions, focus, direct
+  links, reload, mobile width, channel invitation context, and return to the
+  unchanged channel draft. Standalone and channel setup drafts use separate keys.
+- A simulated failed submission keeps the draft, shows the error, and enables
+  retry. The capture does not dispatch an agent or create a bot.
+- `test/bot-creation.test.ts` checks that the setup RPC forwards the selected
+  provider, model, permissions, environment, prompt, and attachments. It also
+  checks dispatch proceeds without managed-bot registration and propagates failure.
+- The saved screenshot is `assets/bot-creation-thread.png`.
+
 ## Channel archive discovery — 22 September 2026
 
 Replaced the hidden Channels-heading toggle with an archive icon beside search.

@@ -35,6 +35,7 @@ import {
 } from "./channels";
 import { Modal } from "./channel-controls";
 import { BotCollection } from "./bot-collection";
+import { BotCreationThread } from "./bot-creation-thread";
 import "./styles.css";
 const tabs = ["profile", "mission", "memory", "activity", "usage"] as const;
 
@@ -231,8 +232,7 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
   );
 }
 function BotsPage({ subPath }: PluginNavPanelProps) {
-  const rpc = useRpc<typeof rpcContract>(),
-    navigate = useBbNavigate();
+  const rpc = useRpc<typeof rpcContract>();
   const [data, setData] = useState<{
       bots: Bot[];
       rooms: Room[];
@@ -264,22 +264,7 @@ function BotsPage({ subPath }: PluginNavPanelProps) {
   const [id, section] = subPath.split("/");
   const bots = data?.bots ?? [];
   if (id === "new")
-    return (
-      <div className="bot-page bot-create-page">
-        <div className="bot-config-content">
-          <div className="mb-5 flex items-center gap-2">
-            <BackButton />
-            <h1>New bot</h1>
-          </div>
-          <ProfileForm
-            onSaved={(b) =>
-              navigate.toPluginPanel("bots", { subPath: `${b.id}/mission` })
-            }
-            onCancel={() => navigate.toPluginPanel("bots")}
-          />
-        </div>
-      </div>
-    );
+    return <BotCreationThread key={section ?? "standalone"} roomId={section} />;
   if (id === "new-group" || id === "group")
     return <ChannelRedirect subPath={id === "group" ? section : "new"} />;
   if (id)
