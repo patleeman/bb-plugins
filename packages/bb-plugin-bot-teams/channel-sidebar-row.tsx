@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { experimental_Icon as Icon } from "@get-bb/plugin-sdk/app";
 import type { Room } from "./contract";
 import { IconActionTooltip } from "./channel-controls";
@@ -26,17 +26,27 @@ export function ChannelSidebarRow({
   selected,
   working,
   attentionCount = 0,
+  approvalCount = 0,
   pending,
   onOpen,
   onRename,
   onCopyId,
   onArchive,
   onDelete,
+  expanded = false,
+  onToggleExpanded,
+  children,
 }: {
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
+  /** Nested rows shown while expanded. */
+  children?: ReactNode;
   room: Room;
   selected: boolean;
   working: boolean;
   attentionCount?: number;
+  /** Bot requests waiting for an approval or answer in this channel. */
+  approvalCount?: number;
   pending: boolean;
   onOpen: () => void;
   onRename: () => void;
@@ -48,12 +58,23 @@ export function ChannelSidebarRow({
   const menuId = useId();
   const unread = room.updatedAt > (room.lastReadAt ?? 0) && !selected;
   const archiveLabel = room.archived ? "Restore channel" : "Archive channel";
+  const threadsLabel = `${expanded ? "Hide" : "Show"} bot threads`;
+  const waitingLabel = [
+    attentionCount > 0 &&
+      `${attentionCount} ${attentionCount === 1 ? "request needs" : "requests need"} your attention`,
+    approvalCount > 0 &&
+      `${approvalCount} waiting for your approval`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
+    <>
     <ContextMenu onOpenChange={setMenuOpen}>
       <ContextMenuTrigger asChild>
         <div
           className="channel-sidebar-row"
           data-selected={selected || undefined}
+          data-expanded={expanded || undefined}
           onKeyDown={(event) => {
             if (
               event.key !== "ContextMenu" &&
@@ -70,10 +91,10 @@ export function ChannelSidebarRow({
             aria-current={selected ? "page" : undefined}
             onClick={onOpen}
           >
-            {attentionCount > 0 ? (
+            {waitingLabel ? (
               <span className="channel-needs-attention" role="img"
-                aria-label={`${attentionCount} ${attentionCount === 1 ? "request needs" : "requests need"} your attention`}
-                title={`${attentionCount} ${attentionCount === 1 ? "request needs" : "requests need"} your attention`}>
+                aria-label={waitingLabel}
+                title={waitingLabel}>
                 <Icon name="BellDot" />
               </span>
             ) : room.pinned ? (
@@ -103,6 +124,19 @@ export function ChannelSidebarRow({
             )}
           </button>
           <span className="channel-nav-actions">
+            {onToggleExpanded && (
+              <IconActionTooltip label={threadsLabel}>
+                <button
+                  type="button"
+                  className="channel-nav-action channel-nav-expand"
+                  aria-label={`${threadsLabel}: ${room.name}`}
+                  aria-expanded={expanded}
+                  onClick={onToggleExpanded}
+                >
+                  <Icon name="ChevronRight" />
+                </button>
+              </IconActionTooltip>
+            )}
             <IconActionTooltip label={archiveLabel}>
               <button
                 type="button"
@@ -131,6 +165,12 @@ export function ChannelSidebarRow({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent id={menuId} aria-label={`${room.name} options`}>
+        {onToggleExpanded && (
+          <ContextMenuItem onSelect={onToggleExpanded}>
+            <Icon name="ListTree" />
+            {threadsLabel}
+          </ContextMenuItem>
+        )}
         <ContextMenuItem onSelect={onRename}>
           <Icon name="Edit" />
           Rename
@@ -152,5 +192,7 @@ export function ChannelSidebarRow({
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
+    {expanded && children}
+    </>
   );
 }

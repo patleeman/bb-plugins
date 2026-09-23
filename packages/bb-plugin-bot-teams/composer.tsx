@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useId, type ReactNode } from "react";
 import { experimental_Icon as Icon, useRpc } from "@get-bb/plugin-sdk/app";
 import type { Bot, Room, RoomMessage, rpcContract } from "./contract";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Button } from "./components/ui/button";
 import { BotOptions, ChannelOptions, matchingBots } from "./channel-controls";
 import { channelReference, matchingChannels } from "./channel-references";
@@ -24,6 +25,41 @@ const errorText = (e: unknown) => {
     "",
   );
 };
+/** Live input level bars, matching BB's thread dictation strip. */
+function Waveform({ stream }: { stream: MediaStream | null }) {
+  const [levels, setLevels] = useState<number[]>(() => Array(48).fill(0));
+  useEffect(() => {
+    if (!stream || typeof AudioContext === "undefined") return;
+    const audio = new AudioContext();
+    const analyser = audio.createAnalyser();
+    analyser.fftSize = 256;
+    audio.createMediaStreamSource(stream).connect(analyser);
+    const samples = new Uint8Array(analyser.fftSize);
+    let frame = 0,
+      last = 0;
+    const tick = (now: number) => {
+      frame = requestAnimationFrame(tick);
+      if (now - last < 60) return;
+      last = now;
+      analyser.getByteTimeDomainData(samples);
+      let peak = 0;
+      for (const v of samples) peak = Math.max(peak, Math.abs(v - 128) / 128);
+      setLevels((old) => [...old.slice(1), Math.min(1, peak * 2.5)]);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(frame);
+      void audio.close();
+    };
+  }, [stream]);
+  return (
+    <div className="group-compose-waveform" aria-hidden="true">
+      {levels.map((level, i) => (
+        <span key={i} style={{ height: `${Math.max(3, level * 18)}px` }} />
+      ))}
+    </div>
+  );
+}
 const encode = (file: Blob) =>
   new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -46,8 +82,11 @@ export function GroupComposer({
   rooms,
   onCreateBot,
   footer,
+  shelf,
 }: {
   footer?: ReactNode;
+  /** Work and queue for this channel, attached to the top of the input. */
+  shelf?: ReactNode;
   autoFocus?: boolean;
   bots: Bot[];
   memberIds: string[];
@@ -93,7 +132,9 @@ export function GroupComposer({
     stream = useRef<MediaStream | null>(null),
     alive = useRef(true),
     sending = useRef(false),
-    timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    timer = useRef<ReturnType<typeof setTimeout> | null>(null),
+    discard = useRef(false);
+  const [liveStream, setLiveStream] = useState<MediaStream | null>(null);
   const listId = useId();
   const [mention, setMention] = useState<{
       kind: "bot" | "channel";
@@ -265,6 +306,22 @@ export function GroupComposer({
       if (alive.current) setPending(false);
     }
   };
+  // Insert a mention trigger at the caret and open its picker.
+  const insertTrigger = (char: "@" | "#") => {
+    const field = editor.current;
+    const text = latestDraft.current.text;
+    const start = field?.selectionStart ?? text.length,
+      end = field?.selectionEnd ?? text.length;
+    const lead = start > 0 && !/\s|\(/.test(text[start - 1]!) ? " " : "";
+    const next = text.slice(0, start) + lead + char + text.slice(end);
+    const caret = start + lead.length + 1;
+    setDraft((d) => ({ ...d, text: next }));
+    findMention(next, caret);
+    requestAnimationFrame(() => {
+      editor.current?.focus();
+      editor.current?.setSelectionRange(caret, caret);
+    });
+  };
   const dictate = async () => {
     if (voice === "recording") {
       recording.current?.stop();
@@ -297,6 +354,8 @@ export function GroupComposer({
         return;
       }
       stream.current = media;
+      discard.current = false;
+      setLiveStream(media);
       const mime = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"].find(
         (t) => MediaRecorder.isTypeSupported(t),
       );
@@ -314,6 +373,7 @@ export function GroupComposer({
         failed = true;
         if (timer.current) clearTimeout(timer.current);
         media.getTracks().forEach((t) => t.stop());
+        setLiveStream(null);
         if (alive.current) {
           setVoice("idle");
           setError("Microphone recording failed. Try again.");
@@ -324,7 +384,12 @@ export function GroupComposer({
         if (!failed) media.getTracks().forEach((t) => t.stop());
         recording.current = null;
         stream.current = null;
+        setLiveStream(null);
         if (!alive.current || failed) return;
+        if (discard.current) {
+          setVoice("idle");
+          return;
+        }
         setVoice("transcribing");
         try {
           const blob = new Blob(chunks, { type: recorder.mimeType });
@@ -360,7 +425,7 @@ export function GroupComposer({
     }
   };
   return (
-    <div className="group-compose-wrap">
+    <div className="group-compose-wrap" data-shelf={shelf ? "" : undefined}>
       {mention && !editorBlocked && (
         <div className="channel-mention-picker">
           {mention.kind === "channel" ? (
@@ -393,6 +458,7 @@ export function GroupComposer({
           {error}
         </p>
       )}
+      {shelf}
       <div
         className="group-compose group/promptbox relative w-full rounded-xl border border-border bg-background shadow-lift"
         onDragOver={(e) => {
@@ -546,51 +612,108 @@ export function GroupComposer({
               e.target.value = "";
             }}
           />
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 max-md:pointer-coarse:h-10 max-md:pointer-coarse:w-10"
-            aria-label="Attach files"
-            disabled={blocked}
-            onClick={() => picker.current?.click()}
-          >
-            <Icon name="Plus" />
-          </Button>
-          <span className="group-compose-hint" role="status">
-            {pending
-              ? "Sending…"
-              : uploading
-                ? "Uploading…"
-                : voice === "recording"
-                  ? "Listening…"
-                  : voice === "transcribing"
-                    ? "Transcribing…"
-                    : voice === "starting"
-                      ? "Opening microphone…"
-                      : ""}
-          </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            className={`h-8 w-8 max-md:pointer-coarse:h-10 max-md:pointer-coarse:w-10 ${voice === "recording" ? "is-recording" : ""}`}
-            aria-label={
-              voice === "recording"
-                ? "Finish dictation"
-                : voiceEnabled
-                  ? "Dictate message"
-                  : "Dictate message (enable voice transcription in BB settings)"
-            }
-            disabled={
-              !voiceEnabled ||
-              paused ||
-              pending ||
-              uploading ||
-              ["starting", "transcribing"].includes(voice)
-            }
-            onClick={() => void dictate()}
-          >
-            <Icon name={voice === "recording" ? "Square" : "Mic"} />
-          </Button>
+          {voice === "recording" ? (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 max-md:pointer-coarse:h-10 max-md:pointer-coarse:w-10"
+                aria-label="Cancel dictation"
+                onClick={() => {
+                  discard.current = true;
+                  recording.current?.stop();
+                }}
+              >
+                <Icon name="X" />
+              </Button>
+              <Waveform stream={liveStream} />
+              <Button
+                size="icon"
+                className="h-8 w-8 rounded-full max-md:pointer-coarse:h-10 max-md:pointer-coarse:w-10"
+                aria-label="Finish dictation"
+                onClick={() => void dictate()}
+              >
+                <Icon name="Check" />
+              </Button>
+            </>
+          ) : (
+            <>
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 max-md:pointer-coarse:h-10 max-md:pointer-coarse:w-10"
+                    aria-label="Add to message"
+                    disabled={blocked}
+                  >
+                    <Icon name="Plus" />
+                  </Button>
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content
+                    align="start"
+                    side="top"
+                    sideOffset={4}
+                    collisionPadding={8}
+                    className="channel-popover channel-add-menu"
+                  >
+                    <DropdownMenu.Item
+                      className="channel-menu-row"
+                      onSelect={() => picker.current?.click()}
+                    >
+                      <Icon name="Paperclip" />
+                      Attach files
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Separator className="channel-menu-separator" />
+                    <DropdownMenu.Item
+                      className="channel-menu-row"
+                      onSelect={() => insertTrigger("@")}
+                    >
+                      <Icon name="AtSign" />
+                      Mention a bot
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      className="channel-menu-row"
+                      onSelect={() => insertTrigger("#")}
+                    >
+                      <Icon name="Hash" />
+                      Link a channel
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
+              <span className="group-compose-hint" role="status">
+                {pending
+                  ? "Sending…"
+                  : uploading
+                    ? "Uploading…"
+                    : voice === "transcribing"
+                      ? "Transcribing…"
+                      : voice === "starting"
+                        ? "Opening microphone…"
+                        : ""}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 max-md:pointer-coarse:h-10 max-md:pointer-coarse:w-10"
+                aria-label={
+                  voiceEnabled
+                    ? "Dictate message"
+                    : "Dictate message (enable voice transcription in BB settings)"
+                }
+                disabled={
+                  !voiceEnabled ||
+                  paused ||
+                  pending ||
+                  uploading ||
+                  ["starting", "transcribing"].includes(voice)
+                }
+                onClick={() => void dictate()}
+              >
+                <Icon name="Mic" />
+              </Button>
           <SendModePicker
             value={(() => {
               try {
@@ -619,6 +742,8 @@ export function GroupComposer({
           >
             <Icon name="CornerDownLeft" />
           </Button>
+            </>
+          )}
         </div>
       </div>
       {footer && <div className="group-compose-footer">{footer}</div>}

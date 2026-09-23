@@ -66,17 +66,15 @@ BB’s **Settings → Appearance** can select sidebar providers. **Channels and 
 
 ## Channel workspace
 
-Context, usage, automations, and activity have separate
+Activity, automations, and usage have separate
 tabs in BB’s right workbench. Use **Show right panel** to open the workbench. The labeled tabs share its
 resize, collapse, and split controls with Browser and Terminal. On compact screens, BB opens them in
 its workbench drawer.
 
-- **Channel context** holds the owner’s brief, decisions, and channel-specific
-  memory. Bots receive it on their next task and can update decisions/memory
-  through `bots_channel_context` with a version check. Local drafts survive
-  navigation; stale saves preserve the draft and ask you to reload.
-- **Version history** compares and restores channel context, `MISSION.md`, and
-  `MEMORY.md`. Restore loads a draft before saving. Bot documents are snapshotted
+- There is no shared channel context. Each bot keeps its own `MISSION.md`,
+  `MEMORY.md`, and one work thread per channel, which already holds that
+  channel's history.
+- **Version history** compares and restores `MISSION.md` and `MEMORY.md`. Restore loads a draft before saving. Bot documents are snapshotted
   when read/saved and after completed bot turns, not on every filesystem write.
 - Files stay in the transcript. Bots can use `bots_publish_file` or
   `bb bots publish-file` to attach reports, CSVs, PDFs, and images from their
@@ -228,7 +226,7 @@ Channels replace the Council plugin. Any BB agent can discover advisors, create 
 channel, invite bots, post a brief, collect replies and failures, ask follow-ups,
 and react through native tools: `bots_channels`, `bots_channel_create`,
 `bots_channel_invite`, `bots_channel_send`, `bots_channel_read`,
-`bots_channel_request`, `bots_channel_react`, `bots_channel_behavior`, and `bots_channel_retry_routing`. Channel bots also receive `bots_react`, `bots_publish_image`, `bots_publish_file`, and `bots_channel_context`. The bundled skill teaches this
+`bots_channel_request`, `bots_channel_react`, `bots_channel_behavior`, and `bots_channel_retry_routing`. Channel bots also receive `bots_react`, `bots_publish_image`, and `bots_publish_file`. The bundled skill teaches this
 workflow, including requests to “ask the council.”
 
 Messages sent from BB threads show the calling bot or **BB agent**, with a link
@@ -389,6 +387,31 @@ Decisions and blockers use real BB questions and the existing built-in phone not
 
 Ordinary channel replies and failures use a separate, optional shared notification API (`notifications.enqueue`). The installed BB build does not expose this API, so those events do not produce channel push alerts. This limitation does not affect the native decision and blocker questions.
 
+
+## Permissions
+
+A bot carries a permission mode from its profile: **Accept Edits** (sandboxed, asks you before anything more), **Auto** (sandboxed, and the provider reviews on its own), or **Full Access** (no sandbox, no approvals). New bots default to Auto, so a bot working outside its own workspace is refused automatically and never asks.
+
+The channel composer's footer carries the same control BB puts under a thread composer. It reads the channel's setting, or what its bots agree on, or **Mixed**, and turns amber on Full Access. Opening it gives two levels:
+
+- **All bots in this channel** sets one mode for work started here, overriding each member's own. This is the lever for a work session: open the gate, get the task done, set it back to **Each bot's own**. A bot whose provider cannot offer that mode keeps its own.
+- **Each bot** shows one row per member with BB's own picker bound to that bot's provider, because a channel can hold bots on different providers. A change here follows the bot into every channel, and is disabled while the channel setting applies.
+
+The channel's setting rides every dispatch, so it reaches long-lived bot threads too. It takes effect on the bot's next turn, not the one already running, and it does not retry an action that was already refused. Mission work runs outside any channel and always uses the bot's own mode.
+
+Only the owner can change a channel's permissions. Bots have no tool for it, and the CLI refuses when a bot calls it.
+
+- `bb bots channel permissions CHANNEL` — read the current setting
+- `bb bots channel permissions CHANNEL full` — set one mode for every bot here
+- `bb bots channel permissions CHANNEL each` — go back to each bot's own
+
+## Approvals in the channel
+
+When a bot's work thread stops for an approval, the request is forwarded to the channel that started the work, so you do not have to find the thread. A card appears below the transcript: the bot, what it wants (the command, the file change, the permission, the plan, or the tool), and the provider's reason. **Approve**, **Approve for session**, and **Deny** answer the real request in the work thread; only the decisions the provider offers are shown. A single multiple-choice question shows one button per choice. Anything else shows **Open thread** alone, so nothing is answered blind. A handled card collapses to a one-line result.
+
+While a bot waits, its row in the queue shelf reads **Needs approval** in amber with a **Review** button that jumps to the card. The channel's sidebar row shows the bell, and so does that bot's nested thread row.
+
+Channel decisions and blockers that Bot Teams itself opens are not forwarded here. Those stay in **For you**, described below. Answering is restricted to a bot that is still working in that channel, so a settled or reassigned request is refused with an explanation rather than resolved.
 
 ## Delegation returns
 

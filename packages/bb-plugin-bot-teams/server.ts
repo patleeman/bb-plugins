@@ -1,8 +1,9 @@
 import { classifyJevReturn } from "./jev";
 import { ChannelNotifications, notificationSchema } from "./notifications";
 import { AttentionQuestions } from "./attention-questions";
+import { ChannelApprovals } from "./approvals";
 import { ATTENTION_QUESTION_RENDERER } from "./attention-question-contract";
-import { contextContent, usageLimits } from "./workspace-contract";
+import { usageLimits } from "./workspace-contract";
 import { isExecuting } from "./job-state";
 import { broadcastHandles } from "./mentions";
 import { createHash, randomUUID } from "node:crypto";
@@ -72,6 +73,7 @@ export default async function plugin(bb: BbPluginApi) {
   const store = new Store(bb.storage.database());
   const runtime = new Runtime(bb, store);
   const notifications = new ChannelNotifications(bb, store);
+  const approvals = new ChannelApprovals(bb, store, () => runtime.changed());
   bb.rpc.register(
     {
       "notifications.resolve": {
@@ -86,6 +88,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.events.on("interaction.pending", ({ thread, interaction }) => {
     if (interaction.origin?.kind !== "plugin" || interaction.origin.pluginId !== "bot-teams" || interaction.origin.rendererId !== ATTENTION_QUESTION_RENDERER)
       notifications.interaction(thread.id, interaction.id);
+    void approvals.tick();
     runtime.changed();
   });
 
@@ -535,23 +538,37 @@ export default async function plugin(bb: BbPluginApi) {
       return value;
     },
     attentionDiscardReply: ({ id }) => questions.discardReply(id),
-    channelContext: ({ id }) => runtime.data.context(id),
-    saveChannelContext: ({ id, version, ...content }) =>
-      runtime.locked(`room:${id}`, async () => {
-        if (store.room(id).archived)
-          throw new Error("Restore this channel before editing context.");
-        const value = runtime.data.saveContext(id, content, version, "You");
-        runtime.changed();
-        return value;
-      }),
-    contextHistory: ({ id, before }) => {
-      store.room(id);
-      return runtime.data.revisions(`channel:${id}`, before);
-    },
     documentHistory: async ({ id, file, before }) => {
       const latest = await document(store.get(id).home, file);
       runtime.data.snapshot(`${id}:${file}`, latest.text, "Observed file");
       return runtime.data.revisions(`${id}:${file}`, before);
+    },
+    channelThreads: ({ id }) => {
+      store.room(id);
+      const waiting = approvals.waitingThreadIds(id);
+      const active = new Set(
+        store
+          .roomJobs(id)
+          .filter((j) => ["queued", "dispatching", "running"].includes(j.status))
+          .map((j) => j.threadId),
+      );
+      return store.roomConversations(id).flatMap((c) => {
+        try {
+          const bot = store.get(c.botId);
+          return [
+            {
+              threadId: c.threadId,
+              botId: bot.id,
+              name: bot.name,
+              avatar: bot.avatar,
+              active: active.has(c.threadId),
+              needsApproval: waiting.has(c.threadId),
+            },
+          ];
+        } catch {
+          return [];
+        }
+      });
     },
     channelFiles: ({ id, before }) => runtime.data.files(id, before),
     usage: ({ id, kind }) =>
@@ -647,6 +664,7 @@ export default async function plugin(bb: BbPluginApi) {
         rooms: store.rooms(),
         activeRoomIds: store.activeRoomIds(),
         attentionCounts: store.attention.counts(),
+        approvalCounts: approvals.counts(),
         botCreateRequests: store.botCreateRequests().map(botCreateRequestView),
       };
     },
@@ -882,8 +900,10 @@ export default async function plugin(bb: BbPluginApi) {
         ...store.transcript(id, { start, limit }),
         runs: store.runs(id, 50),
         jobs: await runtime.roomJobsWithActivity(id),
+        approvals: approvals.list(id),
       };
     },
+    resolveApproval: (input) => approvals.resolve(input),
     composer: async () => ({
       voiceEnabled: (await bb.sdk.system.config()).voiceTranscriptionEnabled,
     }),
@@ -1167,43 +1187,6 @@ export default async function plugin(bb: BbPluginApi) {
       JSON.stringify(await publishFile(context.threadId, path, alt)),
   });
   bb.agents.registerTool({
-    name: "bots_channel_context",
-    description:
-      "Read channel-specific brief, decisions, memory and reference files. To update decisions or memory, supply the current version and changed fields. Keep private channel knowledge here instead of shared MEMORY.md.",
-    parameters: z.object({
-      channelId: z.string().uuid(),
-      version: z.number().int().optional(),
-      memory: z.string().max(16000).optional(),
-      decisions: z.string().max(16000).optional(),
-    }),
-    execute: async ({ channelId, version, memory, decisions }, ctx) => {
-      return runtime.locked(`room:${channelId}`, async () => {
-        const author = authorizeChannel(store, ctx.threadId, channelId);
-        const current = runtime.data.context(channelId);
-        if (memory === undefined && decisions === undefined)
-          return JSON.stringify(current);
-        if (version === undefined)
-          throw new Error(
-            "Read the current channel context and supply its version before updating.",
-          );
-        if (store.room(channelId).archived)
-          throw new Error("This channel is archived.");
-        const next = runtime.data.saveContext(
-          channelId,
-          {
-            ...current,
-            ...(memory !== undefined ? { memory } : {}),
-            ...(decisions !== undefined ? { decisions } : {}),
-          },
-          version,
-          author.speaker,
-        );
-        runtime.changed();
-        return JSON.stringify(next);
-      });
-    },
-  });
-  bb.agents.registerTool({
     name: "bots_publish_image",
     description:
       "Include a local PNG, JPEG, GIF, or WebP inline in your current channel response. Finish with your caption or [PASS] for an image-only response. Does not send a separate message or wake bots.",
@@ -1243,7 +1226,6 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
   const channelTools = [
-    "bots_channel_context",
     ...registerChannelTools(bb, store, handlers, sendMessage),
     ...automations.registerTools(),
   ];
@@ -1442,6 +1424,18 @@ export default async function plugin(bb: BbPluginApi) {
           try { await delay(1500, undefined, { signal }); } catch { break; }
         }
       } finally { await questions.dispose(); }
+    },
+  });
+  bb.background.service("channel-approvals", {
+    async start(signal) {
+      while (!signal.aborted) {
+        await approvals.tick(signal);
+        try {
+          await delay(1500, undefined, { signal });
+        } catch {
+          break;
+        }
+      }
     },
   });
   bb.background.service("channel-notifications", {

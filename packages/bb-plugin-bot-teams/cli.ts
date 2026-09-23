@@ -80,6 +80,11 @@ const commands = [
     "<channel> [smart|directed|everyone]",
   ],
   [
+    "channel permissions",
+    "Read or set what every bot in a channel may do",
+    "<channel> [each|accept-edits|auto|full]",
+  ],
+  [
     "channel retry-routing",
     "Retry choosing bots for a message",
     "<channel> <request-id>",
@@ -919,6 +924,25 @@ export function registerCli(
                   rememberDefault: !caller?.botId,
                 })
               : { responseBehavior: room.responseBehavior ?? "everyone" },
+          );
+        }
+        if (command === "channel permissions") {
+          const a = argumentsFor(rest),
+            [selector, mode] = a.positional(1, 2),
+            room = channel(selector!, ctx.threadId);
+          if (mode && caller?.botId)
+            throw new UsageError("Only the owner can set channel permissions.");
+          if (mode && !["each", "accept-edits", "auto", "full"].includes(mode))
+            throw new UsageError(
+              "Choose each, accept-edits, auto, or full.",
+            );
+          return emit(
+            mode
+              ? await call("channelState", {
+                  id: room.id,
+                  permissionMode: mode === "each" ? null : mode,
+                })
+              : { permissionMode: room.permissionMode ?? null },
           );
         }
         if (command === "channel retry-routing") {

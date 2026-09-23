@@ -899,6 +899,7 @@ test("unrelated threads cannot claim a bot identity using metadata", async () =>
       rooms: [],
       activeRoomIds: [],
       attentionCounts: {},
+      approvalCounts: {},
       botCreateRequests: [],
     });
   } finally {
@@ -3047,62 +3048,6 @@ test("dispatching responses can use channel tools while scheduled recursion rema
   }
 });
 
-test("channel context revisions reject stale saves and stay scoped across channels", async () => {
-  const x = setup();
-  await plugin(x.bb);
-  try {
-    const first = await x.harness.behavior.callRpc("channelContext", {
-      id: x.room.id,
-    });
-    assert.equal((first as { version: number }).version, 0);
-    await x.harness.behavior.callRpc("saveChannelContext", {
-      id: x.room.id,
-      version: 0,
-      brief: "Use SQLite",
-      decisions: "Ship Monday",
-      memory: "Channel private fact",
-      attachmentIds: [],
-    });
-    await assert.rejects(
-      x.harness.behavior.callRpc("saveChannelContext", {
-        id: x.room.id,
-        version: 0,
-        memory: "Stale overwrite",
-      }),
-      /changed/,
-    );
-    const other = { ...x.room, id: randomUUID() };
-    x.store.putRoom(other);
-    assert.equal(x.runtime.data.context(other.id).memory, "");
-    const revisions = x.runtime.data.revisions(`channel:${x.room.id}`);
-    assert.equal(revisions.length, 2);
-    x.runtime.send(x.room, "@atlas Check context", randomUUID());
-    await x.runtime.drive(x.a);
-    const job = x.store.work(x.a.id)[0]!;
-    assert.match(job.text, /Use SQLite/);
-    assert.match(job.text, /Ship Monday/);
-    assert.match(job.text, /Channel private fact/);
-    await x.harness.behavior.callAgentTool(
-      "bots_channel_context",
-      { channelId: x.room.id, version: 1, memory: "Updated fact" },
-      { threadId: job.threadId! },
-    );
-    assert.equal(x.runtime.data.context(x.room.id).brief, "Use SQLite");
-    assert.equal(x.runtime.data.context(x.room.id).memory, "Updated fact");
-    x.store.putRoom({ ...other, memberIds: [x.b.id] });
-    await assert.rejects(
-      x.harness.behavior.callAgentTool(
-        "bots_channel_context",
-        { channelId: other.id },
-        { threadId: job.threadId! },
-      ),
-      /invited/,
-    );
-  } finally {
-    await x.close();
-  }
-});
-
 test("general file publication becomes visible only when its response posts", async () => {
   const x = setup();
   await plugin(x.bb);
@@ -3246,67 +3191,27 @@ test("channel queries use indexes and bound run history before parsing", async (
   }
 });
 
-test("saved reference files survive a full set of current uploads", async () => {
+test("current uploads survive a full set of earlier channel files", async () => {
   const x = setup();
   try {
-    const references = Array.from({ length: 10 }, (_, i) => ({
+    const file = (name: string) => ({
       id: randomUUID(),
       roomId: x.room.id,
       projectId: x.a.projectId,
-      path: `/tmp/ref-${i}.txt`,
-      name: `ref-${i}.txt`,
+      path: `/tmp/${name}`,
+      name,
       type: "localFile" as const,
       sizeBytes: 1,
-    }));
-    const current = references.map((a, i) => ({
-      ...a,
-      id: randomUUID(),
-      name: `new-${i}.txt`,
-      path: `/tmp/new-${i}.txt`,
-    }));
-    for (const a of [...references, ...current]) x.store.putAttachment(a);
-    assert.throws(
-      () =>
-        x.runtime.data.saveContext(
-          x.room.id,
-          {
-            brief: "",
-            decisions: "",
-            memory: "",
-            attachmentIds: [references[0]!.id],
-          },
-          0,
-          "You",
-        ),
-      /sent file/,
-    );
-    x.runtime.send(
-      { ...x.room, memberIds: [] },
-      "Reference files",
-      randomUUID(),
-      references,
-    );
-    x.runtime.data.saveContext(
-      x.room.id,
-      {
-        brief: "",
-        decisions: "",
-        memory: "",
-        attachmentIds: references.map((a) => a.id),
-      },
-      0,
-      "You",
-    );
-    const m = x.runtime.send(
-      x.room,
-      "@atlas Read all references and uploads",
-      randomUUID(),
-      current,
-    );
+    });
+    const earlier = Array.from({ length: 10 }, (_, i) => file(`old-${i}.txt`));
+    const current = Array.from({ length: 10 }, (_, i) => file(`new-${i}.txt`));
+    for (const a of [...earlier, ...current]) x.store.putAttachment(a);
+    x.runtime.send({ ...x.room, memberIds: [] }, "Earlier files", randomUUID(), earlier);
+    const m = x.runtime.send(x.room, "@atlas Read the uploads", randomUUID(), current);
     await x.runtime.drive(x.a);
     assert.deepEqual(
       new Set(x.store.requestJobs(m.id)[0]!.attachments.map((a) => a.id)),
-      new Set([...references, ...current].map((a) => a.id)),
+      new Set(current.map((a) => a.id)),
     );
   } finally {
     await x.close();

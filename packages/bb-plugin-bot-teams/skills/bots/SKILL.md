@@ -312,11 +312,11 @@ or wake bots. Finish with a concise caption, or `[PASS]` to send only the images
 You can publish up to ten images, each at most 8 MB. Failed or cancelled responses
 do not post images. Do not substitute local Markdown image paths for this tool.
 
-## Channel context, artifacts, and budgets
+## Channel knowledge, artifacts, and budgets
 
-Read `bots_channel_context` for the channel brief, decisions, and memory. To update decisions or memory, supply its current `version`. Keep knowledge
-specific to one channel here; use shared `MEMORY.md` only for facts appropriate to
-all the bot's channels. The owner can compare and restore revisions in the UI.
+Channels have no shared context store. Your work thread for each channel keeps
+that channel's history. Use shared `MEMORY.md` only for facts appropriate to all
+your channels.
 
 Use `bots_publish_file` or `bb bots publish-file /absolute/workspace/report.csv`
 to add an artifact to the current final answer. The 8 MB file limit and workspace

@@ -40,3 +40,19 @@ export function channelWork(jobs: Job[]): Job[] {
     return true;
   });
 }
+/** Active sessions with the requests still waiting behind each one. */
+export function channelQueues(jobs: Job[]): { head: Job; queued: Job[] }[] {
+  return channelWork(jobs).map((head) => ({
+    head,
+    queued: jobs
+      .filter(
+        (job) =>
+          job.id !== head.id &&
+          job.status === "queued" &&
+          !job.cancellationPending &&
+          job.botId === head.botId &&
+          job.conversationKey === head.conversationKey,
+      )
+      .sort((a, b) => a.createdAt - b.createdAt),
+  }));
+}

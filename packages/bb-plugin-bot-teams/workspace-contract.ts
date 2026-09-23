@@ -1,16 +1,5 @@
 import { z } from "zod";
 
-export const contextContent = z.object({
-  brief: z.string().max(16000).default(""),
-  decisions: z.string().max(16000).default(""),
-  memory: z.string().max(16000).default(""),
-  attachmentIds: z.array(z.string().uuid()).max(10).default([]),
-});
-export const channelContext = contextContent.extend({
-  version: z.number().int(),
-  updatedAt: z.number(),
-});
-export type ChannelContext = z.infer<typeof channelContext>;
 export const revisionSchema = z.object({
   id: z.number(),
   text: z.string(),

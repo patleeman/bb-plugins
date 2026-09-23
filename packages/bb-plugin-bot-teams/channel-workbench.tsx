@@ -1,16 +1,11 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./contract";
-import {
-  channelContext,
-  defaultLimits,
-  type ChannelContext,
-} from "./workspace-contract";
+import { defaultLimits } from "./workspace-contract";
 import { Button } from "./components/ui/button";
 import { experimental_Icon as Icon } from "@get-bb/plugin-sdk/app";
 import { IconActionTooltip } from "./channel-controls";
 import { Input } from "./components/ui/input";
-import { Textarea } from "./components/ui/textarea";
 import {
   ActionBar,
   EmptyState,
@@ -23,210 +18,12 @@ import {
 export type WorkbenchPanel =
   | "automations"
   | "activity"
-  | "context"
   | "usage";
 export const workbenchLabels: Record<WorkbenchPanel, string> = {
   automations: "Automations",
   activity: "Activity",
-  context: "Context",
   usage: "Usage",
 };
-import { RevisionList, type Revision } from "./revision-list";
-
-export function ContextPanel({ id }: { id: string }) {
-  const rpc = useRpc<typeof rpcContract>();
-  const controlId = useId();
-  const key = `bb:bots:context:${id}`;
-  const [draft, setDraft] = useState<ChannelContext | null>(null),
-    [baseline, setBaseline] = useState<ChannelContext | null>(null);
-  const [error, setError] = useState<string | null>(null),
-    [pending, setPending] = useState(false),
-    [notice, setNotice] = useState("");
-  const [revisions, setRevisions] = useState<Revision[] | null>(null);
-  const historyBusy = useRef(false);
-  const [historyMore, setHistoryMore] = useState(false),
-    [historyPending, setHistoryPending] = useState(false);
-  const dirty =
-    !!draft && !!baseline && JSON.stringify(draft) !== JSON.stringify(baseline);
-  const load = async () => {
-    try {
-      const d = await rpc.call("channelContext", { id });
-      setBaseline(d);
-      let restored: ChannelContext | null = null;
-      try {
-        const parsed = channelContext.safeParse(
-          JSON.parse(localStorage.getItem(key) ?? "null"),
-        );
-        if (parsed.success) restored = parsed.data;
-      } catch {}
-      setDraft(restored ?? d);
-      if (restored && restored.version !== d.version)
-        setError(
-        "Channel context changed. Your draft is preserved. Copy your edits or reload the latest version.",
-        );
-    } catch (e) {
-      setError(message(e));
-    }
-  };
-  useEffect(() => {
-    void load();
-  }, [id, rpc]);
-  useEffect(() => {
-    if (!draft || !baseline) return;
-    try {
-      if (dirty) localStorage.setItem(key, JSON.stringify(draft));
-      else localStorage.removeItem(key);
-    } catch {
-      setError("This draft could not be saved on this device.");
-    }
-  }, [key, draft, baseline, dirty]);
-  const save = async () => {
-    if (!draft) return;
-    setPending(true);
-    setError(null);
-    try {
-      const d = await rpc.call("saveChannelContext", { id, ...draft });
-      setDraft(d);
-      setBaseline(d);
-      setNotice("Saved. Bots receive this context on their next task.");
-      setRevisions(null);
-    } catch (e) {
-      setError(message(e));
-    } finally {
-      setPending(false);
-    }
-  };
-  const history = async (before?: number) => {
-    if (historyBusy.current) return;
-    historyBusy.current = true;
-    setHistoryPending(true);
-    try {
-      const page = await rpc.call("contextHistory", {
-        id,
-        ...(before !== undefined ? { before } : {}),
-      });
-      setRevisions((old) => (before ? [...(old ?? []), ...page] : page));
-      setHistoryMore(page.length === 20);
-    } catch (e) {
-      setError(message(e));
-    } finally {
-      historyBusy.current = false;
-      setHistoryPending(false);
-    }
-  };
-  if (!draft)
-    return (
-      <div className="channel-workbench-panel">
-        <ErrorMessage error={error} />
-        <p role="status" className="bot-empty-state">Loading context…</p>
-      </div>
-    );
-  return (
-    <div className="channel-workbench-panel channel-context-form">
-      <p className="channel-workbench-intro">
-        Shared guidance that every bot in this channel receives.
-      </p>
-      <Section title="Channel guidance">
-        {(
-          [
-            ["brief", "Brief and instructions", "What bots should know before working here."],
-            ["decisions", "Decisions", "Settled choices and conventions for this channel."],
-            ["memory", "Channel memory", "Durable facts shared across the channel."],
-          ] as const
-        ).map(([field, label, placeholder]) => (
-          <FormRow
-            key={field}
-            label={label}
-            htmlFor={`${controlId}-${field}`}
-            className={field === "memory" ? "channel-memory-row" : ""}
-          >
-            <Textarea
-              id={`${controlId}-${field}`}
-              rows={field === "memory" ? 7 : 3}
-              value={draft[field]}
-              placeholder={placeholder}
-              maxLength={16000}
-              disabled={pending}
-              onChange={(e) => {
-                setDraft({ ...draft, [field]: e.target.value });
-                setNotice("");
-              }}
-            />
-          </FormRow>
-        ))}
-      </Section>
-      <ErrorMessage error={error} />
-      <ActionBar
-        status={notice || (dirty ? "Unsaved changes · draft saved" : "")}
-        secondary={
-          <>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={pending}
-              onClick={() => {
-                if (
-                  !dirty ||
-                  window.confirm("Discard your context draft and reload?")
-                ) {
-                  localStorage.removeItem(key);
-                  void load();
-                  setError(null);
-                }
-              }}
-            >
-              Reload
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={historyPending}
-              onClick={() => void history()}
-            >
-              Version history
-            </Button>
-          </>
-        }
-        primary={dirty || pending ? (
-          <Button
-            size="sm"
-            disabled={pending || !dirty || draft.version !== baseline?.version}
-            onClick={() => void save()}
-          >
-            {pending ? "Saving…" : "Save context"}
-          </Button>
-        ) : undefined}
-      />
-      {revisions && (
-        <RevisionList
-          revisions={revisions.map((r) => ({
-            ...r,
-            text: JSON.stringify(JSON.parse(r.text), null, 2),
-          }))}
-          current={JSON.stringify(draft, null, 2)}
-          morePending={historyPending}
-          onMore={
-            historyMore ? () => void history(revisions.at(-1)!.id) : undefined
-          }
-          onUse={(text) => {
-            const old = channelContext.parse(JSON.parse(text));
-            setDraft({
-              ...old,
-              version: baseline!.version,
-              updatedAt: baseline!.updatedAt,
-            });
-            setError(null);
-            setNotice(
-              "Version loaded into your draft. Save context to restore it.",
-            );
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-
 export function UsagePanel({
   id,
   kind,

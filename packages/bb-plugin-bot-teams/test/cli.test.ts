@@ -508,6 +508,31 @@ test("CLI mission and memory writes preserve version conflicts and remote file i
   }
 });
 
+test("CLI reads and sets channel permissions, and only for the owner", async () => {
+  const x = await setup();
+  try {
+    await x.create();
+    const room = roomSchema.parse(
+      await x.ok(["channel", "create", "Release", "--bot", "@atlas"]),
+    );
+    assert.deepEqual(await x.ok(["channel", "permissions", room.id]), {
+      permissionMode: null,
+    });
+    await x.ok(["channel", "permissions", room.id, "full"]);
+    assert.equal(x.store.room(room.id).permissionMode, "full");
+    assert.deepEqual(await x.ok(["channel", "permissions", room.id]), {
+      permissionMode: "full",
+    });
+    await x.ok(["channel", "permissions", room.id, "each"]);
+    assert.equal(x.store.room(room.id).permissionMode, null);
+    const invalid = await x.run(["channel", "permissions", room.id, "yolo"]);
+    assert.equal(invalid.exitCode, 2);
+    assert.match(invalid.stderr, /accept-edits/);
+  } finally {
+    await x.close();
+  }
+});
+
 test("CLI manages channel membership and lifecycle without overwriting unrelated members", async () => {
   const x = await setup();
   try {

@@ -129,6 +129,16 @@ export class Store {
         .all(id) as { json: string }[]
     ).map((r) => JSON.parse(r.json));
   }
+  /** Each bot's primary work thread for one channel (forks excluded). */
+  roomConversations(roomId: string): Conversation[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT json FROM conversations WHERE json_extract(json,'$.key')=? ORDER BY rowid",
+        )
+        .all(`group:${roomId}`) as { json: string }[]
+    ).map((r) => JSON.parse(r.json));
+  }
   byThread(id: string): Conversation | null {
     const row = this.db
       .prepare("SELECT json FROM conversations WHERE thread_id=?")
@@ -712,6 +722,18 @@ export class Store {
         "INSERT INTO room_runs VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET json=excluded.json",
       )
       .run(r.id, r.roomId, JSON.stringify(r));
+  }
+  /** Executing work across every channel, for channel-wide pending-request polling. */
+  executingRoomJobs(): Job[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT json FROM jobs WHERE status IN ('dispatching','running')
+             AND json_extract(json,'$.roomId') IS NOT NULL
+           ORDER BY created_at, rowid`,
+        )
+        .all() as { json: string }[]
+    ).map((r) => jobSchema.parse(JSON.parse(r.json)));
   }
   roomJobs(roomId: string, limit = 100): Job[] {
     return (

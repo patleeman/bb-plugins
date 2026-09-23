@@ -1,5 +1,4 @@
 import {
-  ContextPanel,
   UsagePanel,
   workbenchLabels,
   type WorkbenchPanel,
@@ -39,6 +38,7 @@ import type {
   Job,
   RoomRun,
   rpcContract,
+  ChannelApproval,
 } from "./contract";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -49,10 +49,21 @@ import {
   ContextMenuItem,
 } from "./components/ui/context-menu";
 import { WorkList, ErrorMessage, message } from "./bot-ui";
-import { channelWork, channelWorkActivity } from "./channel-work";
+import {
+  ChannelThreadList,
+  openWorkThread,
+  useExpandedChannels,
+} from "./channel-threads";
+import { channelQueues, channelWork, channelWorkActivity } from "./channel-work";
+import {
+  ChannelApprovalDeck,
+  approvalFor,
+  revealApproval,
+} from "./channel-approvals";
 import { ChannelSearch } from "./channel-search";
 import { useAttention, ChannelAttentionBanner, MessageAttention } from "./attention-view";
 import { ChannelSidebarRow } from "./channel-sidebar-row";
+import { ChannelPermissionPicker } from "./channel-permissions";
 import {
   channelLinkDestination,
   channelMessageReference,
@@ -82,11 +93,13 @@ function useRoster(reconcile = false) {
     rooms: Room[];
     activeRoomIds: string[];
     attentionCounts: Record<string, number>;
+    approvalCounts: Record<string, number>;
   }>({
     bots: [],
     rooms: [],
     activeRoomIds: [],
     attentionCounts: {},
+    approvalCounts: {},
   });
   const [error, setError] = useState<string | null>(null);
   const request = useRef(0);
@@ -210,6 +223,7 @@ type ChannelData = TranscriptPage & {
   room: Room;
   jobs: Job[];
   runs: RoomRun[];
+  approvals: ChannelApproval[];
 };
 function MessageActionButtons({
   message,
@@ -618,7 +632,9 @@ export function ChannelsSidebar({
   onNavigate,
   activeThreadId,
 }: PluginThreadListProps) {
-  const { rooms, activeRoomIds, attentionCounts, error } = useRoster(true),
+  const { expanded, setExpanded } = useExpandedChannels();
+  const { rooms, activeRoomIds, attentionCounts, approvalCounts, error } =
+      useRoster(true),
     rpc = useRpc<typeof rpcContract>(),
     navigate = useBbNavigate();
   const [selected, setSelected] = useState<string | null>(null),
@@ -740,13 +756,21 @@ export function ChannelsSidebar({
             selected={selected === r.id}
             working={activeRoomIds.includes(r.id)}
             attentionCount={attentionCounts[r.id] ?? 0}
+            approvalCount={approvalCounts[r.id] ?? 0}
             pending={pending}
             onOpen={() => open(r.id)}
             onRename={() => setRenaming(r)}
             onCopyId={() => void copyChannelId(r.id)}
             onArchive={() => void archive(r)}
             onDelete={() => setDeleting(r)}
-          />
+            expanded={expanded.has(r.id)}
+            onToggleExpanded={() => setExpanded(r.id, !expanded.has(r.id))}
+          >
+            <ChannelThreadList
+              roomId={r.id}
+              refreshKey={`${activeRoomIds.includes(r.id)}:${approvalCounts[r.id] ?? 0}:${r.updatedAt}`}
+            />
+          </ChannelSidebarRow>
         ))}
         {!list.length && (
           <p className="channel-menu-label">
@@ -896,13 +920,12 @@ function stateFor(bot: Bot, data: ChannelData) {
 }
 // BB owns tab selection, persistence, resizing, splits, and the compact drawer.
 export const channelWorkbenchTabs: PluginFixedTabRegistration[] = (
-  ["context", "activity", "automations", "usage"] as const
+  ["activity", "automations", "usage"] as const
 ).map((panel) => ({
   id: panel,
   panelId: "channels",
   title: workbenchLabels[panel],
   icon: {
-    context: "NotebookPen",
     activity: "Activity",
     automations: "Clock",
     usage: "ChartNoAxesCombined",
@@ -921,22 +944,11 @@ export const channelWorkbenchTabs: PluginFixedTabRegistration[] = (
 function ChannelWorkbench({ id, panel }: { id: string; panel: WorkbenchPanel }) {
   const { data, error } = useChannel(id, panel === "activity");
   const { bots } = useRoster();
-  const rpc = useRpc<typeof rpcContract>();
-  const navigate = useBbNavigate();
-  const [failure, setFailure] = useState<string | null>(null);
-  const jump = (messageId: string) => {
-    navigate.toPluginPanel("channels", {
-      subPath: `${id}/message/${encodeURIComponent(messageId)}`,
-    });
-    window.dispatchEvent(new CustomEvent("bb:bots:jump", { detail: { roomId: id, messageId } }));
-  };
   return (
     <section className="channel-workbench" data-channel-id={id} aria-label={workbenchLabels[panel]}>
-      <ErrorMessage error={failure || error} />
+      <ErrorMessage error={error} />
       {!data ? (
         !error && <p role="status">Loading channel…</p>
-      ) : panel === "context" ? (
-        <ContextPanel id={id} />
       ) : panel === "usage" ? (
         <UsagePanel id={id} kind="channel" />
       ) : panel === "automations" ? (
@@ -948,14 +960,7 @@ function ChannelWorkbench({ id, panel }: { id: string; panel: WorkbenchPanel }) 
           presentation="panel"
         />
       ) : (
-        <WorkList
-          jobs={data.jobs}
-          bots={bots}
-          onJump={jump}
-          onCancel={(jobId) =>
-            void rpc.call("cancelJob", { id: jobId }).catch((e) => setFailure(message(e)))
-          }
-        />
+        <WorkList jobs={data.jobs} bots={bots} />
       )}
     </section>
   );
@@ -1599,7 +1604,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
     atBottom.current = false;
     setJumpTarget(messageId);
   };
-  const working = channelWork(jobs);
+  const queues = channelQueues(jobs);
   const responseErrors = jobs.filter(
     (j) =>
       (j.status === "error" || (j.status === "cancelled" && j.timedOut)) &&
@@ -1961,9 +1966,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                                   }}
                                   onCopy={() => void copy(m)}
                                   onView={() =>
-                                    navigate.toThread(
-                                      (job?.threadId ?? m.sourceThreadId)!,
-                                    )
+                                    openWorkThread(navigate, (job?.threadId ?? m.sourceThreadId)!, id)
                                   }
                                 />
                               </div>
@@ -2040,9 +2043,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                                 }}
                                 onView={() => {
                                   setMobileActionsMessage(null);
-                                  navigate.toThread(
-                                    (job?.threadId ?? m.sourceThreadId)!,
-                                  );
+                                  openWorkThread(navigate, (job?.threadId ?? m.sourceThreadId)!, id);
                                 }}
                               />
                             </div>
@@ -2103,9 +2104,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                         }}
                         onCopy={() => void copy(m)}
                         onView={() =>
-                          navigate.toThread(
-                            (job?.threadId ?? m.sourceThreadId)!,
-                          )
+                          openWorkThread(navigate, (job?.threadId ?? m.sourceThreadId)!, id)
                         }
                       />
                     </ContextMenuContent>
@@ -2214,50 +2213,14 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                   </Button>
                 </div>
               ))}
-            {working.map((current) => {
-              const b = bots.find((b) => b.id === current.botId);
-              if (!b) return null;
-              const activity = channelWorkActivity(current);
-              const stopLabel = `${current.cancellationPending ? "Stopping" : "Stop"} ${b.name}'s response`;
-              return (
-                <div
-                  className="channel-agent-stub"
-                  key={current.id}
-                  role="status"
-                  aria-label={`${b.name}: ${activity}`}
-                >
-                  <span className="channel-agent-avatar" aria-hidden>
-                    {b.avatar}
-                  </span>
-                  <strong className="channel-agent-name" title={b.name}>
-                    {b.name}
-                  </strong>
-                  {isForkConversation(current.conversationKey) && (
-                    <span className="channel-fork-label">Fork</span>
-                  )}
-                  <span className="channel-activity-snippet" title={activity}>
-                    {activity}
-                  </span>
-                  <IconActionTooltip label={stopLabel}>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="channel-stop-button"
-                      aria-label={stopLabel}
-                      disabled={!!current.cancellationPending}
-                      onClick={() => {
-                        if (current.cancellationPending) return;
-                        void rpc
-                          .call("cancelJob", { id: current.id })
-                          .catch((e) => setFailure(message(e)));
-                      }}
-                    >
-                      <Icon name="Square" />
-                    </Button>
-                  </IconActionTooltip>
-                </div>
-              );
-            })}
+            <ChannelApprovalDeck
+              roomId={id}
+              approvals={data.approvals}
+              bots={bots}
+              archived={!!room.archived}
+              onFailure={setFailure}
+              onResolved={load}
+            />
           </div>
           {data.hasNewer && (
             <div className="channel-latest">
@@ -2282,6 +2245,106 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
           )}
           <GroupComposer
             key={id}
+            shelf={
+              queues.length > 0 ? (
+            <section className="channel-work-shelf" aria-label="Bot work and queue">
+              {queues.map(({ head: current, queued }) => {
+                const b = bots.find((b) => b.id === current.botId);
+                if (!b) return null;
+                const approval = approvalFor(data.approvals, current);
+                const activity = approval
+                  ? "Needs approval"
+                  : channelWorkActivity(current);
+                const stopLabel = `${current.cancellationPending ? "Stopping" : "Stop"} ${b.name}'s response`;
+                return (
+                  <div className="channel-work-group" key={current.id}>
+                    <div
+                      className="channel-agent-stub"
+                      data-waiting={approval ? "approval" : undefined}
+                      role="status"
+                      aria-label={`${b.name}: ${activity}`}
+                    >
+                      <span className="channel-agent-avatar" aria-hidden>
+                        {b.avatar}
+                      </span>
+                      <strong className="channel-agent-name" title={b.name}>
+                        {b.name}
+                      </strong>
+                      {isForkConversation(current.conversationKey) && (
+                        <span className="channel-fork-label">Fork</span>
+                      )}
+                      <span className="channel-activity-snippet" title={activity}>
+                        {activity}
+                      </span>
+                      {queued.length > 0 && (
+                        <span className="channel-queue-count">
+                          {queued.length} queued
+                        </span>
+                      )}
+                      {approval && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="channel-review-button"
+                          onClick={() => revealApproval(approval.id)}
+                        >
+                          Review
+                        </Button>
+                      )}
+                      <IconActionTooltip label={stopLabel}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="channel-stop-button"
+                          aria-label={stopLabel}
+                          disabled={!!current.cancellationPending}
+                          onClick={() => {
+                            if (current.cancellationPending) return;
+                            void rpc
+                              .call("cancelJob", { id: current.id })
+                              .catch((e) => setFailure(message(e)));
+                          }}
+                        >
+                          <Icon name="Square" />
+                        </Button>
+                      </IconActionTooltip>
+                    </div>
+                    {queued.length > 0 && (
+                      <ol className="channel-queue" aria-label={`Queued for ${b.name}`}>
+                        {queued.map((q) => {
+                          const text =
+                            messages.find((m) => m.id === q.triggerMessageId)?.text ||
+                            q.taskTitle ||
+                            "Queued request";
+                          return (
+                            <li className="channel-queue-item" key={q.id}>
+                              <span className="channel-queue-text" title={text}>
+                                {text}
+                              </span>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="channel-queue-remove"
+                                aria-label={`Remove queued request for ${b.name}`}
+                                onClick={() =>
+                                  void rpc
+                                    .call("cancelJob", { id: q.id })
+                                    .catch((e) => setFailure(message(e)))
+                                }
+                              >
+                                <Icon name="X" />
+                              </Button>
+                            </li>
+                          );
+                        })}
+                      </ol>
+                    )}
+                  </div>
+                );
+              })}
+            </section>
+              ) : null
+            }
             autoFocus={!messages.length}
             roomId={id}
             roomName={room.name}
@@ -2289,7 +2352,16 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
             bots={bots}
             memberIds={room.memberIds}
             rooms={rooms}
-            footer={<ChannelModePicker room={room} onChanged={load} />}
+            footer={
+              <>
+                <ChannelModePicker room={room} onChanged={load} />
+                <ChannelPermissionPicker
+                  room={room}
+                  bots={bots}
+                  onChanged={load}
+                />
+              </>
+            }
             onCreateBot={() =>
               navigate.toPluginPanel("bots", { subPath: `new/${room.id}` })
             }

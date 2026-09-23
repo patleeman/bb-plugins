@@ -14,6 +14,7 @@ import type {
   RoomRun,
 } from "./contract";
 import { isAutomationTrigger, messageSchema } from "./contract";
+import type { PermissionMode } from "./contract";
 import { Store } from "./store";
 import { chatGuidance } from "./chat-guidance";
 import { activitySnippetFromTimeline } from "./activity";
@@ -195,6 +196,43 @@ export class Runtime {
   changed() {
     this.bb.realtime.publish("changed", { revision: randomUUID() });
   }
+  /** Modes a provider offers on one machine. Cached: dispatch runs per turn. */
+  private providerModes = new Map<
+    string,
+    { modes: readonly string[]; at: number }
+  >();
+  private async supportedModes(bot: Bot): Promise<readonly string[] | null> {
+    const key = `${bot.hostId}:${bot.providerId}`;
+    const cached = this.providerModes.get(key);
+    if (cached && Date.now() - cached.at < 300_000) return cached.modes;
+    try {
+      const provider = (
+        await this.bb.sdk.providers.list({ hostId: bot.hostId })
+      ).find((p) => p.id === bot.providerId);
+      if (!provider) return null;
+      const modes = provider.capabilities.permissionModes;
+      this.providerModes.set(key, { modes, at: Date.now() });
+      return modes;
+    } catch (cause) {
+      this.bb.log.debug(`Permission modes unavailable: ${String(cause)}`);
+      return null;
+    }
+  }
+  /**
+   * A channel's setting overrides its bots for work started there, so the owner
+   * can open the gate for one session without editing every profile. A bot whose
+   * provider cannot offer that mode keeps its own.
+   */
+  async permissionMode(
+    bot: Bot,
+    roomId: string | null | undefined,
+  ): Promise<PermissionMode> {
+    const room = roomId ? this.store.findRoom(roomId) : null;
+    const wanted = room?.permissionMode ?? null;
+    if (!wanted || wanted === bot.permissionMode) return bot.permissionMode;
+    const modes = await this.supportedModes(bot);
+    return !modes || modes.includes(wanted) ? wanted : bot.permissionMode;
+  }
   async locked<T>(id: string, work: () => Promise<T>): Promise<T> {
     const next = (this.locks.get(id) ?? Promise.resolve())
       .catch(() => {})
@@ -213,6 +251,7 @@ export class Runtime {
     title: string,
     prompt?: string,
     attachments: Attachment[] = [],
+    permissionMode?: PermissionMode,
   ): Promise<Conversation> {
     if (bot.retired) throw new Error("Restore this bot before starting work.");
     const existing = this.store
@@ -257,7 +296,7 @@ export class Runtime {
         ...(bot.model ? { model: "explicit" as const } : {}),
         reasoningLevel: "explicit",
       },
-      permissionMode: bot.permissionMode,
+      permissionMode: permissionMode ?? bot.permissionMode,
       pluginMetadata: { botId: bot.id, conversationKey: key },
     });
     const c: Conversation = {
@@ -274,13 +313,18 @@ export class Runtime {
     this.changed();
     return c;
   }
-  private async forkConversation(bot: Bot, job: Job): Promise<Conversation> {
+  private async forkConversation(
+    bot: Bot,
+    job: Job,
+    permissionMode: PermissionMode,
+  ): Promise<Conversation> {
     const sourceThreadId = job.forkSourceThreadId!;
     // The dispatch hook holds the first input until both conversation and job are registered.
     const thread = await this.bb.sdk.threads.fork({
       sourceThreadId,
       visibility: "hidden",
       title: `${bot.name} · ${this.store.room(job.roomId!).name} · Fork`,
+      permissionMode,
       pluginMetadata: { botId: bot.id, conversationKey: job.conversationKey },
       input: [
         { type: "text", text: jobPrompt(job), mentions: [] },
@@ -1535,7 +1579,6 @@ export class Runtime {
         ? this.store.message(job.triggerMessageId)
         : null;
     if (!trigger) return; // An older saved job already has its prompt.
-    const context = this.data.context(room.id);
     const recent = this.store.visibleMessages(room.id, 40);
     const conversation = this.store
       .conversations(bot.id)
@@ -1574,7 +1617,6 @@ export class Runtime {
       })
       .join("\n");
     const rosterVersion = createHash("sha256").update(roster).digest("hex");
-    const contextChanged = !previous || previous.contextVersion !== context.version;
     const reference = trigger.replyTo
       ? this.store.message(trigger.replyTo)
       : null;
@@ -1585,17 +1627,6 @@ export class Runtime {
             "Members:",
             roster,
             "",
-          ]
-        : []),
-      ...(contextChanged
-        ? [
-            "Channel brief (owner instructions):",
-            context.brief,
-            "Saved channel decisions:",
-            context.decisions,
-            "Channel-specific memory (conversation data):",
-            context.memory,
-            "Keep knowledge specific to this channel in bots_channel_context. Shared MEMORY.md is for facts appropriate to every channel.",
           ]
         : []),
       ...(transcript
@@ -1613,22 +1644,12 @@ export class Runtime {
       ...(reference
         ? [`Replying to ${reference.speaker}: ${reference.text}`]
         : []),
-      ...(!previous ? ["", chatGuidance] : []),
     ].join("\n");
     job.contextMessageId = recent.at(-1)?.id;
-    job.contextVersion = context.version;
     job.rosterVersion = rosterVersion;
-    // Current uploads and changed saved references are required inputs.
-    // Only incidental recent attachments may be trimmed to the context budget.
-    const required = new Map(
-      [
-        ...(contextChanged ? context.attachmentIds.flatMap((id) => {
-          const attachment = this.store.attachment(id);
-          return attachment ? [attachment] : [];
-        }) : []),
-        ...trigger.attachments,
-      ].map((attachment) => [attachment.id, attachment]),
-    );
+    // Current uploads are required inputs. Only incidental recent attachments
+    // may be trimmed to the context budget.
+    const required = new Map(trigger.attachments.map((a) => [a.id, a]));
     const available = Math.max(0, 10 - required.size);
     const recentFiles = [
       ...new Map(
@@ -2476,9 +2497,13 @@ export class Runtime {
           if (job.roomId) this.prepareGroup(job, bot);
         }
       }
+      // A long-lived bot thread keeps its spawn mode, so every turn carries the
+      // channel's current setting. It takes effect on this turn, not the one
+      // already running.
+      const permissionMode = await this.permissionMode(bot, job.roomId);
       if (!c)
         c = job.forkSourceThreadId
-          ? await this.forkConversation(bot, job)
+          ? await this.forkConversation(bot, job, permissionMode)
           : await this.conversation(
               bot,
               job.conversationKey,
@@ -2486,6 +2511,7 @@ export class Runtime {
               job.roomId ? this.store.room(job.roomId).name : "Mission",
               jobPrompt(job),
               job.attachments,
+              permissionMode,
             );
       else {
         // The dispatch hook runs during send and must already see this job.
@@ -2497,6 +2523,8 @@ export class Runtime {
           threadId: c.threadId,
           mode: "queue-if-active",
           input: jobInput(job),
+          permissionMode,
+          executionInputSources: { permissionMode: "explicit" },
         });
       }
       const current = this.store.job(job.id)!;

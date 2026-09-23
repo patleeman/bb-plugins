@@ -19,6 +19,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import type { Bot, Job, ProfileInput, rpcContract } from "./contract";
 import { Button } from "./components/ui/button";
+import { openWorkThread } from "./channel-threads";
 import { Input } from "./components/ui/input";
 import {
   Select,
@@ -715,92 +716,54 @@ export function TabBar({
     </nav>
   );
 }
-export function WorkList({
-  jobs,
-  bots,
-  onCancel,
-  onJump,
-}: {
-  onJump?: (id: string) => void;
-  jobs: Job[];
-  bots: Bot[];
-  onCancel: (id: string) => void;
-}) {
+const activityTime = (at: number) =>
+  new Intl.DateTimeFormat(
+    undefined,
+    new Date(at).toDateString() === new Date().toDateString()
+      ? { timeStyle: "short" }
+      : { dateStyle: "short", timeStyle: "short" },
+  ).format(at);
+/** Read-only log of bot calls. Each row opens the bot's work thread. */
+export function WorkList({ jobs, bots }: { jobs: Job[]; bots: Bot[] }) {
   const navigate = useBbNavigate();
   if (!jobs.length) return <EmptyState title="No activity yet" />;
   return (
-    <div className="bot-work-list">
+    <ol className="activity-list">
       {jobs.map((job) => {
         const bot = bots.find((candidate) => candidate.id === job.botId);
-        const isActive = ["queued", "dispatching", "running"].includes(job.status);
-        const isFork = isForkConversation(job.conversationKey);
-        const status =
+        const status: { kind: StatusKind; label: string } =
           job.status === "error"
-            ? { kind: "error" as const, label: "Failed" }
+            ? { kind: "error", label: "Failed" }
             : job.status === "done"
-              ? { kind: "ready" as const, label: "Finished" }
+              ? { kind: "ready", label: "Finished" }
               : job.status === "cancelled"
-                ? { kind: "paused" as const, label: "Cancelled" }
-                : { kind: "working" as const, label: job.status === "queued" ? "Queued" : job.status === "dispatching" ? "Starting" : job.startedAt ? "Working" : "Waiting" };
+                ? { kind: "paused", label: "Stopped" }
+                : { kind: "working", label: job.status === "queued" ? "Queued" : job.startedAt ? "Working" : "Starting" };
+        const title = job.taskTitle || job.text || "Untitled request";
         return (
-          <article className="bot-work-row" key={job.id}>
-            <div className="bot-work-row-main">
-              <div className="bot-work-row-heading">
-                <strong>{bot?.name ?? "Bot"}</strong>
-                <StatusBadge status={status.kind} label={status.label} />
-                <time>
-                  {new Intl.DateTimeFormat(undefined, {
-                    dateStyle: "short",
-                    timeStyle: "short",
-                  }).format(job.updatedAt || job.createdAt)}
-                </time>
-              </div>
-              {(job.taskTitle || job.text) && (
-                <button
-                  className="bot-work-row-title"
-                  disabled={!onJump || !job.triggerMessageId}
-                  onClick={() =>
-                    job.triggerMessageId && onJump?.(job.triggerMessageId)
-                  }
-                >
-                  {job.taskTitle || job.text}
-                </button>
-              )}
-              {(isFork || job.queuePosition || job.queueReason) && (
-                <div className="bot-work-row-meta">
-                  {isFork && <span>Fork</span>}
-                  {job.queuePosition && <span>Queue {job.queuePosition}</span>}
-                  {job.queueReason && <span>{job.queueReason}</span>}
-                </div>
-              )}
-              {job.error && <ErrorMessage error={job.error} />}
-            </div>
-            {(job.threadId || isActive) && (
-              <div className="bot-work-row-actions">
-                {job.threadId && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => navigate.toThread(job.threadId!)}
-                  >
-                    View work
-                  </Button>
-                )}
-                {isActive && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={job.cancellationPending}
-                    onClick={() => onCancel(job.id)}
-                  >
-                    {job.cancellationPending ? "Stopping…" : "Stop"}
-                  </Button>
-                )}
-              </div>
-            )}
-          </article>
+          <li key={job.id}>
+            <button
+              type="button"
+              className="activity-row"
+              disabled={!job.threadId}
+              title={job.threadId ? "Open work thread" : undefined}
+              aria-label={`${bot?.name ?? "Bot"}, ${status.label}: ${title}`}
+              onClick={() => job.threadId && openWorkThread(navigate, job.threadId, job.roomId)}
+            >
+              <span className="activity-dot" data-status={status.kind} aria-hidden="true" />
+              <span className="activity-bot">{bot?.name ?? "Bot"}</span>
+              <span className="activity-title">
+                {isForkConversation(job.conversationKey) && <span className="activity-tag">Fork</span>}
+                {title}
+              </span>
+              <time dateTime={new Date(job.updatedAt || job.createdAt).toISOString()}>
+                {activityTime(job.updatedAt || job.createdAt)}
+              </time>
+              {job.error && <span className="activity-error">{job.error}</span>}
+            </button>
+          </li>
         );
       })}
-    </div>
+    </ol>
   );
 }

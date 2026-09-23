@@ -223,13 +223,7 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
                   </Button>
                 </div>
                 <div className="bot-activity-panel">
-                  <WorkList
-                    jobs={jobs}
-                    bots={[bot]}
-                    onCancel={(jobId) =>
-                      action(() => rpc.call("cancelJob", { id: jobId }))
-                    }
-                  />
+                  <WorkList jobs={jobs} bots={[bot]} />
                 </div>
               </>
             )}

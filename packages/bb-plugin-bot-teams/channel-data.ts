@@ -1,76 +1,17 @@
 import { Store } from "./store";
-import {
-  channelContext,
-  contextContent,
-  defaultLimits,
-  type ChannelContext,
-} from "./workspace-contract";
-import type { z } from "zod";
+import { defaultLimits } from "./workspace-contract";
 
-/** Versioned channel knowledge and snapshots of the bot's plain-text documents. */
+/** Snapshots of the bot's plain-text documents and channel usage data. */
 export class ChannelData {
   constructor(readonly store: Store) {
     store.db.exec(`
+      -- Retired channel context. Kept so existing data is not dropped.
       CREATE TABLE IF NOT EXISTS channel_context (room_id TEXT PRIMARY KEY, json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS document_revisions (id INTEGER PRIMARY KEY, scope TEXT NOT NULL, text TEXT NOT NULL, actor TEXT NOT NULL, created_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS revisions_by_scope ON document_revisions(scope,id);
       CREATE TABLE IF NOT EXISTS routing_usage (id INTEGER PRIMARY KEY, room_id TEXT NOT NULL, created_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS routing_usage_by_room ON routing_usage(room_id,created_at);
     `);
-  }
-  context(id: string): ChannelContext {
-    this.store.room(id);
-    const row = this.store.db
-      .prepare("SELECT json FROM channel_context WHERE room_id=?")
-      .get(id) as { json: string } | undefined;
-    return row
-      ? channelContext.parse(JSON.parse(row.json))
-      : { ...contextContent.parse({}), version: 0, updatedAt: 0 };
-  }
-  saveContext(
-    id: string,
-    input: z.infer<typeof contextContent>,
-    version: number,
-    actor: string,
-  ) {
-    return this.store.db.transaction(() => {
-      const previous = this.context(id);
-      if (previous.version !== version)
-        throw new Error(
-          "Channel context changed. Reload before saving; your draft is preserved.",
-        );
-      for (const aid of input.attachmentIds) {
-        const attachment = this.store.attachment(aid);
-        if (
-          !attachment ||
-          attachment.roomId !== id ||
-          !attachment.path ||
-          !this.store.db
-            .prepare(
-              "SELECT 1 FROM room_messages m,json_each(m.json,'$.attachments') a WHERE m.room_id=? AND json_extract(a.value,'$.id')=? LIMIT 1",
-            )
-            .get(id, aid)
-        )
-          throw new Error("Choose a sent file from this channel.");
-      }
-      this.snapshot(
-        `channel:${id}`,
-        JSON.stringify(previous),
-        "Previous version",
-      );
-      const next = {
-        ...input,
-        version: previous.version + 1,
-        updatedAt: Date.now(),
-      };
-      this.store.db
-        .prepare(
-          "INSERT INTO channel_context VALUES (?,?) ON CONFLICT(room_id) DO UPDATE SET json=excluded.json",
-        )
-        .run(id, JSON.stringify(next));
-      this.snapshot(`channel:${id}`, JSON.stringify(next), actor);
-      return next;
-    })();
   }
   snapshot(scope: string, text: string, actor: string) {
     const previous = this.store.db

@@ -1,6 +1,4 @@
 import {
-  channelContext,
-  contextContent,
   revisionSchema,
   usageLimits,
   usageSummary,
@@ -20,6 +18,8 @@ import {
   channelAutomationRunPage,
 } from "./automation-contract";
 export const idSchema = z.string().regex(/^bot_[a-f0-9]{16}$/);
+export const permissionModeSchema = z.enum(["accept-edits", "auto", "full"]);
+export type PermissionMode = z.infer<typeof permissionModeSchema>;
 export const profileInput = z.object({
   limits: usageLimits.optional(),
   name: z.string().trim().min(1).max(80),
@@ -39,7 +39,7 @@ export const profileInput = z.object({
       "ultracode",
     ])
     .default("medium"),
-  permissionMode: z.enum(["accept-edits", "auto", "full"]).default("auto"),
+  permissionMode: permissionModeSchema.default("auto"),
   intervalMinutes: z
     .number()
     .int()
@@ -151,7 +151,6 @@ export const attachmentSchema = z.object({
 export type Attachment = z.infer<typeof attachmentSchema>;
 export const jobSchema = z.object({
   contextMessageId: z.string().optional(),
-  contextVersion: z.number().optional(),
   rosterVersion: z.string().optional(),
   delegationId: z.string().optional(),
   returnOf: z.string().optional(),
@@ -223,6 +222,8 @@ export type Reaction = z.infer<typeof reactionSchema>;
 export const responseBehavior = z.enum(["smart", "directed", "everyone"]);
 export const roomSchema = z.object({
   limits: usageLimits.optional(),
+  /** Overrides every member bot's own mode while set. Null means each bot's own. */
+  permissionMode: permissionModeSchema.nullable().optional(),
   id: z.string().uuid(),
   name: z.string().trim().min(1).max(80),
   memberIds: z.array(idSchema).max(16),
@@ -283,6 +284,50 @@ export const attentionView = attentionSchema.extend({
 });
 export type Attention = z.infer<typeof attentionSchema>;
 export type AttentionView = z.infer<typeof attentionView>;
+export const approvalDecision = z.enum([
+  "allow_once",
+  "allow_for_session",
+  "deny",
+]);
+export type ApprovalDecision = z.infer<typeof approvalDecision>;
+export const approvalQuestion = z.object({
+  id: z.string(),
+  prompt: z.string(),
+  multiSelect: z.boolean(),
+  allowFreeText: z.boolean(),
+  options: z
+    .array(
+      z.object({
+        value: z.string(),
+        label: z.string(),
+        description: z.string().nullable().default(null),
+      }),
+    )
+    .default([]),
+});
+/** A bot's pending request, forwarded from its work thread into the channel. */
+export const approvalSchema = z.object({
+  id: z.string(),
+  threadId: z.string(),
+  botId: idSchema,
+  roomId: z.string(),
+  jobId: z.string().nullable(),
+  kind: z.enum(["approval", "question", "other"]),
+  title: z.string(),
+  detail: z.string().nullable(),
+  decisions: z.array(approvalDecision).default([]),
+  questions: z.array(approvalQuestion).default([]),
+  createdAt: z.number(),
+});
+export type ChannelApproval = z.infer<typeof approvalSchema>;
+/** Only a single plain question is answerable from the channel. */
+export const answerableQuestion = (approval: ChannelApproval) =>
+  approval.kind === "question" &&
+  approval.questions.length === 1 &&
+  !approval.questions[0]!.multiSelect &&
+  approval.questions[0]!.options.length > 0
+    ? approval.questions[0]!
+    : null;
 export const notifyInput = z.object({
   channelId: z.string().uuid(),
   requestId: z.string().uuid(),
@@ -355,21 +400,6 @@ export const rpcContract = defineRpcContract({
     input: z.object({ id: z.string().uuid() }),
     output: z.object({ ok: z.literal(true) }),
   },
-  channelContext: {
-    input: z.object({ id: z.string().uuid() }),
-    output: channelContext,
-  },
-  saveChannelContext: {
-    input: contextContent.extend({
-      id: z.string().uuid(),
-      version: z.number().int(),
-    }),
-    output: channelContext,
-  },
-  contextHistory: {
-    input: z.object({ id: z.string().uuid(), before: z.number().optional() }),
-    output: z.array(revisionSchema),
-  },
   documentHistory: {
     input: z.object({
       id: idSchema,
@@ -377,6 +407,19 @@ export const rpcContract = defineRpcContract({
       before: z.number().optional(),
     }),
     output: z.array(revisionSchema),
+  },
+  channelThreads: {
+    input: z.object({ id: z.string().uuid() }),
+    output: z.array(
+      z.object({
+        threadId: z.string(),
+        botId: z.string(),
+        name: z.string(),
+        avatar: z.string(),
+        active: z.boolean(),
+        needsApproval: z.boolean().default(false),
+      }),
+    ),
   },
   channelFiles: {
     input: z.object({
@@ -452,6 +495,7 @@ export const rpcContract = defineRpcContract({
       rooms: z.array(roomSchema),
       activeRoomIds: z.array(z.string()),
       attentionCounts: z.record(z.string(), z.number().int().nonnegative()),
+      approvalCounts: z.record(z.string(), z.number().int().nonnegative()),
       botCreateRequests: z.array(botCreateRequestViewSchema),
     }),
   },
@@ -569,6 +613,7 @@ export const rpcContract = defineRpcContract({
       room: roomSchema,
       runs: z.array(runSchema),
       jobs: z.array(jobSchema),
+      approvals: z.array(approvalSchema).default([]),
     }),
   },
   upload: {
@@ -623,6 +668,7 @@ export const rpcContract = defineRpcContract({
       lastReadAt: z.number().optional(),
       rememberDefault: z.boolean().optional(),
       responseBehavior: responseBehavior.optional(),
+      permissionMode: permissionModeSchema.nullable().optional(),
     }),
     output: roomSchema,
   },
@@ -643,6 +689,27 @@ export const rpcContract = defineRpcContract({
   resumeRoom: {
     input: z.object({ id: z.string().uuid() }),
     output: roomSchema,
+  },
+  resolveApproval: {
+    input: z
+      .object({
+        id: z.string().uuid(),
+        threadId: z.string().min(1).max(200),
+        interactionId: z.string().min(1).max(200),
+        decision: approvalDecision.optional(),
+        answer: z
+          .object({
+            questionId: z.string().min(1).max(200),
+            selected: z.array(z.string().max(500)).max(32),
+            freeText: z.string().max(4000).optional(),
+          })
+          .optional(),
+      })
+      .refine(
+        (v) => (v.decision === undefined) !== (v.answer === undefined),
+        "Send either a decision or an answer.",
+      ),
+    output: z.object({ resolved: z.literal(true) }),
   },
   cancelJob: {
     input: z.object({ id: z.string() }),
