@@ -27,6 +27,7 @@ import {
   type DirectMessageRequest,
 } from "./direct-messages";
 import { mentioned, mentionsEveryone, isBroadcastHandle } from "./mentions";
+import { continuationBotId } from "./jev";
 export { mentioned } from "./mentions";
 import {
   parseSendMode,
@@ -1548,13 +1549,21 @@ export class Runtime {
         error = errorText(cause);
         const message = this.store.message(run.id);
         const single = run.routingBotIds?.length === 1 ? run.routingBotIds[0] : null;
-        if (message && single && !mentionsEveryone(message.sentText ?? message.text)) {
+        const continuation = message && !run.routingBotIds?.length
+          ? continuationBotId(
+              message,
+              this.store.visibleMessages(room.id, 9).filter((item) => item.id !== message.id),
+              room.memberIds.map((id) => this.store.get(id)).filter((bot) => !bot.retired),
+            )
+          : null;
+        const fallbackId = single ?? continuation;
+        if (message && fallbackId && !mentionsEveryone(message.sentText ?? message.text)) {
           selected = {
-            coordinatorId: single,
+            coordinatorId: fallbackId,
             collaboratorIds: [],
             executionMode: "serialized",
-            finalizerId: single,
-            routes: [{ botId: single, action: "followup" }],
+            finalizerId: fallbackId,
+            routes: [{ botId: fallbackId, action: "followup" }],
             source: "fallback",
           };
           error = undefined;

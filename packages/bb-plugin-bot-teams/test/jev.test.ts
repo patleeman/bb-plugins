@@ -167,6 +167,40 @@ test("uncertain parallel work stays with one coordinator", async (t) => {
   assert.deepEqual(plan.routes.map((route) => route.botId), [bots[0]!.id]);
 });
 
+test("Jev receives prior bot identity and safely continues an uncertain follow-up", async (t) => {
+  const previous = messageSchema.parse({
+    ...message,
+    id: "previous",
+    botId: bots[0]!.id,
+    speaker: bots[0]!.name,
+    text: "The database query failed in the sandbox.",
+  });
+  const followup = { ...message, id: "followup", text: "You were querying the db directly??" };
+  const states: { recent: { botId: string }[]; message: { continuationCandidateId: string } }[] = [];
+  t.mock.method(globalThis, "fetch", async (_url: unknown, init: RequestInit) => {
+    states.push(JSON.parse(String(JSON.parse(String(init.body)).state)));
+    return Response.json({ answers: {
+      ...routeAnswers(bots[1]!.id, "parallel", [bots[0]!.id]),
+      coordinator: choice(bots[1]!.id, 0.4),
+    } });
+  });
+  const plan = await selectJevBots(config, followup, [previous], bots, new AbortController().signal);
+  assert.equal(states[0]?.recent[0]?.botId, bots[0]!.id);
+  assert.equal(states[0]?.message.continuationCandidateId, bots[0]!.id);
+  assert.deepEqual(plan, {
+    coordinatorId: bots[0]!.id,
+    collaboratorIds: [],
+    executionMode: "serialized",
+    finalizerId: bots[0]!.id,
+    routes: [{ botId: bots[0]!.id, action: "followup" }],
+    source: "fallback",
+  });
+  await assert.rejects(
+    selectJevBots(config, { ...followup, text: "Review the deployment schedule" }, [previous], bots, new AbortController().signal),
+    /uncertain about the coordinator/,
+  );
+});
+
 test("explicit mentions become candidates and idle bots cannot be steered", async (t) => {
   const request = jevRoutingRequest(message, [], bots, [], [bots[1]!.id]);
   assert.deepEqual(Object.keys(request.questions), ["coordinator", "execution", `collaborator:${bots[1]!.id}`, `action:${bots[1]!.id}`]);

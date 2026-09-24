@@ -193,7 +193,7 @@ export default async function plugin(bb: BbPluginApi) {
         members[0]!.hostId,
         path,
         message,
-        store.visibleMessages(room.id, 8).filter((m) => m.id !== message.id),
+        store.visibleMessages(room.id, 9).filter((m) => m.id !== message.id).slice(-8),
         members,
         signal,
         tasks,

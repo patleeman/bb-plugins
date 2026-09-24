@@ -126,6 +126,21 @@ test("uncertain Smart routing falls back only for one explicit recipient", async
   } finally { await x.close(); }
 });
 
+test("an unmentioned owner question continues the previous bot answer when Jev fails", async () => {
+  const x = setup("serialized");
+  try {
+    const first = x.runtime.send(x.room, "@news-desk inspect Birdclaw", randomUUID());
+    await x.collect();
+    const primary = x.store.requestJobs(first.id)[0]!;
+    await x.finish(primary, "The database query failed in the sandbox.");
+    x.runtime.route = async () => { throw new Error("Jev unavailable"); };
+    const followup = x.runtime.send(x.room, "You were querying the db directly??", randomUUID());
+    await x.collect();
+    assert.deepEqual(x.store.requestJobs(followup.id).map((job) => job.botId), [primary.botId]);
+    assert.equal(x.store.message(followup.id)?.classifierPlan?.source, "fallback");
+  } finally { await x.close(); }
+});
+
 test("an explicit send mode keeps a direct Smart coordinator and its helper lineage", async () => {
   const x = setup("serialized");
   try {
