@@ -79,8 +79,10 @@ answer goes to the channel, it shows a tombstone linking to the DM and the
 posted answer; the owner's DM text stays in the BB thread.
 Cross-channel consultations exclude the sender, allow up to three explicit
 messages per work session, and keep the two-hop handoff limit. A request is capped
-at 32 responses. Stop and limits are surfaced in request status. Each primary session handles
-one task at a time; explicit forks can run concurrently. Avoid cyclic consultations where agents wait for one another;
+at 32 responses. Stop and limits are surfaced in request status. Each channel has
+its own primary session for a bot. Sessions in separate channels can run concurrently;
+each session handles one task at a time. Explicit forks can also run concurrently.
+Avoid cyclic consultations where agents wait for one another;
 finish the current response and let the originating agent collect results.
 
 ## Create and configure

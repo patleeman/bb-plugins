@@ -42,6 +42,11 @@ export const missingThread = (cause: unknown) =>
   /(?:^|\b)(?:thread not found|thread does not exist|HTTP 404)(?:\b|$)/i.test(
     errorText(cause),
   );
+/** Primary work is serial within a conversation, but separate channels have separate lanes. */
+export const primaryLane = (botId: string, conversationKey: string) =>
+  conversationKey.startsWith("group:")
+    ? `${botId}:${conversationKey}`
+    : botId;
 export function recipients(text: string, members: Bot[]) {
   const selected = members
     .filter((b) => mentioned(text, b.handle))
@@ -1881,8 +1886,9 @@ export class Runtime {
   complete(threadId: string, text: string | null, error?: string) {
     const c = this.store.byThread(threadId);
     if (!c) return;
-    if (this.busy.get(c.botId)?.threadId === threadId)
-      this.busy.delete(c.botId);
+    const lane = primaryLane(c.botId, c.key);
+    if (this.busy.get(lane)?.threadId === threadId)
+      this.busy.delete(lane);
     const job = this.activeJobForThread(threadId);
     if (!job) return;
     if (error || (!text?.trim() && !job.outputAttachments.length)) {
@@ -1942,8 +1948,9 @@ export class Runtime {
           current.cancellationPending = false;
           this.store.putJob(current);
         }
-        if (this.busy.get(job.botId)?.threadId === job.threadId)
-          this.busy.delete(job.botId);
+        const lane = primaryLane(job.botId, job.conversationKey);
+        if (this.busy.get(lane)?.threadId === job.threadId)
+          this.busy.delete(lane);
       }
     }
     await activityRefresh;
@@ -2193,8 +2200,9 @@ export class Runtime {
         .work(job.botId)
         .filter(
           (j) =>
-            isForkConversation(j.conversationKey) ===
-            isForkConversation(job.conversationKey),
+            isForkConversation(job.conversationKey)
+              ? isForkConversation(j.conversationKey)
+              : j.conversationKey === job.conversationKey,
         );
       return {
         ...job,
@@ -2354,22 +2362,31 @@ export class Runtime {
     this.startReturns(room);
   }
   async reconcileBusy(bot: Bot) {
-    const busy = this.busy.get(bot.id);
-    if (busy && Date.now() - busy.at < 5000) return;
+    const work = this.store.work(bot.id);
     const threadIds = new Set([
       ...this.store
         .conversations(bot.id)
         .filter((c) => c.kind === "admin")
         .map((c) => c.threadId),
-      ...this.store
-        .work(bot.id)
+      ...work
         .flatMap((j) =>
           j.threadId && !isForkConversation(j.conversationKey)
             ? [j.threadId]
             : [],
         ),
     ]);
+    const activeLanes = new Set<string>();
     for (const threadId of threadIds) {
+      const conversation = this.store.byThread(threadId);
+      const job = work.find((j) => j.threadId === threadId);
+      const key = conversation?.key ?? job?.conversationKey;
+      if (!key) continue;
+      const lane = primaryLane(bot.id, key);
+      const busy = this.busy.get(lane);
+      if (busy && Date.now() - busy.at < 5000) {
+        activeLanes.add(lane);
+        continue;
+      }
       let thread;
       try {
         thread = await this.bb.sdk.threads.get({ threadId });
@@ -2380,23 +2397,36 @@ export class Runtime {
         continue;
       }
       if (thread.status === "active") {
-        this.busy.set(bot.id, { threadId, at: Date.now() });
-        return;
+        this.busy.set(lane, { threadId, at: Date.now() });
+        activeLanes.add(lane);
       }
     }
-    this.busy.delete(bot.id);
+    for (const lane of this.busy.keys())
+      if (
+        (lane === bot.id || lane.startsWith(`${bot.id}:group:`)) &&
+        !activeLanes.has(lane)
+      )
+        this.busy.delete(lane);
   }
   async drive(bot: Bot, forkJob?: Job) {
-    const job =
-      forkJob ??
-      this.store
-        .work(bot.id)
-        .find(
-          (job) =>
-            !isForkConversation(job.conversationKey) &&
-            (job.cancellationPending || !bot.paused || !!job.roomId),
-        );
-    if (!job) return;
+    if (forkJob) return this.driveJob(bot, forkJob, true);
+    const first = new Map<string, Job>();
+    for (const job of this.store.work(bot.id)) {
+      if (
+        !isForkConversation(job.conversationKey) &&
+        (job.cancellationPending || !bot.paused || !!job.roomId)
+      ) {
+        const lane = primaryLane(bot.id, job.conversationKey);
+        if (!first.has(lane)) first.set(lane, job);
+      }
+    }
+    const results = await Promise.allSettled(
+      [...first.values()].map((job) => this.driveJob(bot, job, false)),
+    );
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+  }
+  private async driveJob(bot: Bot, job: Job, forkJob: boolean) {
     if (job.pendingSteer && job.threadId && !job.cancellationPending) {
       await this.startSteer({ jobId: job.id });
       if (this.store.job(job.id)?.pendingSteer) {
@@ -2639,7 +2669,8 @@ export class Runtime {
       }
       return;
     }
-    if (!forkJob && this.busy.has(bot.id)) return;
+    const lane = primaryLane(bot.id, job.conversationKey);
+    if (!forkJob && this.busy.has(lane)) return;
     if (
       job.forkSourceThreadId &&
       !this.store
@@ -2763,7 +2794,7 @@ export class Runtime {
         current.error = `Checking dispatch after: ${errorText(cause)}`;
         this.store.putJob(current);
       }
-      if (!forkJob) this.busy.delete(bot.id);
+      if (!forkJob) this.busy.delete(lane);
     }
     this.changed();
   }

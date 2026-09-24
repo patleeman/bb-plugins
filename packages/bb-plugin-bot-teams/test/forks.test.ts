@@ -7,7 +7,7 @@ import {
   makeThreadResponse,
 } from "@get-bb/plugin-sdk/testing";
 import { Store } from "../store";
-import { Runtime, jobPrompt } from "../runtime";
+import { Runtime, jobPrompt, primaryLane } from "../runtime";
 import { profileInput, type Bot, type Room } from "../contract";
 import { channelWork } from "../channel-work";
 
@@ -161,7 +161,10 @@ function setup() {
     const message = send("@atlas Implement the migration");
     await runtime.drive(bot);
     const job = store.job(`${message.id}:${bot.id}`)!;
-    runtime.busy.set(bot.id, { threadId: job.threadId!, at: Date.now() });
+    runtime.busy.set(primaryLane(bot.id, job.conversationKey), {
+      threadId: job.threadId!,
+      at: Date.now(),
+    });
     return job;
   };
   return {
@@ -202,7 +205,10 @@ test("a native fork answers alongside the primary and replies reuse the fork", a
     );
     assert.match(jobPrompt(fork), /do not resume inherited work/);
     assert.equal(channelWork(x.store.work(x.bot.id)).length, 2);
-    assert.equal(x.runtime.busy.get(x.bot.id)?.threadId, main.threadId);
+    assert.equal(
+      x.runtime.busy.get(primaryLane(x.bot.id, main.conversationKey))?.threadId,
+      main.threadId,
+    );
     await x.finish(fork.threadId!, "SQLite suits this local workload.");
     const answer = x.store.message(fork.id)!;
     assert.equal(answer.replyTo, question.id);
@@ -231,7 +237,10 @@ test("stopping a fork preserves the primary, including after runtime restart", a
     const fork = x.store.job(`${question.id}:${x.bot.id}`)!;
     restarted = new Runtime(x.bb, x.store);
     await restarted.reconcileBusy(x.bot);
-    assert.equal(restarted.busy.get(x.bot.id)?.threadId, main.threadId);
+    assert.equal(
+      restarted.busy.get(primaryLane(x.bot.id, main.conversationKey))?.threadId,
+      main.threadId,
+    );
     await restarted.cancel(fork, "Stopped fork");
     assert.equal(x.store.job(main.id)?.status, "running");
     assert.equal(x.threads.get(main.threadId!)?.status, "active");

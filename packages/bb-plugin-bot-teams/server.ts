@@ -28,6 +28,7 @@ import {
   Runtime,
   jobPrompt,
   missingThread,
+  primaryLane,
   roomTitleThreadPrefix,
 } from "./runtime";
 import { chatGuidance } from "./chat-guidance";
@@ -804,15 +805,7 @@ export default async function plugin(bb: BbPluginApi) {
             .conversations(id)
             .filter((c) => c.kind !== "group"))
             await bb.sdk.threads.stop({ threadId: c.threadId });
-          if (
-            !store
-              .work(id)
-              .some(
-                (j) =>
-                  j.roomId && j.threadId === runtime.busy.get(id)?.threadId,
-              )
-          )
-            runtime.busy.delete(id);
+          runtime.busy.delete(id);
         }
         if (!paused) await bb.experimental_hooks.recheck("message.dispatch");
         runtime.changed();
@@ -1393,7 +1386,8 @@ export default async function plugin(bb: BbPluginApi) {
           };
       }
     }
-    const busy = runtime.busy.get(bot.id);
+    const lane = primaryLane(bot.id, c.key);
+    const busy = runtime.busy.get(lane);
     if (
       !isForkConversation(c.key) &&
       busy &&
@@ -1405,7 +1399,7 @@ export default async function plugin(bb: BbPluginApi) {
         sendAt: Date.now() + 3000,
       };
     if (!isForkConversation(c.key))
-      runtime.busy.set(bot.id, { threadId: context.thread.id, at: Date.now() });
+      runtime.busy.set(lane, { threadId: context.thread.id, at: Date.now() });
     return { action: "proceed" };
   });
   const threadExists = async (threadId: string) => {
@@ -1424,7 +1418,10 @@ export default async function plugin(bb: BbPluginApi) {
     const c = store.byThread(thread.id);
     if (!c) return;
     if (!isForkConversation(c.key))
-      runtime.busy.set(c.botId, { threadId: thread.id, at: Date.now() });
+      runtime.busy.set(primaryLane(c.botId, c.key), {
+        threadId: thread.id,
+        at: Date.now(),
+      });
     const job = store
       .work(c.botId)
       .find(
