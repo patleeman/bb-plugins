@@ -24,6 +24,7 @@ import {
   PANEL_ACTION_ID,
   PLANNOTATOR_RELAY_PATH,
   PLANNOTATOR_REALTIME_CHANNEL,
+  WAIT_RENDERER_ID,
 } from "./src/constants";
 import { isLocalBindHostname } from "./src/embedded";
 import {
@@ -84,7 +85,52 @@ type ActiveReview = {
   sessionId: string;
   payload: ReviewPanelPayload;
   review: RunningUpstreamReview;
+  cancelledByUser: boolean;
 };
+
+/** The host caps a composer form at one hour; the review itself has no deadline. */
+const WAIT_FORM_TIMEOUT_MS = 60 * 60 * 1000;
+
+/**
+ * Keep a composer form open for the lifetime of the review. Opening it
+ * detaches the tool call from the daemon's HTTP request, so a review longer
+ * than that request's body timeout still reaches the agent as a late result.
+ * Only an explicit dismissal by the user cancels the review.
+ */
+function holdReviewOpen(
+  bb: BbPluginApi,
+  args: { threadId: string; sessionId: string; title: string; signal: AbortSignal },
+  onUserCancel: () => void,
+): void {
+  let waiting: ReturnType<BbPluginApi["ui"]["requestInput"]>;
+  try {
+    waiting = bb.ui.requestInput(
+      {
+        threadId: args.threadId,
+        rendererId: WAIT_RENDERER_ID,
+        title: args.title,
+        payload: { sessionId: args.sessionId, title: args.title },
+        timeoutMs: WAIT_FORM_TIMEOUT_MS,
+      },
+      { signal: args.signal },
+    );
+  } catch (error) {
+    waiting = Promise.reject(error);
+  }
+  void waiting.then(
+    (result) => {
+      if (result.outcome === "cancelled" && result.reason === "user") onUserCancel();
+    },
+    (error: unknown) => {
+      if (args.signal.aborted) return;
+      bb.log.warn(
+        `Plannotator review is waiting in-band; the composer form did not open: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    },
+  );
+}
 
 /**
  * Map BB's provider ids to the identities the upstream UI knows how to name.
@@ -373,6 +419,7 @@ export default async function plugin(bb: BbPluginApi) {
       if (!active || active.sessionId !== sessionId) {
         return { cancelled: false };
       }
+      active.cancelledByUser = true;
       await active.review.stop();
       return { cancelled: true };
     },
@@ -435,7 +482,14 @@ export default async function plugin(bb: BbPluginApi) {
         title,
       });
       relaySessions.set(sessionId, upstream.url);
-      activeReviews.set(context.threadId, { sessionId, payload, review: upstream });
+      const active: ActiveReview = {
+        sessionId,
+        payload,
+        review: upstream,
+        cancelledByUser: false,
+      };
+      activeReviews.set(context.threadId, active);
+      const waitForm = new AbortController();
 
       try {
         await openReviewPanel(bb, context.threadId, payload);
@@ -443,10 +497,25 @@ export default async function plugin(bb: BbPluginApi) {
           kind: "review-opened",
           payload,
         });
+        holdReviewOpen(
+          bb,
+          {
+            threadId: context.threadId,
+            sessionId,
+            title,
+            signal: AbortSignal.any([context.signal, waitForm.signal]),
+          },
+          () => {
+            active.cancelledByUser = true;
+            void upstream.stop();
+          },
+        );
         return toolResponse(await upstream.result);
       } catch (error) {
+        if (active.cancelledByUser) return toolResponse({ approved: false });
         return errorResponse(error instanceof Error ? error.message : String(error));
       } finally {
+        waitForm.abort();
         activeReviews.delete(context.threadId);
         relaySessions.delete(sessionId);
         await closeReviewPanel(bb, context.threadId, sessionId);

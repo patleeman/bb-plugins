@@ -28,7 +28,11 @@ afterEach(async () => {
   );
 });
 
-async function fakePlannotatorBinary(): Promise<string> {
+async function fakePlannotatorBinary(
+  options: { approveAfterMs?: number | null } = {},
+): Promise<string> {
+  const approveAfterMs =
+    options.approveAfterMs === undefined ? 150 : options.approveAfterMs;
   const directory = await mkdtemp(join(tmpdir(), "bb-plannotator-fake-"));
   temporaryDirectories.push(directory);
   const binary = join(directory, "plannotator");
@@ -40,7 +44,11 @@ const path = require("node:path");
 const ready = process.env.PLANNOTATOR_READY_FILE;
 fs.mkdirSync(path.dirname(ready), { recursive: true });
 fs.appendFileSync(ready, JSON.stringify({ url: "http://127.0.0.1:43210", isRemote: false, port: 43210 }) + "\\n");
-setTimeout(() => process.stdout.write(JSON.stringify({ approved: true }) + "\\n"), 150);
+${
+  approveAfterMs === null
+    ? "setInterval(() => undefined, 1000);"
+    : `setTimeout(() => process.stdout.write(JSON.stringify({ approved: true }) + "\\n"), ${approveAfterMs});`
+}
 process.stdin.resume();
 `,
     "utf8",
@@ -63,6 +71,17 @@ async function reviewPanelTab(host: FakePluginHost) {
     await new Promise<void>((resolve) => setTimeout(resolve, 5));
   }
   throw new Error("Expected a persisted Plannotator review tab");
+}
+
+async function waitForm(host: FakePluginHost) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const form = host.harness.inspection.pendingInteractions.find(
+      (interaction) => interaction.rendererId === "plannotator-review-wait",
+    );
+    if (form) return form;
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("Expected the Plannotator composer wait form");
 }
 
 function wireInteractionSdk(
@@ -199,7 +218,13 @@ describe("BB upstream Plannotator bridge", () => {
       threadId: "thread-1",
       relayPath: PLANNOTATOR_RELAY_PATH,
     });
-    expect(host.harness.inspection.pendingInteractions).toHaveLength(0);
+    const form = await waitForm(host);
+    expect(form).toMatchObject({
+      threadId: "thread-1",
+      title: "Upstream UI",
+      payload: { sessionId: expect.any(String), title: "Upstream UI" },
+    });
+    expect(form.timeoutMs).toBe(60 * 60 * 1000);
     expect(
       await host.harness.callRpc("getActiveReview", { threadId: "thread-1" }),
     ).toMatchObject({
@@ -233,7 +258,7 @@ describe("BB upstream Plannotator bridge", () => {
   });
 
   it("cancels the upstream process through the thread-owned panel RPC", async () => {
-    const binary = await fakePlannotatorBinary();
+    const binary = await fakePlannotatorBinary({ approveAfterMs: null });
     const host = createFakePluginHost({
       pluginId: "plannotator",
       settings: { binaryPath: binary },
@@ -257,7 +282,7 @@ describe("BB upstream Plannotator bridge", () => {
     ).resolves.toEqual({ cancelled: true });
 
     const result = await toolCall;
-    expect(result).toMatchObject({ isError: true });
+    expect(result).toBe(JSON.stringify({ decision: "cancelled", source: "plannotator" }));
     expect(host.harness.inspection.pendingInteractions).toHaveLength(0);
     const finalTabUpdateCall = [...host.harness.sdk.calls]
       .reverse()
@@ -265,6 +290,57 @@ describe("BB upstream Plannotator bridge", () => {
     expect(finalTabUpdateCall?.args?.[0]).toMatchObject({
       tabs: [],
     });
+  });
+
+  it("cancels the upstream process when the user dismisses the wait form", async () => {
+    const binary = await fakePlannotatorBinary({ approveAfterMs: null });
+    const host = createFakePluginHost({
+      pluginId: "plannotator",
+      settings: { binaryPath: binary },
+    });
+    hosts.push(host);
+    await plugin(host.bb);
+    wireInteractionSdk(host);
+
+    const toolCall = host.harness.behavior.callAgentTool(
+      "plannotator_review_plan",
+      { planMarkdown: "# Plan\n\n- Dismiss me" },
+      { threadId: "thread-1", projectId: "project-1" },
+    );
+    await reviewPanelTab(host);
+    const form = await waitForm(host);
+    host.harness.behavior.cancelInteraction(form.id);
+
+    const result = await toolCall;
+    expect(result).toBe(JSON.stringify({ decision: "cancelled", source: "plannotator" }));
+    await expect(
+      host.harness.callRpc("getActiveReview", { threadId: "thread-1" }),
+    ).resolves.toBeNull();
+    const finalTabUpdateCall = [...host.harness.sdk.calls]
+      .reverse()
+      .find((call) => call.path === "threads.tabs.update");
+    expect(finalTabUpdateCall?.args?.[0]).toMatchObject({ tabs: [] });
+  });
+
+  it("keeps waiting for Plannotator when the wait form times out", async () => {
+    const binary = await fakePlannotatorBinary({ approveAfterMs: 400 });
+    const host = createFakePluginHost({
+      pluginId: "plannotator",
+      settings: { binaryPath: binary },
+    });
+    hosts.push(host);
+    await plugin(host.bb);
+    wireInteractionSdk(host);
+    const requestInput = host.bb.ui.requestInput.bind(host.bb.ui);
+    host.bb.ui.requestInput = (request, options) =>
+      requestInput({ ...request, timeoutMs: 1 }, options);
+
+    const result = await host.harness.behavior.callAgentTool(
+      "plannotator_review_plan",
+      { planMarkdown: "# Plan\n\n- Outlive the form" },
+      { threadId: "thread-1", projectId: "project-1" },
+    );
+    expect(result).toBe(JSON.stringify({ decision: "approved", source: "plannotator" }));
   });
 
   it("rejects cancellation from another thread or session", async () => {

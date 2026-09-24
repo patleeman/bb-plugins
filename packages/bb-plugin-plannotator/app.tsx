@@ -12,6 +12,7 @@ import {
   useRealtimeConnectionState,
   useRpc,
   type JsonValue,
+  type PluginPendingInteractionProps,
   type PluginThreadHeaderActionProps,
   type PluginThreadPanelProps,
 } from "@get-bb/plugin-sdk/app";
@@ -19,6 +20,7 @@ import type { rpcContract } from "./server";
 import {
   PANEL_ACTION_ID,
   PLANNOTATOR_REALTIME_CHANNEL,
+  WAIT_RENDERER_ID,
 } from "./src/constants";
 import {
   PLANNOTATOR_RELAY_PATH,
@@ -127,6 +129,60 @@ function PlannotatorFocusBridge({
   }, [focusReview, realtimeConnectionState, rpc, threadId]);
 
   return null;
+}
+
+/**
+ * The composer form that keeps a long review attached to its thread. It only
+ * points at the review tab; the decision itself is made in Plannotator.
+ */
+function PlannotatorReviewWait({
+  interaction,
+  cancel,
+}: PluginPendingInteractionProps) {
+  const navigate = useBbNavigate();
+  const rpc = useRpc<typeof rpcContract>();
+  const [canceling, setCanceling] = useState(false);
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+      <div className="min-w-0 text-muted-foreground">
+        {interaction.title} is open in the Plannotator tab. Approve or send
+        feedback there.
+      </div>
+      <div className="flex shrink-0 items-center gap-2 text-xs">
+        <button
+          type="button"
+          className="rounded border border-border px-2 py-1 text-muted-foreground hover:bg-state-hover hover:text-foreground"
+          onClick={() => {
+            void rpc
+              .call("getActiveReview", { threadId: interaction.threadId })
+              .then((payload) => {
+                if (!payload) return;
+                navigate.openThreadPanel({
+                  actionId: PANEL_ACTION_ID,
+                  title: payload.title,
+                  params: payload,
+                });
+              })
+              .catch(() => {});
+          }}
+        >
+          Open review
+        </button>
+        <button
+          type="button"
+          disabled={canceling}
+          className="rounded border border-destructive/40 px-2 py-1 text-destructive hover:bg-destructive/10 disabled:opacity-60"
+          onClick={() => {
+            setCanceling(true);
+            void cancel().catch(() => setCanceling(false));
+          }}
+        >
+          {canceling ? "Cancelling…" : "Cancel review"}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function EmptyPanel() {
@@ -278,5 +334,9 @@ export default definePluginApp((app) => {
     id: "plannotator-focus-bridge",
     title: "Plannotator focus bridge",
     component: PlannotatorFocusBridge,
+  });
+  app.slots.pendingInteraction({
+    id: WAIT_RENDERER_ID,
+    component: PlannotatorReviewWait,
   });
 });

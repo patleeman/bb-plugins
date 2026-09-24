@@ -23,12 +23,14 @@ const payload = {
 };
 
 describe("Plannotator BB shell", () => {
-  it("registers only the upstream panel", () => {
+  it("registers the upstream panel and its composer wait form", () => {
     expect(app.navPanels).toHaveLength(0);
     expect(app.threadPanelActions.map((action) => action.id)).toEqual([
       "plannotator-review",
     ]);
-    expect(app.pendingInteractions).toHaveLength(0);
+    expect(app.pendingInteractions.map((form) => form.id)).toEqual([
+      "plannotator-review-wait",
+    ]);
     expect(app.threadHeaderActions.map((action) => action.id)).toEqual([
       "plannotator-focus-bridge",
     ]);
