@@ -78,6 +78,8 @@ import {
   ReactionPicker,
 } from "./channel-controls";
 import { isForkConversation, type SendMode } from "./send-mode";
+import { linkifyMentions, mentionBotId } from "./mentions";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { classifierActionAnnotation } from "./classifier-action";
 
 const uuid = /^[a-f0-9-]{36}$/;
@@ -1632,6 +1634,37 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
     atBottom.current = false;
     setJumpTarget(messageId);
   };
+  // Mentions route by handle, so the chip a reader sees resolves the same way.
+  // Not a hook: this sits past the component's early return.
+  const handleToBotId = (handle: string) =>
+    bots.find((bot) => bot.handle.toLowerCase() === handle.toLowerCase())?.id ??
+    null;
+  /** A mention opens that bot's DM for this channel, else its profile. */
+  const openMention = async (event: ReactMouseEvent) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey
+    )
+      return;
+    const anchor =
+      event.target instanceof Element
+        ? event.target.closest<HTMLAnchorElement>("a[href]")
+        : null;
+    const botId = anchor && mentionBotId(anchor.getAttribute("href") ?? "");
+    if (!botId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const threads = await rpc
+      .call("channelThreads", { id })
+      .catch(() => [] as Awaited<ReturnType<typeof rpc.call<"channelThreads">>>);
+    const thread = threads.find((entry) => entry.botId === botId);
+    if (thread) openWorkThread(navigate, thread.threadId, id);
+    else navigate.toPluginPanel("bots", { subPath: `${botId}/profile` });
+  };
   const queues = channelQueues(jobs);
   const responseErrors = channelResponseFailures(jobs, jobs.length);
   const visibleResponseErrors = showAllResponseErrors
@@ -1650,6 +1683,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
           <div
             ref={transcript}
             className="bot-room-messages"
+            onClickCapture={(event) => void openMention(event)}
             role="log"
             aria-label="Channel conversation"
             aria-live="polite"
@@ -1939,7 +1973,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                                 {m.text && (
                                   <Markdown
                                     className="bot-message-markdown text-sm leading-5"
-                                    content={m.text}
+                                    content={linkifyMentions(m.text, handleToBotId)}
                                   />
                                 )}
                                 {!!m.attachments.length && (

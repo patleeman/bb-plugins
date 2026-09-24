@@ -3055,3 +3055,21 @@
     text-overflow: ellipsis;
   }
 }
+
+/* Mentions read as chips, the way Slack and Discord render them. */
+.bot-message-markdown a[href^="/plugins/bot-teams/mention/"] {
+  display: inline;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: color-mix(in oklch, var(--primary, var(--foreground)) 16%, transparent);
+  color: var(--primary, var(--foreground));
+  font-weight: 500;
+  text-decoration: none;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.bot-message-markdown a[href^="/plugins/bot-teams/mention/"]:hover,
+.bot-message-markdown a[href^="/plugins/bot-teams/mention/"]:focus-visible {
+  background: color-mix(in oklch, var(--primary, var(--foreground)) 30%, transparent);
+  text-decoration: none;
+}
