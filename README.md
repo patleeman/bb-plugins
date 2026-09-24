@@ -32,7 +32,7 @@ For a local checkout, run this from the repository root:
 bb marketplace add path:.
 ```
 
-The root [`marketplace.json`](marketplace.json) lists all 17 plugins. Each
+The root [`marketplace.json`](marketplace.json) lists all 18 plugins. Each
 entry installs its package from this repository's `main` branch, including
 when the catalog is added from a local checkout. Refresh the catalog with:
 
@@ -46,6 +46,8 @@ description, and icon aligned with its package manifest.
 
 ## Packages
 
+- [`bb-plugin-automation-calendar`](packages/bb-plugin-automation-calendar/) — view BB
+  automations by day, three days, week, or month and manage their schedules.
 - [`bb-plugin-bot-teams`](packages/bb-plugin-bot-teams/) — persistent agents with their
   own workspaces, mission and memory files, profiles, sidebar channels, and
   group consultations that replace the former Council plugin.

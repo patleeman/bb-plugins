@@ -120,6 +120,15 @@ class CdpClient {
     throw new Error(`Timed out waiting for ${JSON.stringify(text)}.\n${bodyText.slice(-1200)}`);
   }
 
+  async waitForSelector(selector, timeoutMs = 15000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      if (await this.evaluate(`Boolean(document.querySelector(${JSON.stringify(selector)}))`)) return;
+      await sleep(250);
+    }
+    throw new Error(`Timed out waiting for selector ${JSON.stringify(selector)}`);
+  }
+
   async waitForInputValue(label, expected, timeoutMs = 15000) {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
@@ -401,6 +410,140 @@ async function ensureChrome() {
 const threadUrl = `/projects/${projectId}/threads/${threadId}`;
 
 const captures = [
+  {
+    id: "automation-calendar",
+    packageDir: "bb-plugin-automation-calendar",
+    showSidebar: true,
+    setup: async (client) => {
+      const today = new Date();
+      const currentWeekStart = new Date(today.getFullYear(), today.getMonth(), today.getDate() - today.getDay());
+      const fixtureMonth = new Date(currentWeekStart.getFullYear(), currentWeekStart.getMonth(), currentWeekStart.getDate() + 21);
+      const monthSlug = `${fixtureMonth.getFullYear()}-${String(fixtureMonth.getMonth() + 1).padStart(2, "0")}`;
+      const futureDay = (offset) => new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset, 10);
+      const releaseDayLabel = new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric" })
+        .format(futureDay(7));
+      const created = [];
+      const cleanup = async () => {
+        for (const automationId of created) {
+          await pluginRpc("automations", "automations_delete", { projectId, automationId });
+        }
+      };
+      try {
+        const fixtures = [
+          { name: "Weekly status sweep (demo)", trigger: { triggerType: "schedule", cron: "0 9 * * 1", timezone: "America/New_York" } },
+          ...[
+            ["Release check (demo)", 7],
+            ["Dependency review (demo)", 15],
+            ["Monthly report (demo)", 23],
+          ].map(([name, offset]) => ({
+            name,
+            trigger: { triggerType: "once", runAt: futureDay(offset).getTime() },
+          })),
+        ];
+        for (const fixture of fixtures) {
+          const automation = await pluginRpc("automations", "automations_create", {
+            projectId,
+            name: fixture.name,
+            enabled: true,
+            trigger: fixture.trigger,
+            execution: { mode: "script", script: ":", interpreter: "sh" },
+            origin: "app",
+          });
+          created.push(automation.id);
+        }
+        await pluginRpc("automation-calendar", "calendar_action", { projectId, automationId: created[1], action: "pause" });
+        const paused = await pluginRpc("automations", "automations_get", { projectId, automationId: created[1] });
+        if (paused?.enabled !== false) throw new Error("Calendar pause action did not update the live automation");
+        await pluginRpc("automation-calendar", "calendar_action", { projectId, automationId: created[1], action: "resume" });
+        await client.navigate(`/plugins/automation-calendar/calendar`);
+        await client.evaluate(`document.querySelector('button[aria-label^="Toggle sidebar"][aria-expanded="true"]')?.click()`);
+        await client.evaluate(`document.querySelector('input[aria-label="Search automations"]')?.focus()`);
+        await client.command("Input.insertText", { text: "(demo)" });
+        for (const text of ["Weekly status sweep (demo)", "Release check (demo)", "Dependency review (demo)", "Monthly report (demo)"]) {
+          await client.waitForText(text);
+        }
+        await client.evaluate(`(() => {
+          const calendar = document.querySelector('[aria-label$="automation calendar"]');
+          if (!calendar || calendar.querySelectorAll('.ac-cell').length !== 42) throw new Error('Live six-week month grid is missing');
+          const now = new Date();
+          const sunday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
+          const firstWeekLabel = 'Show ' + new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(sunday);
+          if (calendar.querySelector('.ac-cell .ac-date')?.getAttribute('aria-label') !== firstWeekLabel)
+            throw new Error('Current week is not at the top of the month grid');
+          const names = [...calendar.querySelectorAll('.ac-event-name')].map(node => node.textContent);
+          for (const name of ['Weekly status sweep (demo)', 'Release check (demo)', 'Dependency review (demo)', 'Monthly report (demo)']) {
+            if (!names.includes(name)) throw new Error('Missing live calendar event: ' + name);
+          }
+          if (document.querySelector('.ac-error')) throw new Error('Calendar shows a live RPC error');
+        })()`);
+        await client.evaluate(`(() => {
+          const day = [...document.querySelectorAll('.ac-cell button')].find(button =>
+            button.getAttribute('aria-label') === ${JSON.stringify("Show " + releaseDayLabel)});
+          if (!day) throw new Error('Month date action is missing');
+          day.click();
+        })()`);
+        await client.waitForSelector('.ac-time-view[data-view="day"] .ac-time-event[title^="Release check"]');
+        await client.evaluate(`(() => {
+          const view = document.querySelector('.ac-time-view[data-view="day"]');
+          if (!view || view.querySelectorAll('.ac-time-heading').length !== 1) throw new Error('Live day view is missing');
+        })()`);
+        await sleep(200);
+        await client.evaluate(`(() => {
+          const event = document.querySelector('.ac-time-event[title^="Release check"]');
+          if (!event) throw new Error('Release check event button is missing from the day view');
+          event.click();
+        })()`);
+        await client.waitForText("One time");
+        await client.evaluate(`(() => {
+          const popup = document.querySelector('.ac-popover[role="dialog"]');
+          if (!popup || !popup.innerText.includes('Release check') || popup.getBoundingClientRect().width > 420)
+            throw new Error('Event popup did not open as a floating overlay');
+          if (document.querySelector('.ac-day-agenda, .ac-scrim')) throw new Error('Old event sidebar or drawer still rendered');
+        })()`);
+        await client.capture(join(repoRoot, "packages", "bb-plugin-automation-calendar", "assets", "event-popup.png"));
+        await client.evaluate(`document.querySelector('.ac-popover button[aria-label="Close details"]')?.click()`);
+        await client.evaluate(`document.querySelector('.ac-view-switch button[data-view="three"]')?.click()`);
+        await client.waitForSelector('.ac-time-view[data-view="three"] .ac-time-event[title^="Release check"]');
+        await client.evaluate(`(() => {
+          const view = document.querySelector('.ac-time-view[data-view="three"]');
+          if (!view || view.querySelectorAll('.ac-time-heading').length !== 3) throw new Error('Live three-day view is missing');
+        })()`);
+        await client.evaluate(`document.querySelector('.ac-view-switch button[data-view="week"]')?.click()`);
+        await client.waitForSelector('.ac-time-view[data-view="week"] .ac-time-event[title^="Release check"]');
+        await client.evaluate(`(() => {
+          const view = document.querySelector('.ac-time-view[data-view="week"]');
+          if (!view || view.querySelectorAll('.ac-time-heading').length !== 7) throw new Error('Live week view is missing');
+        })()`);
+        await client.capture(join(repoRoot, "packages", "bb-plugin-automation-calendar", "assets", "week-view.png"));
+        await client.evaluate(`document.querySelector('.ac-view-switch button[data-view="month"]')?.click()`);
+        await client.waitForSelector('.ac-grid[data-view="month"] .ac-event[title^="Release check"]');
+        await client.evaluate(`document.querySelector('.ac-grid[data-view="month"] .ac-event[title^="Release check"]').click()`);
+        await client.waitForText("One time");
+        await client.waitForText("Open in Automations");
+        await client.evaluate(`(() => {
+          const detail = document.querySelector('.ac-popover[role="dialog"]');
+          if (!detail || !detail.innerText.includes('Release check')) throw new Error('Live automation popup did not open');
+          const editor = [...detail.querySelectorAll('a')].find(link => link.innerText.includes('Open in Automations'));
+          if (!editor) throw new Error('Native editor action is missing');
+          editor.click();
+        })()`);
+        await sleep(350);
+        const nativePath = await client.evaluate("location.pathname");
+        if (!nativePath.startsWith("/plugins/automations/automations/")) {
+          throw new Error(`Open editor did not navigate to native Automations: ${nativePath}`);
+        }
+        await client.navigate(`/plugins/automation-calendar/calendar/${monthSlug}`);
+        await client.evaluate(`document.querySelector('button[aria-label^="Toggle sidebar"][aria-expanded="true"]')?.click()`);
+        await client.evaluate(`document.querySelector('input[aria-label="Search automations"]')?.focus()`);
+        await client.command("Input.insertText", { text: "(demo)" });
+        await client.waitForText("Release check");
+        return cleanup;
+      } catch (error) {
+        await cleanup();
+        throw error;
+      }
+    },
+  },
   {
     id: "bots-ping-highlight",
     showSidebar: true,
@@ -1616,7 +1759,7 @@ try {
       const outputPath = join(repoRoot, "packages", capture.packageDir, "assets", capture.fileName ?? "staged-preview.png");
       // Use BB's real collapsed-sidebar state so publication does not expose
       // unrelated local projects/threads alongside the deterministic fixtures.
-      const privateSidebar = !capture.showSidebar && ((capture.packageDir === "bb-plugin-bot-teams" && capture.id !== "bots-forks") || capture.id === "spool");
+      const privateSidebar = !capture.showSidebar && ((capture.packageDir === "bb-plugin-bot-teams" && capture.id !== "bots-forks") || capture.id === "spool" || capture.id === "automation-calendar");
       if (privateSidebar) {
         await client.evaluate(`document.querySelector('button[aria-label^="Toggle sidebar"]')?.click()`);
         await sleep(350);

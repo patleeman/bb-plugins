@@ -5,6 +5,7 @@
   "plugins": [
     { "name": "agent-checklists", "source": "./packages/bb-plugin-agent-checklists" },
     { "name": "agent-plugins", "source": "./packages/bb-plugin-agent-plugins" },
+    { "name": "automation-calendar", "source": "./packages/bb-plugin-automation-calendar" },
     { "name": "bot-teams", "source": "./packages/bb-plugin-bot-teams" },
     { "name": "cobalt2", "source": "./packages/bb-plugin-cobalt2" },
     { "name": "comprehension", "source": "./packages/bb-plugin-comprehension" },

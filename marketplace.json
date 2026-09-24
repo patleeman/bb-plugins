@@ -48,6 +48,28 @@
       }
     },
     {
+      "id": "automation-calendar",
+      "displayName": "Automation Calendar",
+      "description": "Explore and manage BB automations on a calendar.",
+      "icon": "Calendar",
+      "tags": [
+        "automation",
+        "productivity",
+        "calendar"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-automation-calendar",
+          "ref": "main"
+        }
+      }
+    },
+    {
       "id": "bot-teams",
       "displayName": "Bot Teams",
       "description": "Persistent bots that collaborate in channels, delegate work, and keep their own workspaces and memory.",
