@@ -1298,8 +1298,9 @@ const captures = [
         }
         const firstMessage = messages[0];
         const composer = document.querySelector(".group-compose");
-        if (header.getBoundingClientRect().height > 40 || firstMessage.getBoundingClientRect().height > 50) {
-          throw new Error("Channels should use compact BB spacing in the header and transcript");
+        // A thread row: name line, prose, and BB's reserved 20px action row.
+        if (header.getBoundingClientRect().height > 40 || firstMessage.getBoundingClientRect().height > 80) {
+          throw new Error("Channels should use BB's thread spacing in the header and transcript");
         }
         if (!composer.classList.contains("rounded-xl") || !composer.classList.contains("shadow-lift") || Math.abs(composer.getBoundingClientRect().height - 116) > 4 || composer.querySelector("textarea").disabled) {
           throw new Error("Channel composer must match BB's native composer and remain usable");
@@ -1307,8 +1308,9 @@ const captures = [
         if (Array.from(header.querySelectorAll("button")).some((button) => /pause|resume|stop|run/i.test(button.textContent + button.getAttribute("aria-label")))) {
           throw new Error("Channels must not expose run or pause controls");
         }
-        if (getComputedStyle(firstMessage.querySelector(".bot-message-actions")).position !== "absolute") {
-          throw new Error("Hidden message actions must not reserve transcript space");
+        const actions = firstMessage.querySelector(".bot-message-actions");
+        if (getComputedStyle(actions).position !== "absolute" || actions.parentElement.getBoundingClientRect().height > 28) {
+          throw new Error("Message actions must use BB's action row beneath the message");
         }
         document.querySelector(".channel-avatar-stack").click();
       })()`);

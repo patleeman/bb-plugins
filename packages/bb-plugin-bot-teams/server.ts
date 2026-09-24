@@ -23,6 +23,7 @@ import {
 } from "./contract";
 import { Store, newId, document, saveDocument } from "./store";
 import { liveChannelDms } from "./channel-dms";
+import { usePersonalProject } from "./bot-project";
 import {
   Runtime,
   jobPrompt,
@@ -247,25 +248,15 @@ export default async function plugin(bb: BbPluginApi) {
     }
   };
   async function project() {
-    return runtime.locked("project", async () => {
-      const existing =
-        (await bb.storage.kv.get<string>("projectId")) ??
-        store.all()[0]?.projectId;
-      if (existing) return existing;
-      const { primaryHostId } = await bb.sdk.system.config();
-      if (!primaryHostId)
-        throw new Error(
-          "BB needs a connected primary machine for channel files.",
-        );
-      await mkdir(store.root, { recursive: true, mode: 0o700 });
-      const result = await bb.sdk.projects.create({
-        name: "Bot Teams",
-        source: { type: "local_path", hostId: primaryHostId, path: store.root },
-      });
-      await bb.storage.kv.set("projectId", result.id);
-      return result.id;
-    });
+    return runtime.locked("project", () =>
+      usePersonalProject(bb, store, (from, to) =>
+        automations.migrateProject(from, to),
+      ),
+    );
   }
+  // Repair saved bot profiles before handlers or background work can dispatch.
+  // A lookup failure must fail loading, never create another deletable project.
+  if (store.all().length) await project();
   async function create(
     input: z.infer<typeof profileInput> & { mission: string; roomId?: string },
     requestId?: string,
@@ -1319,7 +1310,7 @@ export default async function plugin(bb: BbPluginApi) {
       ],
       skills: ["bots"],
       instructions: [
-        `You are the persistent bot ${JSON.stringify(bot.name)} (@${bot.handle}). Your workspace is ${JSON.stringify(bot.home)}.`,
+        `You are the persistent bot ${JSON.stringify(bot.name)} (@${bot.handle}). Your persistent bot home is ${JSON.stringify(bot.home)}. BB may start this thread in a separate Personal workspace. Read AGENTS.md in this bot home as well as MISSION.md and MEMORY.md. Use this absolute bot home for those documents and files you publish; set the working directory to it for shell commands. Do not assume the initial working directory contains your bot files.`,
         isForkConversation(c.key)
           ? "This is a separate fork. Answer only the new request without resuming inherited work. Read MISSION.md and MEMORY.md, but do not edit shared MEMORY.md. Include durable findings in your channel reply for the primary session."
           : "Read MISSION.md and MEMORY.md at the beginning of every turn, including follow-ups. Keep durable memory up to date.",
@@ -1417,8 +1408,9 @@ export default async function plugin(bb: BbPluginApi) {
   const threadExists = async (threadId: string) => {
     try {
       return !!(await bb.sdk.threads.get({ threadId }));
-    } catch {
-      return false;
+    } catch (cause) {
+      if (missingThread(cause)) return false;
+      throw cause;
     }
   };
   // A bot's DM row must not outlive the thread it points at.

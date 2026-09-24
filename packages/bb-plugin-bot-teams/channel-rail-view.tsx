@@ -569,7 +569,7 @@ export function ChannelRail({
                 }
               >
                 <span className="channel-rail-avatar" aria-hidden>
-                  <Icon name="TriangleAlert" />
+                  <Icon name="AlertTriangle" />
                 </span>
                 <span className="channel-rail-live-text">
                   <span className="channel-rail-name">

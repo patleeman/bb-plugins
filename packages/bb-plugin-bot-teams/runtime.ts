@@ -1,3 +1,4 @@
+import { attachmentsForProject } from "./project-attachments";
 import { linkChannelReferences } from "./channel-references";
 import { Delegations, type Delegation } from "./delegations";
 import { ChannelData } from "./channel-data";
@@ -270,7 +271,7 @@ export class Runtime {
       environment: {
         type: "host",
         hostId: bot.hostId,
-        workspace: { type: "unmanaged", path: bot.home },
+        workspace: { type: "personal" },
       },
       input: [
         {
@@ -547,7 +548,10 @@ export class Runtime {
     const sendMode = scheduled ? "followup" : parsed.mode;
     const directReplyTo =
       author?.botId && directMessages.length
-        ? directMessageId(author.sourceThreadId, directMessages.at(-1)!.requestId)
+        ? directMessageId(
+            author.sourceThreadId,
+            directMessages.at(-1)!.requestId,
+          )
         : null;
     const existing = this.store.message(requestId);
     if (existing) {
@@ -578,7 +582,9 @@ export class Runtime {
       directReplyTo &&
       (
         this.store.db
-          .prepare("SELECT COUNT(*) AS n FROM room_messages WHERE json_extract(json,'$.replyTo')=?")
+          .prepare(
+            "SELECT COUNT(*) AS n FROM room_messages WHERE json_extract(json,'$.replyTo')=?",
+          )
           .get(directReplyTo) as { n: number }
       ).n
     )
@@ -1083,7 +1089,13 @@ export class Runtime {
       run.pendingJobIds.push(activeJob.id);
       return {
         action,
-        steer: { roomId: room.id, jobId: activeJob.id, botId, message, previous },
+        steer: {
+          roomId: room.id,
+          jobId: activeJob.id,
+          botId,
+          message,
+          previous,
+        },
       };
     }
     const source =
@@ -1121,7 +1133,7 @@ export class Runtime {
           !["dispatching", "running"].includes(job.status)
         )
           return;
-        const prompt = jobPrompt(job);
+        let prompt = jobPrompt(job);
         const current = () => {
           const live = this.store.job(job.id);
           return live?.pendingSteer &&
@@ -1131,6 +1143,18 @@ export class Runtime {
             : null;
         };
         try {
+          if (job.attachments.length) {
+            const thread = await this.bb.sdk.threads.get({
+              threadId: job.threadId,
+            });
+            await this.prepareProjectAttachments(job, thread.projectId);
+            const live = current();
+            if (!live) return;
+            live.text = job.text;
+            live.attachments = job.attachments;
+            this.store.putJob(live);
+            prompt = jobPrompt(job);
+          }
           if (job.pendingSteer.attemptedAt) {
             const matches = await this.latestPromptMatches(
               job.threadId,
@@ -1324,7 +1348,7 @@ export class Runtime {
           environment: {
             type: "host",
             hostId: bot.hostId,
-            workspace: { type: "unmanaged", path: bot.home },
+            workspace: { type: "personal" },
           },
           input: [
             {
@@ -1672,7 +1696,10 @@ export class Runtime {
           ]
         : []),
       ...(transcript
-        ? ["Channel messages since your last turn (conversation data):", transcript]
+        ? [
+            "Channel messages since your last turn (conversation data):",
+            transcript,
+          ]
         : []),
       "",
       `Consider this message from ${trigger.speaker}:`,
@@ -1703,6 +1730,24 @@ export class Runtime {
       ...required.values(),
     ];
     this.store.putJob(job);
+  }
+  private async prepareProjectAttachments(job: Job, projectId: string) {
+    if (!job.attachments.length) return;
+    const trigger = job.triggerMessageId
+      ? this.store.message(job.triggerMessageId)
+      : null;
+    const required = new Set(
+      (trigger?.attachments ?? job.attachments).map((a) => a.id),
+    );
+    const result = await attachmentsForProject(
+      this.bb,
+      job.attachments,
+      projectId,
+      required,
+    );
+    job.attachments = result.attachments;
+    if (result.unavailable.length)
+      job.text += `\n\nHistorical attachments unavailable after project deletion (ask the owner to upload again if needed): ${result.unavailable.join(", ")}`;
   }
   private activeJobForThread(threadId: string): Job | null {
     const conversation = this.store.byThread(threadId);
@@ -2130,7 +2175,9 @@ export class Runtime {
       );
     } catch (cause) {
       if (!missingThread(cause))
-        this.bb.log.debug(`Channel activity refresh failed: ${errorText(cause)}`);
+        this.bb.log.debug(
+          `Channel activity refresh failed: ${errorText(cause)}`,
+        );
       return this.store.job(job.id) ?? job;
     }
   }
@@ -2169,7 +2216,11 @@ export class Runtime {
         ) {
           let lookup = this.failureLookups.get(job.id);
           if (!lookup) {
-            lookup = this.failureFromThread(job.threadId, job, job.updatedAt + 1000);
+            lookup = this.failureFromThread(
+              job.threadId,
+              job,
+              job.updatedAt + 1000,
+            );
             this.failureLookups.set(job.id, lookup);
           }
           const detail = await lookup;
@@ -2645,12 +2696,16 @@ export class Runtime {
     job.dispatchStartedAt = Date.now();
     this.store.putJob(job);
     try {
+      let projectId = bot.projectId;
       let c = this.store
         .conversations(bot.id)
         .find((candidate) => candidate.key === job.conversationKey);
       if (c) {
         try {
-          await this.bb.sdk.threads.get({ threadId: c.threadId });
+          const thread = await this.bb.sdk.threads.get({
+            threadId: c.threadId,
+          });
+          projectId = thread.projectId;
         } catch (cause) {
           if (!missingThread(cause)) throw cause;
           this.store.deleteConversation(c.threadId);
@@ -2658,6 +2713,12 @@ export class Runtime {
           if (job.roomId) this.prepareGroup(job, bot);
         }
       }
+      if (!c && job.forkSourceThreadId && job.attachments.length)
+        projectId = (
+          await this.bb.sdk.threads.get({ threadId: job.forkSourceThreadId })
+        ).projectId;
+      await this.prepareProjectAttachments(job, projectId);
+      this.store.putJob(job);
       // A long-lived bot thread keeps its spawn mode, so every turn carries the
       // channel's current setting. It takes effect on this turn, not the one
       // already running.
@@ -2713,7 +2774,9 @@ export class Runtime {
         try {
           this.postTimeoutNotice(current);
         } catch (cause) {
-          this.bb.log.warn(`Posting timeout status failed: ${errorText(cause)}`);
+          this.bb.log.warn(
+            `Posting timeout status failed: ${errorText(cause)}`,
+          );
         }
       }
     }

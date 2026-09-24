@@ -174,7 +174,7 @@ export async function runClassifier<T>(
         environment: {
           type: "host",
           hostId,
-          workspace: { type: "unmanaged", path },
+          workspace: { type: "personal" },
         },
         input: [
           {

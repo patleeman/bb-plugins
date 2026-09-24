@@ -43,6 +43,16 @@ import type {
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "./components/ui/dropdown-menu";
+import {
   ContextMenu,
   ContextMenuTrigger,
   ContextMenuContent,
@@ -66,7 +76,24 @@ import {
   channelMessageReference,
 } from "./channel-links";
 import { ChannelAutomationsView } from "./channel-automations-view";
-import { ChannelAttachments } from "./channel-attachments";
+import {
+  ACTION_BUTTON_CLASS,
+  DayDivider,
+  HOVER_REVEAL_CLASS,
+  LoadMessagesButton,
+  MessageActionBar,
+  MessageAttachments,
+  PROSE_COLUMN_INSET_CLASS,
+  ScrollToBottomButton,
+  TimelineSystemRow,
+} from "./channel-timeline";
+import { cn } from "./lib/utils";
+import { activityRowClass } from "./components/ui/activity-row-styles";
+
+const FAILED_ROW_CLASS = activityRowClass(
+  "failed",
+  "channel-response-error flex items-start gap-2 px-3 py-2 text-sm",
+);
 import { GroupComposer } from "./composer";
 import { ChannelWorkCard } from "./channel-work-card";
 import { ChannelModePicker } from "./channel-mode-picker";
@@ -317,7 +344,7 @@ function MessageContextActions({
       </ContextMenuItem>
       {onFork && (
         <ContextMenuItem onSelect={onFork}>
-          <Icon name="GitFork" />
+          <Icon name="Fork" />
           Ask separately
         </ContextMenuItem>
       )}
@@ -626,6 +653,50 @@ export function ChannelsNavigation(props: ExperimentalSidebarNavigationProps) {
     </nav>
   );
 }
+
+type ChannelOrganization = "pinned" | "activity" | "none";
+type ChannelSort = "updated" | "created" | "alpha";
+type ChannelDisplay = {
+  organization: ChannelOrganization;
+  sort: ChannelSort;
+  direction: "ascending" | "descending";
+};
+const channelDisplayKey = "bb:bots:channel-sidebar-display";
+const defaultChannelDisplay: ChannelDisplay = {
+  organization: "pinned",
+  sort: "updated",
+  direction: "descending",
+};
+
+function readChannelDisplay(): ChannelDisplay {
+  try {
+    const value = JSON.parse(localStorage.getItem(channelDisplayKey) || "null");
+    return {
+      organization: ["pinned", "activity", "none"].includes(value?.organization)
+        ? value.organization
+        : defaultChannelDisplay.organization,
+      sort: ["updated", "created", "alpha"].includes(value?.sort)
+        ? value.sort
+        : defaultChannelDisplay.sort,
+      direction: ["ascending", "descending"].includes(value?.direction)
+        ? value.direction
+        : defaultChannelDisplay.direction,
+    };
+  } catch {
+    return defaultChannelDisplay;
+  }
+}
+
+function compareChannels(a: Room, b: Room, display: ChannelDisplay): number {
+  const order = display.direction === "ascending" ? 1 : -1;
+  const comparison = display.sort === "alpha"
+    ? a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+    : display.sort === "created"
+      ? a.createdAt - b.createdAt
+      : a.updatedAt - b.updatedAt;
+  return comparison * order || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+}
+
 export function ChannelsSidebar({
   Original,
   onNavigate,
@@ -639,11 +710,18 @@ export function ChannelsSidebar({
     [search, setSearch] = useState(""),
     [searching, setSearching] = useState(false),
     [archived, setArchived] = useState(false),
+    [display, setDisplay] = useState(readChannelDisplay),
     [renaming, setRenaming] = useState<Room | null>(null),
     [deleting, setDeleting] = useState<Room | null>(null),
     [failure, setFailure] = useState<string | null>(null),
     [pending, setPending] = useState(false);
   const channelPanel = useRef<string | null>(null);
+  const updateDisplay = (next: ChannelDisplay) => {
+    setDisplay(next);
+    try {
+      localStorage.setItem(channelDisplayKey, JSON.stringify(next));
+    } catch {}
+  };
   const archive = async (room: Room) => {
     setPending(true);
     setFailure(null);
@@ -695,10 +773,24 @@ export function ChannelsSidebar({
         (query ? true : !!r.archived === archived) &&
         r.name.toLowerCase().includes(query),
     )
-    .sort(
-      (a, b) =>
-        Number(!!b.pinned) - Number(!!a.pinned) || b.updatedAt - a.updatedAt,
+    .sort((a, b) =>
+      (display.organization === "pinned"
+        ? Number(!!b.pinned) - Number(!!a.pinned)
+        : 0) || compareChannels(a, b, display),
     );
+  const groups: { label: string | null; rooms: Room[] }[] =
+    display.organization === "activity"
+      ? [
+          { label: "Needs you", rooms: list.filter((r) =>
+            (attentionCounts[r.id] ?? 0) + (approvalCounts[r.id] ?? 0) > 0) },
+          { label: "Working", rooms: list.filter((r) =>
+            (attentionCounts[r.id] ?? 0) + (approvalCounts[r.id] ?? 0) === 0 &&
+            activeRoomIds.includes(r.id)) },
+          { label: "Other channels", rooms: list.filter((r) =>
+            (attentionCounts[r.id] ?? 0) + (approvalCounts[r.id] ?? 0) === 0 &&
+            !activeRoomIds.includes(r.id)) },
+        ].filter((group) => group.rooms.length > 0)
+      : [{ label: null, rooms: list }];
   return (
     <>
       <section className="channels-sidebar" aria-label="Channels">
@@ -706,22 +798,6 @@ export function ChannelsSidebar({
           <span className="channels-sidebar-heading">
             {archived ? "Archived channels" : "Channels"}
           </span>
-          <IconActionTooltip
-            label={archived ? "Show active channels" : "Show archived channels"}
-          >
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={archived ? "Show active channels" : "Show archived channels"}
-              aria-pressed={archived}
-              onClick={() => {
-                setArchived(!archived);
-                setSearch("");
-              }}
-            >
-              <Icon name={archived ? "ListView" : "Archive"} />
-            </Button>
-          </IconActionTooltip>
           <Button
             variant="ghost"
             size="icon"
@@ -742,6 +818,96 @@ export function ChannelsSidebar({
           >
             <Icon name="Plus" />
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" aria-label="Channel list options">
+                <Icon name="MoreHorizontal" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" aria-label="Channel list options">
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger aria-label="Organize by">
+                  <Icon name="Layers" />
+                  Organize by
+                  <Icon name="ChevronRight" className="ml-auto" />
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent aria-label="Organize channels">
+                  {([
+                    ["pinned", "Pinned first"],
+                    ["activity", "By activity"],
+                    ["none", "No grouping"],
+                  ] as const).map(([value, label]) => (
+                    <DropdownMenuItem
+                      key={value}
+                      role="menuitemradio"
+                      aria-checked={display.organization === value}
+                      aria-label={label}
+                      onSelect={(event) => {
+                        event.preventDefault();
+                        updateDisplay({ ...display, organization: value });
+                      }}
+                    >
+                      {label}
+                      {display.organization === value && <Icon name="Check" className="ml-auto" />}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger aria-label="Sort by">
+                  <Icon name="ArrowUpDown" />
+                  Sort by
+                  <Icon name="ChevronRight" className="ml-auto" />
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent aria-label="Sort channels">
+                  {([
+                    ["updated", "Updated at", "descending"],
+                    ["created", "Created at", "descending"],
+                    ["alpha", "Alphabetical", "ascending"],
+                  ] as const).map(([value, label, defaultDirection]) => {
+                    const selected = display.sort === value;
+                    const direction = selected ? display.direction : defaultDirection;
+                    const nextDirection = selected
+                      ? direction === "ascending" ? "descending" : "ascending"
+                      : defaultDirection;
+                    return (
+                      <DropdownMenuItem
+                        key={value}
+                        role="menuitemradio"
+                        aria-checked={selected}
+                        aria-label={selected
+                          ? `${label}, ${direction}. Sort ${nextDirection}`
+                          : label}
+                        onSelect={(event) => {
+                          event.preventDefault();
+                          updateDisplay({ ...display, sort: value, direction: nextDirection });
+                        }}
+                      >
+                        {label}
+                        {selected && (
+                          <Icon
+                            name={direction === "ascending" ? "ArrowUp" : "ArrowDown"}
+                            className="ml-auto"
+                          />
+                        )}
+                      </DropdownMenuItem>
+                    );
+                  })}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                aria-label={archived ? "Show active channels" : "Show archived channels"}
+                onSelect={() => {
+                  setArchived(!archived);
+                  setSearch("");
+                }}
+              >
+                <Icon name={archived ? "ListView" : "Archive"} />
+                {archived ? "Show active channels" : "Show archived channels"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </header>
         {searching && (
           <Input
@@ -759,26 +925,31 @@ export function ChannelsSidebar({
         )}
         {error && <ErrorMessage error={error} />}
         <ErrorMessage error={failure} />
-        {list.map((r) => (
-          <ChannelSidebarRow
-            key={r.id}
-            room={r}
-            selected={selected === r.id}
-            working={activeRoomIds.includes(r.id)}
-            attentionCount={attentionCounts[r.id] ?? 0}
-            approvalCount={approvalCounts[r.id] ?? 0}
-            pending={pending}
-            onOpen={() => open(r.id)}
-            onRename={() => setRenaming(r)}
-            onCopyId={() => void copyChannelId(r.id)}
-            onArchive={() => void archive(r)}
-            onDelete={() => setDeleting(r)}
-          >
-            <ChannelThreadList
-              roomId={r.id}
-              refreshKey={`${activeRoomIds.includes(r.id)}:${approvalCounts[r.id] ?? 0}:${r.updatedAt}`}
-            />
-          </ChannelSidebarRow>
+        {groups.map((group) => (
+          <div key={group.label ?? "all"} className="channels-sidebar-group">
+            {group.label && <p className="channels-sidebar-group-heading">{group.label}</p>}
+            {group.rooms.map((r) => (
+              <ChannelSidebarRow
+                key={r.id}
+                room={r}
+                selected={selected === r.id}
+                working={activeRoomIds.includes(r.id)}
+                attentionCount={attentionCounts[r.id] ?? 0}
+                approvalCount={approvalCounts[r.id] ?? 0}
+                pending={pending}
+                onOpen={() => open(r.id)}
+                onRename={() => setRenaming(r)}
+                onCopyId={() => void copyChannelId(r.id)}
+                onArchive={() => void archive(r)}
+                onDelete={() => setDeleting(r)}
+              >
+                <ChannelThreadList
+                  roomId={r.id}
+                  refreshKey={`${activeRoomIds.includes(r.id)}:${approvalCounts[r.id] ?? 0}:${r.updatedAt}`}
+                />
+              </ChannelSidebarRow>
+            ))}
+          </div>
         ))}
         {!list.length && (
           <p className="channel-menu-label">
@@ -1172,7 +1343,7 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
         aria-pressed={rail.open}
         onClick={rail.toggle}
       >
-        <Icon name="ListTree" />
+        <Icon name="ListView" />
         {!rail.open &&
           railHasLiveWork(data.jobs, data.runs, data.approvals, 0) && (
             <i className="channel-rail-toggle-dot" aria-hidden />
@@ -1382,6 +1553,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
   const [retrying, setRetrying] = useState<string | null>(null);
   const rail = useChannelRail();
   const [showAllResponseErrors, setShowAllResponseErrors] = useState(false);
+  const [awayFromLatest, setAwayFromLatest] = useState(false);
   const [mobileActionsMessage, setMobileActionsMessage] = useState<
     string | null
   >(null);
@@ -1693,6 +1865,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
               const distanceToBottom =
                 el.scrollHeight - el.scrollTop - el.clientHeight;
               atBottom.current = !data.hasNewer && distanceToBottom < 100;
+              setAwayFromLatest(distanceToBottom > 400);
               followingLatest.current = atBottom.current;
               if (atBottom.current) setReadPosition((n) => n + 1);
               if (!loadingOlder && !jumpTarget) {
@@ -1704,19 +1877,11 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
             }}
           >
             {data.hasOlder && (
-              <div className="flex justify-center py-2">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={loadingOlder}
-                  onClick={() => void loadHistory("older")}
-                  aria-label="Load earlier messages"
-                >
-                  {loadingOlder
-                    ? "Loading earlier messages…"
-                    : "Load earlier messages"}
-                </Button>
-              </div>
+              <LoadMessagesButton
+                direction="older"
+                loading={loadingOlder}
+                onClick={() => void loadHistory("older")}
+              />
             )}
             {jumpTarget && (
               <p role="status" className="text-xs text-muted-foreground">
@@ -1748,7 +1913,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                 m.createdAt - previous.createdAt < 5 * 60000 &&
                 !m.replyTo;
               const messageClasses = [
-                "bot-room-message",
+                "bot-room-message group/message",
                 compact ? "is-continuation" : "is-message-start",
                 !previous ? "is-first-message" : "",
                 newDay ? "is-day-start" : "",
@@ -1778,48 +1943,208 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                 const directMessage = m.system === "bot_dm";
                 return (
                   <div key={m.id} data-channel-message={m.id}>
-                    {newDay && (
-                      <div className="channel-date">
-                        <span>
-                          {new Intl.DateTimeFormat(undefined, {
-                            dateStyle: "medium",
-                          }).format(m.createdAt)}
-                        </span>
-                      </div>
-                    )}
-                    <div
-                      id={`channel-message-${m.id}`}
-                      className={`channel-system-message${
-                        timedOut ? " channel-timeout-message" : ""
-                      }`}
-                      role="status"
-                    >
-                      <Icon name={timedOut ? "Clock" : directMessage ? "MessageSquare" : "UserRoundPlus"} />
-                      <span>{m.text}</span>
-                      {directMessage && m.sourceThreadId && (
-                        <button
-                          type="button"
-                          className="channel-system-link"
-                          onClick={() => openWorkThread(navigate, m.sourceThreadId!, id)}
-                        >
-                          Open DM
-                        </button>
-                      )}
+                    {newDay && <DayDivider time={m.createdAt} />}
+                    <div id={`channel-message-${m.id}`}>
+                      <TimelineSystemRow
+                        icon={
+                          timedOut
+                            ? "Clock"
+                            : directMessage
+                              ? "MessageSquare"
+                              : "UserRoundPlus"
+                        }
+                        className={timedOut ? "text-foreground" : undefined}
+                      >
+                        {m.text}
+                        {directMessage && m.sourceThreadId && (
+                          <>
+                            {" "}
+                            <button
+                              type="button"
+                              className="text-foreground underline underline-offset-2 hover:text-foreground/80"
+                              onClick={() =>
+                                openWorkThread(navigate, m.sourceThreadId!, id)
+                              }
+                            >
+                              Open DM
+                            </button>
+                          </>
+                        )}
+                      </TimelineSystemRow>
                     </div>
                   </div>
                 );
               }
+              const replyToMessage = () => {
+                setReply(m);
+                if (bot)
+                  setInsertion({ text: `@${bot.handle} `, nonce: Date.now() });
+              };
+              const workThreadId = job?.threadId ?? m.sourceThreadId;
+              const workLabel =
+                job?.threadId || m.botId ? "Open bot DM" : "Open source thread";
+              const followImage = () => {
+                const el = transcript.current;
+                if (el && atBottom.current && !jumpTarget)
+                  el.scrollTop = el.scrollHeight;
+              };
+              const sentAt = new Date(m.createdAt);
+              const timeLabel = new Intl.DateTimeFormat(undefined, {
+                hour: "numeric",
+                minute: "2-digit",
+              }).format(m.createdAt);
+              const time = (
+                <time
+                  className="shrink-0 text-xs text-subtle-foreground"
+                  dateTime={sentAt.toISOString()}
+                  title={sentAt.toLocaleString()}
+                >
+                  {timeLabel}
+                </time>
+              );
+              // BB's TurnRequestLabel, pointing at the message this answers.
+              const replyLabel = parent ? (
+                <button
+                  type="button"
+                  className="bot-message-reference mb-1 flex max-w-full min-w-0 items-center text-left text-xs leading-none text-muted-foreground hover:text-foreground"
+                  onClick={() => jump(parent.id)}
+                >
+                  <Icon
+                    name="CornerDownRight"
+                    className="mr-1 inline-block size-3 shrink-0 align-middle"
+                  />
+                  <span className="min-w-0 truncate">
+                    {parent.speaker}: {parent.text.slice(0, 160) || "Attachment"}
+                  </span>
+                </button>
+              ) : null;
+              const attention =
+                m.attentionStatus || m.ownerMention ? (
+                  <MessageAttention id={m.id} status={m.attentionStatus} />
+                ) : null;
+              const isFork =
+                m.sendMode === "fork" ||
+                isForkConversation(
+                  m.conversationKey ?? job?.conversationKey ?? "",
+                );
+              const badges =
+                isFork || m.editedAt ? (
+                  <div className="mb-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    {isFork && <span className="channel-fork-label">Fork</span>}
+                    {m.editedAt && <span>Edited</span>}
+                  </div>
+                ) : null;
+              const markdown = (
+                <Markdown
+                  className="bot-message-markdown"
+                  content={linkifyMentions(m.text, handleToBotId)}
+                />
+              );
+              const reactionRow = grouped.length ? (
+                <div
+                  className={cn(
+                    "channel-reactions mt-1.5 flex flex-wrap gap-1",
+                    isUser && "justify-end",
+                  )}
+                >
+                  {grouped.map((emoji) => {
+                    const people = reactions.filter(
+                        (r) => r.messageId === m.id && r.emoji === emoji,
+                      ),
+                      mine = people.some((r) => r.actorId === "user");
+                    return (
+                      <button
+                        key={emoji}
+                        type="button"
+                        aria-label={`${emoji}: ${people.map((r) => r.actorName).join(", ")}`}
+                        title={people.map((r) => r.actorName).join(", ")}
+                        aria-pressed={mine}
+                        className="inline-flex h-6 cursor-pointer items-center gap-1 rounded-full border border-border bg-surface-recessed px-2 text-sm leading-none hover:bg-state-hover aria-pressed:border-surface-selected-border aria-pressed:bg-state-active"
+                        onClick={() => void react(m, emoji)}
+                      >
+                        {emoji}
+                        <span className="text-xs text-muted-foreground">
+                          {people.length}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  <ReactionPicker
+                    label={`Add reaction to ${m.speaker}'s message`}
+                    onReact={(emoji) => void react(m, emoji)}
+                    triggerClassName="inline-flex h-6 cursor-pointer items-center rounded-full border border-dashed border-border px-2 text-muted-foreground hover:bg-state-hover hover:text-foreground"
+                  />
+                </div>
+              ) : null;
+              const actionBar = (
+                <MessageActionBar
+                  alignment={isUser ? "end" : "start"}
+                  className="bot-message-actions"
+                  leading={
+                    <ReactionPicker
+                      label={`Add reaction to ${m.speaker}'s message`}
+                      onReact={(emoji) => void react(m, emoji)}
+                      triggerClassName={cn(
+                        ACTION_BUTTON_CLASS,
+                        HOVER_REVEAL_CLASS,
+                        "max-md:pointer-coarse:hidden",
+                      )}
+                    />
+                  }
+                  actions={[
+                    {
+                      key: "reply",
+                      label: `Reply to ${m.speaker}`,
+                      icon: "CornerDownRight",
+                      onSelect: replyToMessage,
+                    },
+                    {
+                      key: "copy",
+                      label:
+                        copied === m.id
+                          ? "Copied"
+                          : `Copy ${m.speaker}'s message`,
+                      icon: copied === m.id ? "Check" : "Copy",
+                      onSelect: () => void copy(m),
+                    },
+                    ...(bot
+                      ? [
+                          {
+                            key: "fork",
+                            label: "Ask separately",
+                            icon: "Fork",
+                            onSelect: () =>
+                              setInsertion({
+                                text: `@${bot.handle} `,
+                                nonce: Date.now(),
+                                sendMode: "fork" as const,
+                                reply: m,
+                              }),
+                          },
+                        ]
+                      : []),
+                    ...(workThreadId
+                      ? [
+                          {
+                            key: "work",
+                            label: workLabel,
+                            icon: "ExternalLink",
+                            onSelect: () =>
+                              openWorkThread(navigate, workThreadId, id),
+                          },
+                        ]
+                      : []),
+                  ]}
+                  trailing={compact ? time : undefined}
+                  onOpenMobileMenu={() => {
+                    mobileActionsOpenedByKeyboard.current = false;
+                    setMobileActionsMessage(m.id);
+                  }}
+                />
+              );
               return (
                 <div key={m.id} data-channel-message={m.id}>
-                  {newDay && (
-                    <div className="channel-date">
-                      <span>
-                        {new Intl.DateTimeFormat(undefined, {
-                          dateStyle: "medium",
-                        }).format(m.createdAt)}
-                      </span>
-                    </div>
-                  )}
+                  {newDay && <DayDivider time={m.createdAt} />}
                   <ContextMenu
                     onOpenChange={(open) => {
                       if (open)
@@ -1893,155 +2218,103 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                               }
                             }}
                           >
-                            {!isUser && (
-                              <span className="bot-message-avatar" aria-hidden>
-                                {compact
-                                  ? ""
-                                  : (bot?.avatar ?? (
-                                      <Icon
-                                        name={
-                                          m.sourceThreadId ? "Bot" : "UserRound"
-                                        }
-                                      />
-                                    ))}
-                              </span>
-                            )}
-                            <div className="bot-message-body">
-                              {(!compact || isUser || classifierAnnotation) && (
-                                <header>
-                                  <strong
-                                    className={isUser ? "sr-only" : undefined}
-                                  >
-                                    {bot?.name ?? m.speaker}
-                                  </strong>
-                                  <time
-                                    dateTime={new Date(
-                                      m.createdAt,
-                                    ).toISOString()}
-                                    title={new Date(
-                                      m.createdAt,
-                                    ).toLocaleString()}
-                                  >
-                                    {new Intl.DateTimeFormat(undefined, {
-                                      hour: "numeric",
-                                      minute: "2-digit",
-                                    }).format(m.createdAt)}
-                                  </time>
-                                  {classifierAnnotation && (
-                                    <IconActionTooltip label={classifierAnnotation.description}>
-                                      <span
-                                        className="channel-classifier-action"
-                                        tabIndex={0}
-                                        aria-label={classifierAnnotation.description}
-                                      >
-                                        {classifierAnnotation.label}
-                                      </span>
-                                    </IconActionTooltip>
+                            {isUser ? (
+                              <div className="w-full" data-message-column="">
+                                <div className="ml-auto flex w-fit max-w-[70%] flex-col items-end max-md:max-w-[88%]">
+                                  {!compact && (
+                                    <time
+                                      className="mb-1 block text-right text-[0.6875rem] leading-[1.2] tracking-[0.01em] text-muted-foreground"
+                                      dateTime={sentAt.toISOString()}
+                                      title={`Sent ${sentAt.toLocaleString()}`}
+                                    >
+                                      {timeLabel}
+                                    </time>
                                   )}
-                                </header>
-                              )}
-                              <div className="bot-message-content">
-                                {(m.attentionStatus || m.ownerMention) && <MessageAttention id={m.id} status={m.attentionStatus} />}
-                                {parent && (
-                                  <button
-                                    className="bot-message-reference"
-                                    onClick={() => jump(parent.id)}
-                                  >
-                                    <Icon name="CornerDownRight" />
-                                    <span>
-                                      {parent.speaker}:{" "}
-                                      {parent.text.slice(0, 160) ||
-                                        "Attachment"}
-                                    </span>
-                                  </button>
-                                )}
-                                {(m.sendMode === "fork" ||
-                                  isForkConversation(
-                                    m.conversationKey ??
-                                      job?.conversationKey ??
-                                      "",
-                                  )) && (
-                                  <span className="channel-fork-label">
-                                    Fork
-                                  </span>
-                                )}
-                                {m.editedAt && (
-                                  <small className="text-muted-foreground">
-                                    Edited
-                                  </small>
-                                )}
-                                {m.text && (
-                                  <Markdown
-                                    className="bot-message-markdown text-sm leading-5"
-                                    content={linkifyMentions(m.text, handleToBotId)}
-                                  />
-                                )}
-                                {!!m.attachments.length && (
-                                  <ChannelAttachments
-                                    attachments={m.attachments}
-                                    onImageLoad={() => {
-                                      const el = transcript.current;
-                                      if (el && atBottom.current && !jumpTarget)
-                                        el.scrollTop = el.scrollHeight;
-                                    }}
-                                  />
-                                )}
+                                  {replyLabel}
+                                  {attention}
+                                  <div className="bot-message-content max-w-full rounded-xl border border-border-seam bg-surface-recessed px-4 py-2.5 text-sm leading-relaxed text-foreground [overflow-wrap:anywhere]">
+                                    <strong className="sr-only">
+                                      {m.speaker}
+                                    </strong>
+                                    {badges}
+                                    {m.text ? (
+                                      markdown
+                                    ) : !m.attachments.length ? null : (
+                                      <p className="text-muted-foreground">
+                                        Sent attachments
+                                      </p>
+                                    )}
+                                    <MessageAttachments
+                                      attachments={m.attachments}
+                                      align="end"
+                                      onImageLoad={followImage}
+                                    />
+                                  </div>
+                                  {reactionRow}
+                                  {actionBar}
+                                </div>
                               </div>
-                              {!!grouped.length && (
-                                <div className="channel-reactions">
-                                  {grouped.map((emoji) => {
-                                    const people = reactions.filter(
-                                        (r) =>
-                                          r.messageId === m.id &&
-                                          r.emoji === emoji,
-                                      ),
-                                      mine = people.some(
-                                        (r) => r.actorId === "user",
-                                      );
-                                    return (
-                                      <button
-                                        key={emoji}
-                                        aria-label={`${emoji}: ${people.map((r) => r.actorName).join(", ")}`}
-                                        title={people
-                                          .map((r) => r.actorName)
-                                          .join(", ")}
-                                        aria-pressed={mine}
-                                        onClick={() => void react(m, emoji)}
+                            ) : (
+                              <div
+                                className={cn(
+                                  "w-full text-sm font-normal leading-relaxed text-foreground [overflow-wrap:anywhere]",
+                                  PROSE_COLUMN_INSET_CLASS,
+                                )}
+                                data-message-column=""
+                              >
+                                {(!compact || classifierAnnotation) && (
+                                  <header className="mb-0.5 flex min-w-0 items-center gap-1.5 leading-5">
+                                    <span
+                                      className="flex size-5 shrink-0 items-center justify-center text-base leading-none"
+                                      aria-hidden
+                                    >
+                                      {bot?.avatar ?? (
+                                        <Icon
+                                          name={
+                                            m.sourceThreadId
+                                              ? "Bot"
+                                              : "UserRound"
+                                          }
+                                          className="size-3.5 text-muted-foreground"
+                                        />
+                                      )}
+                                    </span>
+                                    <strong className="min-w-0 truncate font-medium text-foreground">
+                                      {bot?.name ?? m.speaker}
+                                    </strong>
+                                    {time}
+                                    {classifierAnnotation && (
+                                      <IconActionTooltip
+                                        label={classifierAnnotation.description}
                                       >
-                                        {emoji} <span>{people.length}</span>
-                                      </button>
-                                    );
-                                  })}
-                                  <ReactionPicker
-                                    label={`Add reaction to ${m.speaker}'s message`}
-                                    onReact={(emoji) => void react(m, emoji)}
+                                        <span
+                                          className="channel-classifier-action min-w-0 cursor-help truncate text-2xs text-subtle-foreground"
+                                          tabIndex={0}
+                                          aria-label={
+                                            classifierAnnotation.description
+                                          }
+                                        >
+                                          {classifierAnnotation.label}
+                                        </span>
+                                      </IconActionTooltip>
+                                    )}
+                                  </header>
+                                )}
+                                <div className="bot-message-content">
+                                  {attention}
+                                  {replyLabel}
+                                  {badges}
+                                  {m.text ? markdown : null}
+                                  <MessageAttachments
+                                    attachments={m.attachments}
+                                    align="start"
+                                    onImageLoad={followImage}
                                   />
                                 </div>
-                              )}
-                              <div
-                                className="bot-message-actions rounded-md border border-border bg-popover text-popover-foreground shadow-md"
-                                aria-label={`Actions for ${m.speaker}'s message`}
-                              >
-                                <MessageActionButtons
-                                  message={m}
-                                  job={job}
-                                  copied={copied}
-                                  onReact={(emoji) => void react(m, emoji)}
-                                  onReply={() => {
-                                    setReply(m);
-                                    if (bot)
-                                      setInsertion({
-                                        text: `@${bot.handle} `,
-                                        nonce: Date.now(),
-                                      });
-                                  }}
-                                  onCopy={() => void copy(m)}
-                                  onView={() =>
-                                    openWorkThread(navigate, (job?.threadId ?? m.sourceThreadId)!, id)
-                                  }
-                                />
+                                {reactionRow}
+                                {actionBar}
                               </div>
-                            </div>
+                            )}
                           </article>
                         </Popover.Anchor>
                       </ContextMenuTrigger>
@@ -2185,17 +2458,11 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
               );
             })}
             {data.hasNewer && (
-              <div className="flex justify-center py-2">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={loadingOlder}
-                  aria-label="Load newer messages"
-                  onClick={() => void loadHistory("newer")}
-                >
-                  {loadingOlder ? "Loading messages…" : "Load newer messages"}
-                </Button>
-              </div>
+              <LoadMessagesButton
+                direction="newer"
+                loading={loadingOlder}
+                onClick={() => void loadHistory("newer")}
+              />
             )}
             {visibleResponseErrors.map((j) => {
               const bot = bots.find((b) => b.id === j.botId);
@@ -2205,11 +2472,11 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                 !!bot &&
                 !bot.retired;
               return (
-                <div key={j.id} className="channel-response-error" role="status">
-                  <span className="channel-response-error-icon" aria-hidden>
+                <div key={j.id} className={FAILED_ROW_CLASS} role="status">
+                  <span className="flex size-5 shrink-0 items-center justify-center text-base leading-none text-destructive-text [&_[data-icon-root]]:size-4" aria-hidden>
                     {bot?.avatar ?? <Icon name="Bot" />}
                   </span>
-                  <div className="channel-response-error-body">
+                  <div className="min-w-0 flex-1 [&>p]:mt-0.5 [&>p]:text-muted-foreground [&>p]:[overflow-wrap:anywhere] [&>strong]:font-medium">
                     <strong>
                       {bot?.name ?? "Bot"}{" "}
                       {j.timedOut ? "timed out" : "couldn’t finish"}
@@ -2222,7 +2489,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                           : "Restore and invite this bot to retry."}
                       </p>
                     )}
-                    <div className="channel-response-error-actions">
+                    <div className="-ml-2 mt-1 flex flex-wrap gap-1">
                       <Button
                         variant="ghost"
                         size="sm"
@@ -2260,7 +2527,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
               );
             })}
             {responseErrors.length > 5 && (
-              <div className="channel-response-overflow">
+              <div className="flex justify-center">
                 <Button
                   variant="ghost"
                   size="sm"
@@ -2276,26 +2543,24 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
             {data.runs.some(
               (r) => r.routing === "pending" && r.status === "running",
             ) && (
-              <p className="channel-routing-status" role="status">
+              <p className="px-2 text-sm text-muted-foreground" role="status">
+                <span className="animate-shine">
                 Choosing recipients and delivery…
+                </span>
               </p>
             )}
             {data.runs
               .filter((r) => r.routing === "error")
               .slice(-3)
               .map((r) => (
-                <div
-                  key={r.id}
-                  className="channel-response-error"
-                  role="status"
-                >
-                  <span className="channel-response-error-icon" aria-hidden>
-                    <Icon name="TriangleAlert" />
+                <div key={r.id} className={FAILED_ROW_CLASS} role="status">
+                  <span className="flex size-5 shrink-0 items-center justify-center text-base leading-none text-destructive-text [&_[data-icon-root]]:size-4" aria-hidden>
+                    <Icon name="AlertTriangle" />
                   </span>
-                  <div className="channel-response-error-body">
+                  <div className="min-w-0 flex-1 [&>p]:mt-0.5 [&>p]:text-muted-foreground [&>p]:[overflow-wrap:anywhere] [&>strong]:font-medium">
                     <strong>Couldn’t choose recipients</strong>
                     {r.routingError && <p>{r.routingError}</p>}
-                    <div className="channel-response-error-actions">
+                    <div className="-ml-2 mt-1 flex flex-wrap gap-1">
                       <Button
                         size="sm"
                         variant="ghost"
@@ -2327,27 +2592,28 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
               onResolved={load}
             />
           </div>
-          {data.hasNewer && (
-            <div className="channel-latest">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={async () => {
-                  scrollAnchor.current = null;
-                  pageInFlight.current = null;
-                  setJumpTarget(null);
-                  atBottom.current = true;
-                  try {
-                    await loadLatest();
-                  } catch (e) {
-                    setFailure(message(e));
-                  }
-                }}
-              >
-                Jump to latest
-              </Button>
-            </div>
-          )}
+          <ScrollToBottomButton
+            visible={data.hasNewer || awayFromLatest}
+            active={queues.length > 0}
+            onClick={async () => {
+              if (!data.hasNewer) {
+                transcript.current?.scrollTo({
+                  top: transcript.current.scrollHeight,
+                  behavior: "smooth",
+                });
+                return;
+              }
+              scrollAnchor.current = null;
+              pageInFlight.current = null;
+              setJumpTarget(null);
+              atBottom.current = true;
+              try {
+                await loadLatest();
+              } catch (e) {
+                setFailure(message(e));
+              }
+            }}
+          />
           <GroupComposer
             key={id}
             stack={

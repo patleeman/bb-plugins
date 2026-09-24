@@ -14,6 +14,7 @@ const MENU_ITEM_DESTRUCTIVE_STATE_CLASS =
 
 const DropdownMenu = DropdownMenuPrimitive.Root;
 const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
+const DropdownMenuSub = DropdownMenuPrimitive.Sub;
 
 const DropdownMenuContent = React.forwardRef<
   HTMLDivElement,
@@ -78,6 +79,41 @@ const DropdownMenuItem = React.forwardRef<
 );
 DropdownMenuItem.displayName = "DropdownMenuItem";
 
+const DropdownMenuSubTrigger = React.forwardRef<
+  React.ComponentRef<typeof DropdownMenuPrimitive.SubTrigger>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubTrigger>
+>(({ className, ...props }, ref) => (
+  <DropdownMenuPrimitive.SubTrigger
+    ref={ref}
+    className={cn(
+      "flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-[0.3125rem] text-xs outline-none focus:bg-state-hover data-[state=open]:bg-state-hover [&>[data-icon-root]]:size-4 [&>[data-icon-root]]:shrink-0",
+      LIST_HOVER_TRANSITION,
+      className,
+    )}
+    {...props}
+  />
+));
+DropdownMenuSubTrigger.displayName = "DropdownMenuSubTrigger";
+
+const DropdownMenuSubContent = React.forwardRef<
+  HTMLDivElement,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>
+>(({ className, sideOffset = 4, ...props }, ref) => (
+  <DropdownMenuPrimitive.Portal>
+    <DropdownMenuPrimitive.SubContent
+      ref={ref}
+      sideOffset={sideOffset}
+      collisionPadding={8}
+      className={cn(
+        "z-50 min-w-32 rounded-md border bg-popover p-1 text-popover-foreground shadow-md",
+        className,
+      )}
+      {...props}
+    />
+  </DropdownMenuPrimitive.Portal>
+));
+DropdownMenuSubContent.displayName = "DropdownMenuSubContent";
+
 const DropdownMenuLabel = React.forwardRef<
   HTMLDivElement,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Label> & {
@@ -111,6 +147,9 @@ DropdownMenuSeparator.displayName = "DropdownMenuSeparator";
 export {
   DropdownMenu,
   DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,

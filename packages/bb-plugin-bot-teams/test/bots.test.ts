@@ -44,7 +44,9 @@ const setup = () => {
     pluginId: "bot-teams",
     agentSkillIds: ["bots"],
     sdk: {
+      plugins: { callRpc: async (args) => args.outputSchema.parse([]) },
       projects: {
+        list: async () => [{ id: "proj_personal", kind: "personal", name: "Personal", sources: [], gitRemoteUrl: null, createdAt: 1, updatedAt: 1 }],
         attachments: {
           upload: async (args) => ({
             path: `uploaded-${args.filename}`,
@@ -3708,4 +3710,18 @@ test("transcript pages bound messages and reactions, seek directly, and refresh 
   } finally {
     await x.close();
   }
+});
+
+test("channel DM cleanup keeps rows on transient lookup failures and removes confirmed deleted threads", async () => {
+  const x = setup();
+  try {
+    await plugin(x.bb);
+    x.store.putConversation({ id: "dm", botId: x.a.id, key: `group:${x.room.id}`, kind: "group", title: x.room.name, threadId: "thr_dm", createdAt: 1 });
+    x.harness.inspection.sdk.stub("threads.get", async () => { throw new Error("HTTP 503: Unavailable"); });
+    await assert.rejects(x.harness.behavior.callRpc("channelThreads", { id: x.room.id }), /503/);
+    assert.ok(x.store.byThread("thr_dm"));
+    x.harness.inspection.sdk.stub("threads.get", async () => { throw new Error("HTTP 404: Thread not found"); });
+    assert.deepEqual(await x.harness.behavior.callRpc("channelThreads", { id: x.room.id }), []);
+    assert.equal(x.store.byThread("thr_dm"), null);
+  } finally { await x.close(); }
 });

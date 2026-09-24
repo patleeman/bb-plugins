@@ -199,7 +199,8 @@ async function exercise(p, origin, fixtures) {
     await p.waitForSelector(field);
     stage = "switch channels";
     // Switch channels through the real sidebar (SPA navigation), then return.
-    await p.click('.channels-sidebar [aria-label="Show archived channels"]');
+    await p.click('.channels-sidebar button[aria-label="Channel list options"]');
+    await p.click('[role="menuitem"][aria-label="Show archived channels"]');
     await p.waitForFunction(() =>
       [...document.querySelectorAll(".channel-nav-name")].some(
         (e) => e.textContent === "Workbench switching QA",

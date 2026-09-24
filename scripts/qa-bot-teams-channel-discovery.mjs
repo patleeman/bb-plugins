@@ -34,18 +34,27 @@ try {
 
 async function exercise(p, { origin, fixture, active }) {
   const input = '.channels-sidebar input[aria-label="Search all channels"]';
-  const activeButton = '.channels-sidebar [aria-label="Show active channels"]';
-  const archivedButton = '.channels-sidebar [aria-label="Show archived channels"]';
+  const optionsButton = '.channels-sidebar button[aria-label="Channel list options"]';
+  const activeButton = '[role="menuitem"][aria-label="Show active channels"]';
+  const archivedButton = '[role="menuitem"][aria-label="Show archived channels"]';
   const hasRow = (name) => [...document.querySelectorAll('.channel-nav-name')]
     .some((e) => e.textContent === name);
   const waitRow = (name) => p.waitForFunction(hasRow, {}, name);
+  const openOptions = async () => {
+    if (await p.evaluate((selector) => document.querySelector(selector)?.getAttribute('aria-expanded') !== 'true', optionsButton))
+      await p.click(optionsButton);
+  };
   const clickView = async (selector) => {
+    await p.waitForSelector('[role="menuitem"][aria-label^="Show "]', { hidden: true });
+    await openOptions();
     await p.click(selector);
-    await p.waitForSelector(selector === activeButton ? archivedButton : activeButton);
+    await p.waitForFunction((heading) =>
+      document.querySelector('.channels-sidebar-heading')?.textContent === heading,
+      {}, selector === activeButton ? 'Channels' : 'Archived channels');
   };
   await p.setViewport({ width: 1440, height: 1000, isMobile: false, hasTouch: false });
   await p.goto(`${origin}/plugins/bot-teams/channels/${fixture.id}`);
-  await p.waitForSelector(archivedButton);
+  await p.waitForSelector(optionsButton);
   await waitRow(active.name);
   if (await p.evaluate(hasRow, fixture.name)) throw new Error('Archived channel leaked into Active view.');
   if (await p.evaluate(() => [...document.querySelectorAll('.channels-sidebar header button')].some((b) => b.textContent === 'Channels')))
@@ -67,6 +76,9 @@ async function exercise(p, { origin, fixture, active }) {
 
   // Archive is visible and reachable with keyboard input.
   console.log('Checking keyboard archive toggle');
+  await p.focus(optionsButton);
+  await p.keyboard.press('Enter');
+  await p.waitForSelector(archivedButton);
   await p.focus(archivedButton);
   await p.keyboard.press('Enter');
   await waitRow(fixture.name);
@@ -122,7 +134,7 @@ async function exercise(p, { origin, fixture, active }) {
   await p.waitForLoad();
   await p.waitForSelector('button[aria-label^="Toggle sidebar"]');
   await p.evaluate(() => document.querySelector('button[aria-label^="Toggle sidebar"][aria-expanded="false"]')?.click());
-  await p.waitForSelector(archivedButton, { visible: true });
+  await p.waitForSelector(optionsButton, { visible: true });
   await waitRow(active.name);
   await p.waitForFunction(() => {
     const drawer = document.querySelector('.channels-sidebar')?.closest('[role="dialog"]');
@@ -132,7 +144,9 @@ async function exercise(p, { origin, fixture, active }) {
     const button = document.querySelector(selector);
     const r = button?.getBoundingClientRect();
     return r && button.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
-  }, {}, archivedButton);
+  }, {}, optionsButton);
+  await p.tap(optionsButton);
+  await p.waitForSelector(archivedButton);
   await p.tap(archivedButton);
   await waitRow(fixture.name);
   if (await p.evaluate(() => [...document.querySelectorAll('.channels-sidebar header button')].some((b) => {

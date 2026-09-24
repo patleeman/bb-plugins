@@ -121,6 +121,87 @@ export class ChannelAutomations {
       return result.success && metadata(result.data) ? [result.data] : [];
     });
   }
+  /** Public Automations APIs cannot reparent a schedule. Copy its definition,
+   * pause the old copy, and retain the old record and run history. Persist the
+   * intended enabled state before pausing so interrupted migrations can retry. */
+  async migrateProject(from: string, to: string) {
+    let legacy: Automation[];
+    try {
+      legacy = await this.all(from);
+    } catch (cause) {
+      // Automations is optional. Other errors must leave bot ownership intact
+      // so the next load can retry rather than strand schedules in the old scope.
+      if (/plugin.*(?:not found|not installed)/i.test(String(cause))) return;
+      throw cause;
+    }
+    if (!legacy.length) return;
+    const destination = await this.all(to);
+    for (const summary of legacy) {
+      const m = metadata(summary)!;
+      // Lists contain scriptFile metadata; only get includes script contents.
+      const automation = await this.rpc(
+        "get",
+        { projectId: from, automationId: summary.id },
+        automationSchema,
+      );
+      if (
+        automation.execution.script !== dispatchScript ||
+        !this.store.findRoom(m.channelId) ||
+        !this.store.all().some((bot) => bot.id === m.botId)
+      )
+        continue;
+      // Completed one-shot schedules remain available in the old run history.
+      if (
+        automation.trigger.triggerType === "once" &&
+        automation.trigger.runAt <= Date.now()
+      )
+        continue;
+      const key = `personal-schedule:${automation.id}`;
+      let state = await this.bb.storage.kv.get<{
+        enabled: boolean;
+        replacementId?: string;
+        complete?: boolean;
+      }>(key);
+      if (state?.complete) continue;
+      if (!state) {
+        state = { enabled: automation.enabled };
+        await this.bb.storage.kv.set(key, state);
+      }
+      if (automation.enabled)
+        await this.rpc(
+          "pause",
+          { projectId: from, automationId: automation.id },
+          automationSchema,
+        );
+      let replacement = destination.find(
+        (row) => metadata(row)?.requestId === m.requestId,
+      );
+      if (!replacement) {
+        replacement = await this.rpc(
+          "create",
+          {
+            projectId: to,
+            name: automation.name,
+            enabled: false,
+            trigger: automation.trigger,
+            execution: this.execution(m),
+            origin: "human",
+          },
+          automationSchema,
+        );
+        destination.push(replacement);
+      }
+      state.replacementId = replacement.id;
+      await this.bb.storage.kv.set(key, state);
+      if (state.enabled && !replacement.enabled)
+        await this.rpc(
+          "resume",
+          { projectId: to, automationId: replacement.id },
+          automationSchema,
+        );
+      await this.bb.storage.kv.set(key, { ...state, complete: true });
+    }
+  }
   async list(input: z.output<typeof channelAutomationList>, threadId?: string) {
     const { room, projectId } = this.context(input.channelId, threadId);
     const rows = (await this.all(projectId)).filter(

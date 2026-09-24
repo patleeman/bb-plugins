@@ -320,11 +320,14 @@ export function ReactionPicker({
   label = "Add reaction",
   open,
   onOpenChange,
+  triggerClassName,
 }: {
   onReact: (emoji: string) => void;
   label?: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Renders a bare trigger with these classes, as in a message action row. */
+  triggerClassName?: string;
 }) {
   const [internalOpen, setInternalOpen] = useState(false);
   const visible = open ?? internalOpen;
@@ -344,11 +347,19 @@ export function ReactionPicker({
       className="channel-emoji-picker"
       tooltip={label}
       trigger={
-        <Button variant="ghost" size="icon" aria-label={label}>
-          <span className="channel-react-icon" aria-hidden>
-            ☺<sup>+</sup>
-          </span>
-        </Button>
+        triggerClassName ? (
+          <button type="button" className={triggerClassName} aria-label={label}>
+            <span className="text-[13px] leading-none" aria-hidden>
+              ☺
+            </span>
+          </button>
+        ) : (
+          <Button variant="ghost" size="icon" aria-label={label}>
+            <span className="channel-react-icon" aria-hidden>
+              ☺<sup>+</sup>
+            </span>
+          </Button>
+        )
       }
     >
       <EmojiPicker

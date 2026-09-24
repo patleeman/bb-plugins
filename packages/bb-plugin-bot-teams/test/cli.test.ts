@@ -24,6 +24,7 @@ async function setup() {
     pluginId: "bot-teams",
     agentSkillIds: ["bots"],
     sdk: {
+      plugins: { callRpc: async (args) => args.outputSchema.parse([]) },
       system: {
         config: async () => ({
           primaryHostId: "host_primary",
@@ -32,6 +33,7 @@ async function setup() {
         transcribeVoice: async () => ({ text: "Transcribed words" }),
       },
       projects: {
+        list: async () => [{ id: "proj_personal", kind: "personal", name: "Personal", sources: [], gitRemoteUrl: null, createdAt: 1, updatedAt: 1 }],
         create: async () => ({ id: "proj_bots" }),
         attachments: {
           upload: async ({ filename }) => ({

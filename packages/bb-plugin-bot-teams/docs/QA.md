@@ -1,5 +1,39 @@
 # Bots and Channels verification
 
+## Start channel from thread — 2026-09-23
+
+The native thread sidebar menu now offers **Start channel from thread** after
+**Copy thread link**. It uses the same channel handoff as the thread composer:
+the new channel opens with an unsent, editable draft that links to its source
+thread. The item appears from the row's three-dot menu and right-click menu.
+ArrowDown from **Copy thread link** focuses it for keyboard selection.
+
+Verified in the running BB app: the row menu showed the new item, selecting it
+opened a channel, and its draft contained the exact source thread ID and link.
+Right-click opened the same menu, and keyboard navigation focused the new item.
+The disposable channel was deleted after the check. Package typecheck and build
+pass.
+
+## Channel list menu — 2026-09-23
+
+The Channels heading now has a three-dot menu for organizing, sorting, and
+switching between active and archived channels. Organize by activity groups
+channels needing attention, working channels, and other channels. Sorting uses
+Updated at, Created at, and Alphabetical; selecting the current sort reverses
+its direction. Organize and sort choices persist locally.
+
+Verified in the running BB app: both sort directions, organize grouping and
+reload persistence, keyboard archive navigation, cross-view search, and the
+390 px touch sidebar. The updated channel discovery QA script passes. Package
+typecheck and build pass.
+The header actions stay hidden on desktop until hover, focus, or an open menu;
+the touch sidebar keeps them visible. Live style checks and the channel discovery
+regression pass with this behavior.
+The Channels section now uses the host thread section's 16 px inset, normal
+12 px heading with 20 px line height, 28 px rows and header actions, and 13 px
+row text. The hash glyph is 16 px. Live computed styles and desktop/touch
+screenshots confirm the alignment; the discovery regression still passes.
+
 ## Channel workspace and reliability — 2026-09-21
 
 Verified in the running BB application using a disposable Workbench QA bot and

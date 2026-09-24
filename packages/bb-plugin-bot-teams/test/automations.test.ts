@@ -44,7 +44,7 @@ async function setup() {
             case "automations_list":
               result = [...records.values()].filter(
                 (a) => a.projectId === input.projectId,
-              );
+              ).map((a) => ({ ...a, execution: { ...a.execution, script: undefined } }));
               break;
             case "automations_create": {
               const id = `auto_${++sequence}`;
@@ -704,4 +704,41 @@ test("CLI edits a paused schedule without enabling it", async () => {
   } finally {
     await x.harness.lifecycle.dispose();
   }
+});
+
+test("Personal migration preserves schedule definitions, pause choices and old history without duplicates", async () => {
+  const x = await setup();
+  try {
+    const active = await x.service.create(x.input());
+    const paused = await x.service.create(x.input({ name: "Paused", enabled: false }));
+    x.runs.set(active.id, [{ id: "old-run", status: "failed" }]);
+    await x.service.migrateProject(x.a.projectId, "proj_personal");
+    const copies = [...x.records.values()].filter((a) => a.projectId === "proj_personal");
+    assert.equal(copies.length, 2);
+    assert.equal(copies.find((a) => a.name === active.name)?.enabled, true);
+    assert.equal(copies.find((a) => a.name === paused.name)?.enabled, false);
+    assert.deepEqual(copies[0]!.trigger, active.trigger);
+    assert.deepEqual(copies[0]!.execution, x.records.get(active.id)!.execution);
+    assert.equal(x.records.get(active.id)!.enabled, false);
+    assert.equal(x.runs.get(active.id)![0]!.id, "old-run");
+    await x.service.migrateProject(x.a.projectId, "proj_personal");
+    assert.equal(x.records.size, 4);
+  } finally { await x.runtime.dispose(); await x.harness.lifecycle.dispose(); }
+});
+
+test("Personal migration resumes after interruption between creation and enabling", async () => {
+  const x = await setup();
+  try {
+    const old = await x.service.create(x.input());
+    // Reproduce a crash after the new definition was stored but before resume.
+    const replacement = { ...x.records.get(old.id)!, id: "replacement", projectId: "proj_personal", enabled: false };
+    x.records.set(replacement.id, replacement);
+    x.records.get(old.id)!.enabled = false;
+    await x.bb.storage.kv.set(`personal-schedule:${old.id}`, { enabled: true });
+    await x.service.migrateProject(x.a.projectId, "proj_personal");
+    assert.equal(x.records.size, 2);
+    assert.equal(replacement.enabled, true);
+    await x.service.migrateProject(x.a.projectId, "proj_personal");
+    assert.equal(x.records.size, 2);
+  } finally { await x.runtime.dispose(); await x.harness.lifecycle.dispose(); }
 });

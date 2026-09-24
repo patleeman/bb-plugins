@@ -9,7 +9,7 @@ Persistent bots with their own files, mission, and memory, and Slack-style chann
 3. Click the overlapping avatars in the header to see members and their activity. **Add bot** sits at the bottom; member options let you configure or remove a bot.
 4. Open **Bot Teams** to administer profiles, `MISSION.md`, `MEMORY.md`, and activity. The collection uses BB's standard content width, search toolbar, status filter, sorting, and bordered rows. Shared conversations live in Channels. Each bot also has a DM you can open from its channel.
 
-In a thread, choose **Handoff to new channel** from the composer’s **+** menu. Bot Teams opens a new channel with an editable draft that references the source thread. Add bots and your request, then send it.
+In a thread, choose **Handoff to new channel** from the composer’s **+** menu, or **Start channel from thread** from the thread’s sidebar menu. Bot Teams opens a new channel with an editable draft that references the source thread. Add bots and your request, then send it.
 
 **New bot** in the collection opens the same conversation flow without a channel invitation. Send the prefilled instructions, or add your bot’s purpose first. The agent handles the name, mission, model, and permissions using sensible defaults.
 
@@ -62,7 +62,7 @@ The composer is adapted from BB’s thread composer: the same prompt box, **+** 
 
 PNG, JPEG, GIF, and WebP images appear as composer previews and inline in sent messages, including images pasted with text. Click an image to expand it and download the original. Other file types stay downloadable. Image bytes are checked before inline display; SVG and HTML remain downloads. Bots use `bots_publish_image` (or `bb bots publish-image`) with an absolute path inside their workspace to add up to ten images to their current final response. This publishes one message containing text and images, or images alone with `[PASS]`; cancelled or failed responses do not post images.
 
-Use the archive button beside search to switch between active and archived channels. The icon changes to a list in the archived view, and the heading shows the current view. Search finds channels in both views and labels archived results. Clearing or closing search returns to the selected view. Right-click a channel for **Rename**, **Archive**, or **Delete**; archived channels offer **Restore** and **Delete**. Keyboard users can open this menu with Shift+F10. The channel menu in the header contains rename, pin, archive, and delete actions. **Automations** and **Activity** open as separate tabs in BB’s right workbench. Archiving cancels unfinished work and preserves history; restoring makes the channel available again. Deletion requires confirmation, stops unfinished responses, and permanently removes channel messages, reactions, membership, activity, and draft uploads. Bot profiles, workspaces, and other channels are kept. Existing bot DMs and sent files in BB's project storage remain under BB's own retention. Removing a bot cancels its pending channel work and preserves its messages and reactions. Channels support up to 16 bots.
+On desktop, hover over Channels to reveal its header actions; they stay visible on touch screens. Use the three-dot menu at the right of the Channels header to switch between active and archived channels, organize the list by pinned channels or activity, and sort by update time, creation time, or name. Select the current sort again to reverse its direction; the organize and sort choices persist on this device. Search finds channels in both views and labels archived results. Clearing or closing search returns to the selected view. Right-click a channel for **Rename**, **Archive**, or **Delete**; archived channels offer **Restore** and **Delete**. Keyboard users can open this menu with Shift+F10. The channel menu in the header contains rename, pin, archive, and delete actions. **Automations** and **Activity** open as separate tabs in BB’s right workbench. Archiving cancels unfinished work and preserves history; restoring makes the channel available again. Deletion requires confirmation, stops unfinished responses, and permanently removes channel messages, reactions, membership, activity, and draft uploads. Bot profiles, workspaces, and other channels are kept. Existing bot DMs and sent files in BB's project storage remain under BB's own retention. Removing a bot cancels its pending channel work and preserves its messages and reactions. Channels support up to 16 bots.
 
 BB’s **Settings → Appearance** can select sidebar providers. **Channels and threads** preserves BB’s normal thread list below Channels; **Channels navigation** adds New channel alongside New thread.
 Selecting a channel shows its bot DMs directly beneath it in the sidebar. Selecting another channel shows that channel’s DMs instead.
@@ -195,7 +195,7 @@ Review tasks, pause/resume schedules, run them now, view run history, or delete 
 both IDs. Bots can manage only their own schedules in channels they belong to.
 
 The existing **Automations** plugin must be enabled. It stores these schedules
-in the Bots project and runs a fixed dispatcher script. Automation history
+in the Personal project and runs a fixed dispatcher script. Automation history
 shows dispatch status alongside the actual response status, errors, and links to
 the channel answer and bot DM. Retries are reflected in the response status. Pausing or deleting a schedule affects
 future runs. Stop an existing response in Activity.
@@ -218,6 +218,12 @@ Failed channel responses show **Open DM** and **Retry response**. Retrying keeps
 Default limits are 100 started turns per hour, 1,000 per day, 20 minutes per turn, and two concurrent forks per bot. **Usage and limits** in the channel workbench and the bot’s **Usage** tab make these editable. Both bot and channel turn budgets apply; existing work can finish while new work waits. Provider billing and token details remain in the bot DM. BB’s provider and concurrency limits also apply.
 
 ## Persistence
+
+New bot threads use BB’s protected Personal project. The plugin updates saved bot profiles on load, including profiles whose old Bots project was deleted. Existing live threads keep their history in their original project. BB gives each new session a Personal workspace; bot instructions use the absolute bot home for mission, memory, and published files.
+
+Channel schedules are copied into Personal with their prompts, timing, and enabled state preserved. Old schedules are paused and retained with their run history; completed one-shot schedules stay in the old history.
+
+Deleted threads cannot be recovered; the next channel request creates a new session. Available attachments are copied into the receiving thread’s project. Missing historical uploads are noted in the agent’s context; a missing upload required by the current request asks the owner to upload it again.
 
 Each bot lives at `<BB data directory>/plugins/bot-teams/homes/<bot-id>/`:
 

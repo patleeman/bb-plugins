@@ -1,4 +1,5 @@
 import { channelTabLabels } from "./channel-tab-labels";
+import { threadChannelMenu } from "./thread-channel-menu";
 import { UsagePanel } from "./channel-workbench";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -37,6 +38,7 @@ import {
   requestChannelHandoff,
 } from "./channel-handoff";
 import "./styles.css";
+import { botTeamsIcons } from "./icons";
 const tabs = ["profile", "mission", "memory", "activity", "usage"] as const;
 
 function BotDetail({ id, tab }: { id: string; tab: string }) {
@@ -295,7 +297,9 @@ function BotsPage({ subPath }: PluginNavPanelProps) {
   );
 }
 export default definePluginApp((app) => {
+  for (const icon of botTeamsIcons) app.experimental_icons.register(icon);
   app.contentScripts.register(channelTabLabels);
+  app.contentScripts.register(threadChannelMenu);
   app.slots.experimental_appOverlay({
     id: "channel-links",
     component: ChannelLinkNavigation,
