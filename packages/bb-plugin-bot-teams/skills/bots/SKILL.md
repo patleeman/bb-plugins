@@ -280,8 +280,10 @@ other bots’ missions or share unrelated private conversation data.
 
 `bb bots channel behavior CHANNEL [smart|directed|everyone]` reads or changes the
 mode. `channel create --behavior MODE` sets it at creation. Smart is the new-channel
-default and selects relevant bots through a configured routing model; Directed only
-responds to mentions/replies; Everyone addresses all members. `@all` or `@channel` explicitly
+default and selects relevant bots through a configured routing model, and also
+selects the send mode (steer, follow-up, or fork) for a recipient that is already
+running a task; Directed only responds to mentions/replies; Everyone addresses all
+members. `@all` or `@channel` explicitly
 requests everyone regardless of mode. Use it for a full advisory panel. With multiple bots, a plain message may select no bots. A channel with just one
 eligible bot routes every message to it automatically. Native tools `bots_channel_behavior` and
 `bots_channel_retry_routing` provide the same channel controls.

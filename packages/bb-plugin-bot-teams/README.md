@@ -38,7 +38,7 @@ ID**. On touch screens, the menu button stays visible; Archive is inside the men
 
 The **Chat mode** selector beneath the message box has three choices:
 
-- **Smart** chooses the smallest relevant set of bots for an unaddressed message, including none for acknowledgments and finished conversations. New channels start here.
+- **Smart** chooses the smallest relevant set of bots for an unaddressed message, including none for acknowledgments and finished conversations. It also chooses the send mode for a recipient that is already running a task: steer, follow-up, or fork. New channels start here.
 - **Directed** calls bots you mention or reply to. A channel with just one eligible bot always routes to that bot, in every chat mode.
 - **Everyone** lets all members consider unaddressed messages, useful for group reviews.
 

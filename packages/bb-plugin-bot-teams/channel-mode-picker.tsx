@@ -5,7 +5,12 @@ import { OptionPicker } from "./components/ui/option-picker";
 import { ErrorMessage, message } from "./bot-ui";
 
 const modes = [
-  { value: "smart", label: "Smart", description: "Choose relevant bots" },
+  {
+    value: "smart",
+    label: "Smart",
+    description:
+      "Choose relevant bots, and steer, follow up, or fork a busy one",
+  },
   {
     value: "directed",
     label: "Directed",

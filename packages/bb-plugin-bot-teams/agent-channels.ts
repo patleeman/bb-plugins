@@ -279,7 +279,7 @@ export function registerChannelTools(
   );
   tool(
     "bots_channel_behavior",
-    "Set a channel's response behavior. Smart chooses relevant bots, Directed only responds to mentions/replies, Everyone invites all members. @all and @channel always request all bots.",
+    "Set a channel's response behavior. Smart chooses relevant bots and whether to steer, follow up, or fork a busy one, Directed only responds to mentions/replies, Everyone invites all members. @all and @channel always request all bots.",
     z.object({
       id: z.string().uuid(),
       responseBehavior: z.enum(["smart", "directed", "everyone"]),

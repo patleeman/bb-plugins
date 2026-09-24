@@ -109,7 +109,7 @@ export default async function plugin(bb: BbPluginApi) {
       options: ["smart", "directed", "everyone"],
       default: "smart",
       description:
-        "Smart chooses relevant bots. Directed responds to mentions and replies. Everyone invites all members.",
+        "Smart chooses relevant bots, and whether to steer, follow up, or fork a busy bot. Directed responds to mentions and replies. Everyone invites all members.",
     },
     routingEngine: {
       type: "select",
