@@ -1,5 +1,30 @@
 # Bots and Channels verification
 
+## Send mode moves to the send button — 2026-09-24
+
+The send mode now lives in the caret beside **Send**, matching the send options
+a thread composer offers there. The menu heading stays "Send this message" and
+lists Auto, Steer, Follow-up, and Fork with the current mode checked. Auto is
+the default in every chat mode, so the composer row no longer carries a mode
+chip of its own; that chip appears beside the **+** menu only while a message
+overrides Auto, and choosing Auto in either control returns the message to the
+classifier. The joined control follows BB's own split send button: transparent
+children inside a filled or outlined container, a squared inner corner, and a
+hairline divider before the caret.
+
+This supersedes the previous entry's hidden-in-Smart menu and the Directed-mode
+staging it added to the forks screenshot capture. The Send mode control the
+capture asserts now exists in every chat mode, so that script is back to its
+original form.
+
+Verified in the running BB application with a disposable bot-free channel: the
+composer rendered the joined send button; the caret opened the four-option menu
+above it with Auto checked; choosing Fork updated the caret to "Send mode: Fork"
+and revealed the Fork chip beside the + menu; choosing Auto from that chip
+removed it again; an empty draft kept the outlined idle state; and the send
+button still posted a message and cleared the draft. The channel was deleted
+afterwards. **288 Bots tests**, package typecheck, and the plugin build pass.
+
 ## Smart channels classify the send mode — 2026-09-24
 
 Smart channels now hide the composer's **Send mode** menu and let the classifier
@@ -37,6 +62,9 @@ classifier actions in all three. A new unit test covers menu visibility. **288
 Bots tests**, package typecheck, and the plugin build pass. The forks screenshot
 capture now stages its channel in Directed mode, since a Smart channel hides the
 menu it asserts, and restores the channel's own mode afterwards.
+
+The menu placement described here was replaced the same day; see the entry
+above.
 
 ## Channel row archive action — 2026-09-24
 

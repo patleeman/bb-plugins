@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseSendMode, showsSendModePicker } from "../send-mode";
+import { parseSendMode, showsSendModeOverride } from "../send-mode";
 import { emptyDraft, prepareSend, clearSentDraft } from "../draft";
 import { parseRouting, routingPrompt } from "../smart-router";
 import { profileInput, messageSchema, type Bot } from "../contract";
@@ -131,10 +131,8 @@ test("router sees the active task and explicit recipient constraint as data", ()
   assert.equal(data.tasks[0].busy, true);
 });
 
-test("Smart channels hide the send mode menu until a message overrides it", () => {
-  assert.equal(showsSendModePicker("smart", "auto"), false);
-  assert.equal(showsSendModePicker("smart", "fork"), true);
-  assert.equal(showsSendModePicker("smart", "steer"), true);
-  for (const behavior of ["directed", "everyone", undefined] as const)
-    assert.equal(showsSendModePicker(behavior, "auto"), true);
+test("the composer row shows a send mode only while a message overrides Auto", () => {
+  assert.equal(showsSendModeOverride("auto"), false);
+  for (const mode of ["steer", "followup", "fork"] as const)
+    assert.equal(showsSendModeOverride(mode), true);
 });

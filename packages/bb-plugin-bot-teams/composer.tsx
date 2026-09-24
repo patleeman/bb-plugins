@@ -40,10 +40,10 @@ import {
   clearSentDraft,
   type Draft,
 } from "./draft";
-import { SendModePicker } from "./send-mode-picker";
+import { SendModeMenu, SendModeOverride } from "./send-mode-picker";
 import {
   parseSendMode,
-  showsSendModePicker,
+  showsSendModeOverride,
   type SendMode,
 } from "./send-mode";
 import { matchingBroadcastMentions, type BroadcastMention } from "./mentions";
@@ -101,7 +101,6 @@ export function GroupComposer({
   autoFocus = false,
   roomId,
   roomName,
-  responseBehavior,
   paused,
   reply,
   onClearReply,
@@ -129,8 +128,6 @@ export function GroupComposer({
   onCreateBot: () => void;
   roomId: string;
   roomName: string;
-  /** Smart channels classify the action themselves, so they hide the menu. */
-  responseBehavior?: Room["responseBehavior"];
   paused: boolean;
   reply: RoomMessage | null;
   onClearReply: () => void;
@@ -298,8 +295,10 @@ export function GroupComposer({
     onCreateBot();
   };
   const blocked = paused || uploading || voiceActive || pending;
-  const canSubmit =
-    !blocked && (!!draft.text.trim() || draft.attachments.length > 0);
+  const changeSendMode = (next: SendMode) =>
+    setDraft((d) => ({ ...d, sendMode: next, text: parseSendMode(d.text).text }));
+  const hasInput = !!draft.text.trim() || draft.attachments.length > 0;
+  const canSubmit = !blocked && hasInput;
   const showMentionMenu = !!mention && !paused && !voiceActive;
   useEffect(() => {
     alive.current = true;
@@ -812,18 +811,11 @@ export function GroupComposer({
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
-                  {showsSendModePicker(responseBehavior, sendMode) ? (
-                    <SendModePicker
+                  {showsSendModeOverride(sendMode) ? (
+                    <SendModeOverride
                       value={sendMode}
-                      smart={responseBehavior === "smart"}
                       disabled={blocked}
-                      onChange={(next) =>
-                        setDraft((d) => ({
-                          ...d,
-                          sendMode: next,
-                          text: parseSendMode(d.text).text,
-                        }))
-                      }
+                      onChange={changeSendMode}
                     />
                   ) : null}
                 </div>
@@ -860,25 +852,52 @@ export function GroupComposer({
                     data-promptbox-submit-group=""
                     className="flex shrink-0 flex-row items-center"
                   >
-                    <Button
-                      data-promptbox-submit-action=""
-                      type="submit"
-                      size="sm"
-                      variant="default"
-                      aria-label={pending ? "Sending message" : "Send message"}
-                      disabled={!canSubmit}
+                    {/* BB's split send button: the caret keeps the send
+                        options a thread composer offers there. */}
+                    <div
+                      data-promptbox-send-menu=""
                       className={cn(
-                        "ml-1",
-                        COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS,
-                        "transition-colors",
+                        "ml-1 inline-flex items-center rounded-md",
+                        "[&_button]:border-0 [&_button]:!bg-transparent [&_button]:!text-inherit [&_button]:!opacity-100 [&_button]:transition-none",
+                        "[&_[data-promptbox-submit-action]]:ml-0 [&_[data-promptbox-submit-action]]:rounded-r-none",
+                        hasInput
+                          ? [
+                              "bg-foreground text-background",
+                              canSubmit ? "hover:bg-foreground/90" : "opacity-50",
+                            ]
+                          : "text-muted-foreground/50 ring-1 ring-inset ring-border",
                       )}
                     >
-                      {pending ? (
-                        <Icon name="Spinner" className="size-4 animate-spin" />
-                      ) : (
-                        <Icon name="CornerDownLeft" className="size-4" />
-                      )}
-                    </Button>
+                      <Button
+                        data-promptbox-submit-action=""
+                        type="submit"
+                        size="sm"
+                        variant="default"
+                        aria-label={
+                          pending ? "Sending message" : "Send message"
+                        }
+                        disabled={!canSubmit}
+                        className={cn(
+                          COARSE_POINTER_PROMPT_ACTION_BUTTON_CLASS,
+                          "transition-colors",
+                        )}
+                      >
+                        {pending ? (
+                          <Icon
+                            name="Spinner"
+                            className="size-4 animate-spin"
+                          />
+                        ) : (
+                          <Icon name="CornerDownLeft" className="size-4" />
+                        )}
+                      </Button>
+                      <SendModeMenu
+                        value={sendMode}
+                        hasInput={hasInput}
+                        disabled={blocked}
+                        onChange={changeSendMode}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>

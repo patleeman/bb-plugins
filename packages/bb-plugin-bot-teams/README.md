@@ -139,8 +139,8 @@ hover on a touch screen.
 
 ## Parallel questions and tasks
 
-Smart channels decide this for you and hide the **Send mode** menu. Each
-recipient that is **currently running** a task is classified on its own:
+The classifier decides this for you. Each recipient that is **currently
+running** a task is classified on its own:
 
 - **Steer** when the message matters to that running task: a correction,
   cancellation, redirection, or anything marked urgent, blocking, or P0.
@@ -153,21 +153,21 @@ A recipient with no running task is never classified; the message is sent
 normally and queued as a follow-up. The chosen action appears on the sent
 message as **Auto · Steer**, **Auto · Follow-up**, or **Auto · Fork**.
 
-Directed and Everyone channels keep the menu, where **Auto** classifies busy
-recipients the same way:
+To decide one message yourself, use the caret beside **Send**, where a thread
+composer keeps its own send options:
 
 - **Auto**: the classifier chooses the action for each busy recipient, and in
-  Smart channels also chooses the recipients themselves.
+  Smart channels also chooses the recipients themselves. This is the default.
 - **Steer**: change the task currently running. Also available as `/steer`.
 - **Follow-up**: wait for the current task to finish. Also `/followup` or `/queue`.
 - **Fork**: clone the selected bot’s available session context and handle the
   message separately. Also `/fork @handle Your question` or **Ask separately**
   in a bot message’s context menu.
 
-Explicit modes override the classifier everywhere, including Smart channels:
-`/steer`, `/followup`, `/fork`, and **Ask separately** still apply. In a Smart
-channel the menu reappears for that message so the override is visible, and
-choosing **Auto** hides it again. The router still selects recipients for
+An explicit mode overrides the classifier in every chat mode. While a message
+carries one, it also appears beside the **+** menu so the override stays
+visible; choosing **Auto** in either control returns the message to the
+classifier, and sending clears it. The router still selects recipients for
 unaddressed messages in Smart channels; mention a bot to bypass that selection
 when using an explicit mode.
 
@@ -404,11 +404,8 @@ and the 390-pixel layout. See [verification notes](docs/QA.md).
 ![Parallel questions and send modes](assets/channel-forks.png)
 
 The running BB channel shows a real native fork’s `SIDE_ANSWER`, linked to its
-question and labeled Fork, alongside the Send mode menu. The channel is staged
-in Directed mode for this capture, since Smart channels classify the action
-themselves and hide that menu; the capture restores the channel’s own mode
-afterwards. The staged primary session continued its timing task while this
-answer was produced.
+question and labeled Fork, alongside the send options beside Send. The staged
+primary session continued its timing task while this answer was produced.
 
 
 The channel Automations dialog shows a bot-created weekday brief and a one-time

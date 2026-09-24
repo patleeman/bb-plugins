@@ -16,13 +16,10 @@ export const sendModeDescriptions: Record<SendMode, string> = {
 };
 
 /**
- * Smart channels classify every message, so the menu only appears once the
- * sender has overridden that choice and needs to see or clear the override.
+ * The send menu beside Send chooses the mode, so the composer row shows a
+ * control only while a message overrides the classifier.
  */
-export const showsSendModePicker = (
-  behavior: "smart" | "directed" | "everyone" | undefined,
-  mode: SendMode,
-) => behavior !== "smart" || mode !== "auto";
+export const showsSendModeOverride = (mode: SendMode) => mode !== "auto";
 
 /** Commands are parsed once at the send boundary, never from quoted chat history. */
 export function parseSendMode(text: string, mode: SendMode = "auto") {

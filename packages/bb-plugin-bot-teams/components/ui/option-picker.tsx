@@ -46,6 +46,7 @@ export function OptionPicker<T extends string>({
   icon,
   disabled,
   busy,
+  trigger,
 }: {
   label: string;
   /** Menu heading; defaults to the picker label. */
@@ -65,6 +66,8 @@ export function OptionPicker<T extends string>({
   icon?: string;
   disabled?: boolean;
   busy?: boolean;
+  /** Replaces the default labelled trigger, as in a split send button. */
+  trigger?: ReactNode;
 }) {
   const selected = options.find((option) => option.value === value);
   const selectedLabel = selected?.label ?? value;
@@ -72,6 +75,7 @@ export function OptionPicker<T extends string>({
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
+        {trigger ?? (
         <Button
           type="button"
           variant="ghost"
@@ -111,6 +115,7 @@ export function OptionPicker<T extends string>({
             />
           )}
         </Button>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent
         aria-label={label}
