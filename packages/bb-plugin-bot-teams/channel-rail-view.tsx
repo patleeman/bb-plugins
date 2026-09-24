@@ -49,7 +49,6 @@ const collapsedKey = "bb:bots:rail-collapsed";
 type SectionId =
   | "live"
   | "attention"
-  | "threads"
   | "members"
   | "automation"
   | "output"
@@ -58,7 +57,6 @@ type SectionId =
 const sectionTitles: Record<SectionId, string> = {
   live: "Live now",
   attention: "Needs you",
-  threads: "DMs",
   members: "Members",
   automation: "Next automation",
   output: "Output",
@@ -286,8 +284,24 @@ function LiveRow({
   );
 }
 
-function MemberRow({ member, roomId }: { member: RailMember; roomId: string }) {
+/**
+ * A member and their DM are the same bot, so this is one row: it carries the
+ * bot's state and opens its DM when there is one.
+ */
+function MemberRow({
+  member,
+  thread,
+  roomId,
+}: {
+  member: RailMember;
+  thread: ChannelThread | undefined;
+  roomId: string;
+}) {
+  const { threadId } = useBbContext();
   const navigate = useBbNavigate();
+  const actions = useSidebarThreadActions();
+  const dm = thread?.threadId ?? member.threadId;
+  const split = useSidebarThreadSplit(dm ?? "");
   const stateLabels = {
     working: "Working",
     queued: "Queued",
@@ -297,23 +311,42 @@ function MemberRow({ member, roomId }: { member: RailMember; roomId: string }) {
   } as const;
   // An idle bot is the resting case; saying so on every row is just noise.
   const showState = member.state !== "idle";
+  const splittable = !!dm && split.isAvailable;
   return (
     <button
       type="button"
       className="channel-rail-row"
-      title={member.detail ?? stateLabels[member.state]}
-      onClick={() =>
-        member.threadId
-          ? openWorkThread(navigate, member.threadId, roomId)
-          : navigate.toPluginPanel("bots", {
-              subPath: `${member.bot.id}/profile`,
-            })
+      aria-current={dm && threadId === dm ? "page" : undefined}
+      title={
+        splittable
+          ? "Drag or ⌘-click to open in a split"
+          : // Live activity already reads in Live now; only a fault is worth a tooltip.
+            (member.state === "attention" ? (member.detail ?? undefined) : undefined)
       }
+      {...(dm ? split.splitProps : {})}
+      onClick={(event) => {
+        if (!dm)
+          return navigate.toPluginPanel("bots", {
+            subPath: `${member.bot.id}/profile`,
+          });
+        if (splittable && (event.metaKey || event.ctrlKey))
+          actions.open(dm, { split: true });
+        else openWorkThread(navigate, dm, roomId);
+      }}
     >
       <span className="channel-rail-avatar" aria-hidden>
         {member.bot.avatar || <Icon name="Bot" />}
       </span>
       <span className="channel-rail-name">{member.bot.name}</span>
+      {thread?.needsApproval && (
+        <span
+          className="channel-needs-attention"
+          role="img"
+          aria-label="Waiting for your approval"
+        >
+          <Icon name="BellDot" />
+        </span>
+      )}
       {showState && (
         <span className="channel-rail-state" data-state={member.state}>
           {stateLabels[member.state]}
@@ -332,48 +365,6 @@ type ChannelThread = {
   needsApproval: boolean;
 };
 
-function ThreadRow({ thread }: { thread: ChannelThread }) {
-  const { threadId } = useBbContext();
-  const navigate = useBbNavigate();
-  const actions = useSidebarThreadActions();
-  const split = useSidebarThreadSplit(thread.threadId);
-  return (
-    <button
-      type="button"
-      className="channel-rail-row"
-      aria-current={threadId === thread.threadId ? "page" : undefined}
-      aria-label={`Open DM with ${thread.name}`}
-      title={
-        split.isAvailable ? "Drag or ⌘-click to open in a split" : undefined
-      }
-      {...split.splitProps}
-      onClick={(event) => {
-        if (split.isAvailable && (event.metaKey || event.ctrlKey))
-          actions.open(thread.threadId, { split: true });
-        else navigate.toThread(thread.threadId);
-      }}
-    >
-      <span className="channel-rail-avatar" aria-hidden>
-        {thread.avatar || <Icon name="Bot" />}
-      </span>
-      <span className="channel-rail-name">{thread.name}</span>
-      {thread.needsApproval && (
-        <span
-          className="channel-needs-attention"
-          role="img"
-          aria-label="Waiting for your approval"
-        >
-          <Icon name="BellDot" />
-        </span>
-      )}
-      {thread.active && (
-        <span className="channel-working" role="img" aria-label="Working">
-          <Icon name="Loading" />
-        </span>
-      )}
-    </button>
-  );
-}
 
 export function ChannelRail({
   room,
@@ -587,20 +578,6 @@ export function ChannelRail({
             ))}
           </RailSection>
         )}
-        {threads.length > 0 && (
-          <RailSection
-            id="threads"
-            count={threads.length}
-            collapsed={isCollapsed("threads")}
-            onToggle={toggle}
-          >
-            <RailList
-              items={threads}
-              keyOf={(thread) => thread.threadId}
-              render={(thread) => <ThreadRow thread={thread} />}
-            />
-          </RailSection>
-        )}
         <RailSection
           id="members"
           count={members.length}
@@ -624,7 +601,11 @@ export function ChannelRail({
               items={members}
               keyOf={(member) => member.bot.id}
               render={(member) => (
-                <MemberRow member={member} roomId={room.id} />
+                <MemberRow
+                  member={member}
+                  thread={threads.find((dm) => dm.botId === member.bot.id)}
+                  roomId={room.id}
+                />
               )}
             />
           ) : (

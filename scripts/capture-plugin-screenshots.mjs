@@ -472,13 +472,13 @@ const captures = [
       // shows the channel at full width, which is when the rail is meant to show.
       await client.evaluate(`document.querySelector('button[aria-label^="Hide right panel"]')?.click()`);
       await sleep(600);
-      for (const text of ["Decision needed", "DMs", "Members", "Output"])
+      for (const text of ["Decision needed", "Members", "Output"])
         await client.waitForText(text);
       await client.evaluate(`(() => {
         const rail = document.querySelector('.channel-rail');
         if (!rail?.checkVisibility()) throw new Error('The channel rail must be visible');
         const sections = [...rail.querySelectorAll('.channel-rail-section')].map(s => s.dataset.section);
-        for (const required of ['attention', 'threads', 'members', 'automation', 'output'])
+        for (const required of ['attention', 'members', 'automation', 'output'])
           if (!sections.includes(required)) throw new Error('The rail is missing its ' + required + ' section');
         if (!rail.querySelector('[data-section="members"] .channel-rail-row'))
           throw new Error('The member roster must be rendered');

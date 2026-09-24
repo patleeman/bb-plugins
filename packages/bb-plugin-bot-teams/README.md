@@ -106,11 +106,11 @@ state.
   rather than silent.
 - **Needs you** collects the channel's open decisions and the requests a bot is
   blocked on, so they can be answered without leaving the channel.
-- **DMs** lists the bot DMs for this channel. Click to open
-  one, or ⌘-click (drag) to open it in a split.
 - **Members** shows every bot in the channel, labelled only when it is doing
   something: working, queued, needs attention or paused. Idle is the resting
-  case and goes unsaid.
+  case and goes unsaid. A member and their DM are the same bot, so the row is
+  also the DM: click to open it, or ⌘-click (drag) for a split. A bell marks a
+  DM waiting on your approval.
 - The soonest scheduled run counts down on its own row and can be paused.
 - **Output** collects the files bots published here.
 - **Usage** appears only once the day's turns are worth a glance, or something
