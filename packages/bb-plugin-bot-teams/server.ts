@@ -22,6 +22,7 @@ import {
   type Attachment,
 } from "./contract";
 import { Store, newId, document, saveDocument } from "./store";
+import { liveChannelDms } from "./channel-dms";
 import {
   Runtime,
   jobPrompt,
@@ -585,7 +586,7 @@ export default async function plugin(bb: BbPluginApi) {
       runtime.data.snapshot(`${id}:${file}`, latest.text, "Observed file");
       return runtime.data.revisions(`${id}:${file}`, before);
     },
-    channelThreads: ({ id }) => {
+    channelThreads: async ({ id }) => {
       store.room(id);
       const waiting = approvals.waitingThreadIds(id);
       const active = new Set(
@@ -594,7 +595,14 @@ export default async function plugin(bb: BbPluginApi) {
           .filter((j) => ["queued", "dispatching", "running"].includes(j.status))
           .map((j) => j.threadId),
       );
-      return store.roomConversations(id).flatMap((c) => {
+      // Threads deleted while this plugin was not listening are still listed
+      // here and would open onto nothing. Drop them, and forget them.
+      const { live, stale } = await liveChannelDms(
+        store.roomConversations(id),
+        threadExists,
+      );
+      for (const threadId of stale) store.deleteConversation(threadId);
+      return live.flatMap((c) => {
         try {
           const bot = store.get(c.botId);
           return [
@@ -1405,6 +1413,17 @@ export default async function plugin(bb: BbPluginApi) {
     if (!isForkConversation(c.key))
       runtime.busy.set(bot.id, { threadId: context.thread.id, at: Date.now() });
     return { action: "proceed" };
+  });
+  const threadExists = async (threadId: string) => {
+    try {
+      return !!(await bb.sdk.threads.get({ threadId }));
+    } catch {
+      return false;
+    }
+  };
+  // A bot's DM row must not outlive the thread it points at.
+  bb.events.on("thread.deleted", ({ thread }) => {
+    if (store.byThread(thread.id)) store.deleteConversation(thread.id);
   });
   bb.events.on("thread.active", ({ thread }) => {
     const c = store.byThread(thread.id);
