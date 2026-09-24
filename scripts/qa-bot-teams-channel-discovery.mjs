@@ -61,6 +61,9 @@ async function exercise(p, { origin, fixture, active }) {
     throw new Error('Channels heading is still a hidden toggle.');
   if (await p.evaluate(() => !!document.querySelector('.channel-nav-expand')))
     throw new Error('Channel rows still expose a bot-thread dropdown.');
+  if (await p.evaluate(() => [...document.querySelectorAll('.channel-sidebar-row .channel-nav-actions button')]
+    .some((button) => !button.getAttribute('aria-label')?.endsWith(' options'))))
+    throw new Error('Channel rows expose an action other than the options menu.');
   await p.evaluate((name) =>
     [...document.querySelectorAll('.channel-sidebar-row > .channel-nav-row')]
       .find((row) => row.querySelector('.channel-nav-name')?.textContent === name)?.click(),

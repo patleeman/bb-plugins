@@ -1,5 +1,13 @@
 # Bots and Channels verification
 
+## Channel row archive action — 2026-09-24
+
+Removed the one-click Archive/Restore button from channel sidebar rows. Their
+three-dot and right-click menus retain Archive/Restore. The row keeps one options
+button on hover or keyboard focus, with no reserved space for the removed action.
+The channel discovery QA script checks that row actions contain only the options
+button and that an archived channel still offers Restore in its menu.
+
 ## Start channel from thread — 2026-09-23
 
 The native thread sidebar menu now offers **Start channel from thread** after

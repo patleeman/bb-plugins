@@ -53,7 +53,6 @@ export function ChannelSidebarRow({
   const [menuOpen, setMenuOpen] = useState(false);
   const menuId = useId();
   const unread = room.updatedAt > (room.lastReadAt ?? 0) && !selected;
-  const archiveLabel = room.archived ? "Restore channel" : "Archive channel";
   const waitingLabel = [
     attentionCount > 0 &&
       `${attentionCount} ${attentionCount === 1 ? "request needs" : "requests need"} your attention`,
@@ -118,17 +117,6 @@ export function ChannelSidebarRow({
             )}
           </button>
           <span className="channel-nav-actions">
-            <IconActionTooltip label={archiveLabel}>
-              <button
-                type="button"
-                className="channel-nav-action channel-nav-archive"
-                aria-label={`${archiveLabel}: ${room.name}`}
-                disabled={pending}
-                onClick={onArchive}
-              >
-                <Icon name={room.archived ? "ArchiveRestore" : "Archive"} />
-              </button>
-            </IconActionTooltip>
             <IconActionTooltip label="Channel options">
               <button
                 type="button"

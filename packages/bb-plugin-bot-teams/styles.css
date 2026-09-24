@@ -1122,7 +1122,7 @@
 .channel-nav-actions {
   position: absolute;
   top: 0;
-  right: 0;
+  right: 4px;
   bottom: 0;
   display: flex;
   align-items: center;
@@ -1165,7 +1165,7 @@
 }
 .channel-sidebar-row:where(:hover, :focus-within, [data-state="open"])
   .channel-nav-row {
-  padding-right: 62px;
+  padding-right: 36px;
 }
 .channel-sidebar-row:where(:hover, :focus-within, [data-state="open"])
   .channel-nav-status {
@@ -1175,9 +1175,6 @@
   .channel-sidebar-row .channel-nav-actions {
     opacity: 1;
     pointer-events: auto;
-  }
-  .channel-sidebar-row .channel-nav-archive {
-    display: none;
   }
   .channel-sidebar-row .channel-nav-action {
     width: 36px;
