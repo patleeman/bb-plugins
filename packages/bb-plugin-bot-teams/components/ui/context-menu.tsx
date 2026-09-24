@@ -8,6 +8,13 @@ import { LIST_HOVER_TRANSITION } from "./motion";
 export const ContextMenu = Primitive.Root;
 export const ContextMenuTrigger = Primitive.Trigger;
 
+export function ContextMenuSeparator({
+  className,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof Primitive.Separator>) {
+  return <Primitive.Separator className={cn("-mx-1 my-1 h-px bg-border", className)} {...props} />;
+}
+
 export function ContextMenuContent({
   className,
   ...props

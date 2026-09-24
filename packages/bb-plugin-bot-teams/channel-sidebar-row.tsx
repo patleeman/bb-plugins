@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { experimental_Icon as Icon } from "@get-bb/plugin-sdk/app";
 import type { Room } from "./contract";
 import { IconActionTooltip } from "./channel-controls";
@@ -7,6 +7,7 @@ import {
   ContextMenuTrigger,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
 } from "./components/ui/context-menu";
 
 function openOptions(target: HTMLElement) {
@@ -29,7 +30,10 @@ export function ChannelSidebarRow({
   approvalCount = 0,
   pending,
   onOpen,
+  onMarkRead,
+  onPin,
   onRename,
+  onCopyLink,
   onCopyId,
   onArchive,
   onDelete,
@@ -45,14 +49,28 @@ export function ChannelSidebarRow({
   approvalCount?: number;
   pending: boolean;
   onOpen: () => void;
+  onMarkRead: () => void;
+  onPin: () => void;
   onRename: () => void;
+  onCopyLink: () => void;
   onCopyId: () => void;
   onArchive: () => void;
   onDelete: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const rowLink = useRef<HTMLAnchorElement>(null);
   const menuId = useId();
-  const unread = room.updatedAt > (room.lastReadAt ?? 0) && !selected;
+  const hasUnread = room.updatedAt > (room.lastReadAt ?? 0);
+  const unread = hasUnread && !selected;
+  const openInSplit = () => {
+    // BB's route anchor delegate handles modified plugin links with its split placement rules.
+    rowLink.current?.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      metaKey: true,
+      view: window,
+    }));
+  };
   const waitingLabel = [
     attentionCount > 0 &&
       `${attentionCount} ${attentionCount === 1 ? "request needs" : "requests need"} your attention`,
@@ -78,11 +96,16 @@ export function ChannelSidebarRow({
             openOptions(event.target as HTMLElement);
           }}
         >
-          <button
-            type="button"
+          <a
+            ref={rowLink}
+            href={`/plugins/bot-teams/channels/${room.id}`}
             className={`channel-nav-row ${unread ? "is-unread" : ""}`}
             aria-current={selected ? "page" : undefined}
-            onClick={onOpen}
+            onClick={(event) => {
+              if (event.metaKey || event.ctrlKey) return;
+              event.preventDefault();
+              onOpen();
+            }}
           >
             {waitingLabel ? (
               <span className="channel-needs-attention" role="img"
@@ -115,7 +138,7 @@ export function ChannelSidebarRow({
                 )}
               </span>
             )}
-          </button>
+          </a>
           <span className="channel-nav-actions">
             <IconActionTooltip label="Channel options">
               <button
@@ -134,6 +157,22 @@ export function ChannelSidebarRow({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent id={menuId} aria-label={`${room.name} options`}>
+        <ContextMenuItem onSelect={openInSplit}>
+          <Icon name="PanelRight" />
+          Open in split
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={onCopyLink}>
+          <Icon name="Link" />
+          Copy channel link
+        </ContextMenuItem>
+        <ContextMenuItem disabled={pending} onSelect={onMarkRead}>
+          <Icon name={hasUnread ? "MailOpen" : "Mail"} />
+          {hasUnread ? "Mark read" : "Mark unread"}
+        </ContextMenuItem>
+        <ContextMenuItem disabled={pending} onSelect={onPin}>
+          <Icon name="Pin" />
+          {room.pinned ? "Unpin" : "Pin"}
+        </ContextMenuItem>
         <ContextMenuItem onSelect={onRename}>
           <Icon name="Edit" />
           Rename
@@ -142,6 +181,7 @@ export function ChannelSidebarRow({
           <Icon name="Copy" />
           Copy channel ID
         </ContextMenuItem>
+        <ContextMenuSeparator />
         <ContextMenuItem disabled={pending} onSelect={onArchive}>
           <Icon name={room.archived ? "ArchiveRestore" : "Archive"} />
           {room.archived ? "Restore" : "Archive"}

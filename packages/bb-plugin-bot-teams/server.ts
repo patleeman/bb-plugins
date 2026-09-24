@@ -1053,7 +1053,7 @@ export default async function plugin(bb: BbPluginApi) {
         runtime.changed();
         return store.room(id);
       }),
-    channelState: ({ id, rememberDefault, ...patch }) =>
+    channelState: ({ id, rememberDefault, markUnread, ...patch }) =>
       runtime.locked(`room:${id}`, async () => {
         if (patch.responseBehavior && rememberDefault)
           await settings.experimental_set({
@@ -1071,6 +1071,9 @@ export default async function plugin(bb: BbPluginApi) {
                   Math.min(room.updatedAt, patch.lastReadAt),
                 ),
               }
+            : {}),
+          ...(markUnread
+            ? { lastReadAt: Math.min(room.lastReadAt ?? 0, Math.max(0, room.updatedAt - 1)) }
             : {}),
         };
         store.putRoom(next);

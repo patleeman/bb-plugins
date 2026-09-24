@@ -733,12 +733,37 @@ export function ChannelsSidebar({
       setPending(false);
     }
   };
+  const changeChannelState = async (id: string, patch: {
+    pinned?: boolean;
+    lastReadAt?: number;
+    markUnread?: boolean;
+  }) => {
+    setPending(true);
+    setFailure(null);
+    try {
+      await rpc.call("channelState", { id, ...patch });
+    } catch (e) {
+      setFailure(message(e));
+    } finally {
+      setPending(false);
+    }
+  };
   const copyChannelId = async (id: string) => {
     setFailure(null);
     try {
       await navigator.clipboard.writeText(id);
     } catch (e) {
       setFailure(`Could not copy channel ID: ${message(e)}`);
+    }
+  };
+  const copyChannelLink = async (id: string) => {
+    setFailure(null);
+    try {
+      await navigator.clipboard.writeText(
+        new URL(`/plugins/bot-teams/channels/${id}`, window.location.origin).href,
+      );
+    } catch (e) {
+      setFailure(`Could not copy channel link: ${message(e)}`);
     }
   };
   useEffect(() => {
@@ -938,7 +963,13 @@ export function ChannelsSidebar({
                 approvalCount={approvalCounts[r.id] ?? 0}
                 pending={pending}
                 onOpen={() => open(r.id)}
+                onMarkRead={() => void changeChannelState(r.id,
+                  r.updatedAt > (r.lastReadAt ?? 0)
+                    ? { lastReadAt: r.updatedAt }
+                    : { markUnread: true })}
+                onPin={() => void changeChannelState(r.id, { pinned: !r.pinned })}
                 onRename={() => setRenaming(r)}
+                onCopyLink={() => void copyChannelLink(r.id)}
                 onCopyId={() => void copyChannelId(r.id)}
                 onArchive={() => void archive(r)}
                 onDelete={() => setDeleting(r)}

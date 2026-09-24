@@ -1824,6 +1824,36 @@ test("archive stops channel work, preserves history and read state is monotonic"
   }
 });
 
+test("a channel can be marked unread without changing normal read ordering", async () => {
+  const x = setup();
+  try {
+    await plugin(x.bb);
+    const updatedAt = x.store.room(x.room.id).updatedAt;
+    await x.harness.behavior.callRpc("channelState", {
+      id: x.room.id,
+      lastReadAt: updatedAt,
+    });
+    assert.equal(x.store.room(x.room.id).lastReadAt, updatedAt);
+    await x.harness.behavior.callRpc("channelState", {
+      id: x.room.id,
+      markUnread: true,
+    });
+    assert.ok(x.store.room(x.room.id).lastReadAt! < updatedAt);
+    await x.harness.behavior.callRpc("channelState", {
+      id: x.room.id,
+      lastReadAt: updatedAt,
+    });
+    assert.equal(x.store.room(x.room.id).lastReadAt, updatedAt);
+    await x.harness.behavior.callRpc("channelState", {
+      id: x.room.id,
+      lastReadAt: updatedAt - 2,
+    });
+    assert.equal(x.store.room(x.room.id).lastReadAt, updatedAt);
+  } finally {
+    await x.close();
+  }
+});
+
 test("a completed send cannot clear edits made in a newer composer mount", () => {
   const values = new Map<string, string>();
   const storage = {

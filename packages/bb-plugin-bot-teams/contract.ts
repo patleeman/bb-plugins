@@ -679,6 +679,7 @@ export const rpcContract = defineRpcContract({
       pinned: z.boolean().optional(),
       archived: z.boolean().optional(),
       lastReadAt: z.number().optional(),
+      markUnread: z.boolean().optional(),
       rememberDefault: z.boolean().optional(),
       responseBehavior: responseBehavior.optional(),
       permissionMode: permissionModeSchema.nullable().optional(),
