@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   experimental_Icon as Icon,
+  experimental_useAppPanel as useAppPanel,
   experimental_useSidebarThreadActions as useSidebarThreadActions,
   experimental_useSidebarThreadSplit as useSidebarThreadSplit,
   useBbContext,
@@ -23,6 +24,7 @@ import type {
   RoomRun,
   rpcContract,
 } from "./contract";
+import type { PluginFixedTabRegistration } from "@get-bb/plugin-sdk/app";
 import type { ChannelAutomation } from "./automation-contract";
 import { Button } from "./components/ui/button";
 import { message } from "./bot-ui";
@@ -367,6 +369,7 @@ type ChannelThread = {
 
 
 export function ChannelRail({
+  automationsTab,
   room,
   bots,
   jobs,
@@ -376,6 +379,7 @@ export function ChannelRail({
   onChanged,
   onClose,
 }: {
+  automationsTab: PluginFixedTabRegistration;
   room: Room;
   bots: Bot[];
   jobs: Job[];
@@ -388,6 +392,7 @@ export function ChannelRail({
   const rpc = useRpc<typeof rpcContract>();
   const navigate = useBbNavigate();
   const { collapsed, toggle } = useCollapsed();
+  const appPanel = useAppPanel();
   const card = useRef<HTMLElement>(null);
   // Too narrow for a gutter, the card becomes a sheet over the whole channel.
   const [overlay, setOverlay] = useState(false);
@@ -619,7 +624,17 @@ export function ChannelRail({
                 type="button"
                 className="channel-rail-row"
                 title="Open automations"
-                onClick={() => setAutomationsOpen(true)}
+                onClick={() => {
+                  // BB owns the workbench; select our Automations tab there
+                  // rather than stacking a second copy of it in a dialog.
+                  if (
+                    !appPanel.openFixedTab({
+                      surface: { kind: "current" },
+                      tab: automationsTab,
+                    })
+                  )
+                    setAutomationsOpen(true);
+                }}
               >
                 <span className="channel-rail-live-text">
                   <span className="channel-rail-name">{upcoming.name}</span>

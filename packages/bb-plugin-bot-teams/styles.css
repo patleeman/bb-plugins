@@ -1498,6 +1498,19 @@
   div:has(> p):has(> [data-icon-root]) {
   display: none;
 }
+/* BB marks its macOS header actions as no-drag. Channels fill that action area,
+   so restore window dragging there and carve out the controls. */
+[data-testid="app-page-header-content-row"]
+  > div[class~="[app-region:no-drag]"]:has(.channel-header) {
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+[data-testid="app-page-header-content-row"]
+  > div[class~="[app-region:no-drag]"]:has(.channel-header)
+  :is(button, a, input, select, textarea, [role="button"], [contenteditable="true"]) {
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
 [data-testid="app-page-header-content-row"] > div:has(.channel-header),
 [data-testid="app-page-header-content-row"]
   > div
@@ -3028,4 +3041,16 @@
   height: 5px;
   border-radius: 50%;
   background: var(--primary, var(--foreground));
+}
+
+/* BB folds a narrow follow-up composer to a 3rem row and centers its editor;
+   do the same for the channel's plain textarea. */
+@container follow-up-composer style(--follow-up-composer-container-compact: true) {
+  [data-follow-up-composer]:not([data-follow-up-composer-expanded])
+    [data-promptbox]:not([data-promptbox-voice-active])
+    textarea[data-promptbox-editor-scroll] {
+    padding-top: calc((3rem - 1.7em) / 2);
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
 }

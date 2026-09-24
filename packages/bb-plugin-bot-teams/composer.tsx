@@ -27,7 +27,7 @@ import { cn } from "./lib/utils";
 import { matchingBots } from "./channel-controls";
 import { channelReference, matchingChannels } from "./channel-references";
 import { AttachmentPreview } from "./composer-attachments";
-import { ComposerMentionMenu } from "./composer-mention-menu";
+import { ComposerMentionMenu, GlyphIcon } from "./composer-mention-menu";
 import {
   useVoiceInput,
   VoiceRecordingBar,
@@ -159,6 +159,27 @@ export function GroupComposer({
     sending = useRef(false),
     menuItemSelected = useRef(false);
   const listId = useId();
+  // BB's global CSS folds a narrow follow-up composer to one line; focus
+  // unfolds it, as in a thread.
+  const composerRef = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const collapseFrame = useRef<number | null>(null);
+  const cancelCollapse = () => {
+    if (collapseFrame.current !== null)
+      cancelAnimationFrame(collapseFrame.current);
+    collapseFrame.current = null;
+  };
+  const scheduleCollapse = () => {
+    cancelCollapse();
+    collapseFrame.current = requestAnimationFrame(() => {
+      collapseFrame.current = null;
+      const root = composerRef.current;
+      if (!root || root.contains(document.activeElement)) return;
+      if (root.querySelector('[aria-haspopup][aria-expanded="true"]')) return;
+      setExpanded(false);
+    });
+  };
+  useEffect(() => cancelCollapse, []);
   const [mention, setMention] = useState<{
       kind: "bot" | "channel";
       start: number;
@@ -426,7 +447,17 @@ export function GroupComposer({
     <div className="group-compose-wrap">
       <div data-promptbox-shell="" className="space-y-2">
         {stack ? <div className="grid gap-2">{stack}</div> : null}
-        <div className="relative z-20" data-follow-up-composer="">
+        <div
+          ref={composerRef}
+          className="relative z-20"
+          data-follow-up-composer=""
+          data-follow-up-composer-expanded={expanded ? "" : undefined}
+          onFocusCapture={() => {
+            cancelCollapse();
+            setExpanded(true);
+          }}
+          onBlurCapture={scheduleCollapse}
+        >
           <form
             data-promptbox=""
             data-promptbox-voice-active={voiceActive ? "" : undefined}
@@ -495,6 +526,7 @@ export function GroupComposer({
             >
               {draft.reply ? (
                 <div
+                  data-promptbox-expanded-only=""
                   inert={voiceActive ? true : undefined}
                   className="flex min-w-0 items-start gap-1.5 pl-4 pr-2 pt-3 text-xs"
                 >
@@ -635,7 +667,10 @@ export function GroupComposer({
                 />
               </div>
 
-              <div inert={voiceActive ? true : undefined}>
+              <div
+                data-promptbox-expanded-only=""
+                inert={voiceActive ? true : undefined}
+              >
                 <AttachmentPreview
                   attachments={draft.attachments}
                   onRemoveAttachment={
@@ -682,6 +717,7 @@ export function GroupComposer({
                   </div>
                 ) : null}
                 <div
+                  data-promptbox-expanded-only=""
                   data-promptbox-standard-actions=""
                   className={cn(
                     "flex min-w-0 flex-1 flex-row items-center gap-1",
@@ -749,7 +785,7 @@ export function GroupComposer({
                         }}
                       >
                         <Icon
-                          name="AtSign"
+                          name="Bot"
                           className="size-4 text-muted-foreground"
                           aria-hidden
                         />
@@ -761,10 +797,9 @@ export function GroupComposer({
                           insertTrigger("#");
                         }}
                       >
-                        <Icon
-                          name="Hash"
-                          className="size-4 text-muted-foreground"
-                          aria-hidden
+                        <GlyphIcon
+                          glyph="#"
+                          className="size-4 text-sm text-muted-foreground"
                         />
                         Link a channel
                       </DropdownMenuItem>
@@ -794,6 +829,7 @@ export function GroupComposer({
                   inert={voiceActive ? true : undefined}
                 >
                   <Button
+                    data-promptbox-expanded-only=""
                     type="button"
                     size="icon"
                     variant="ghost"
@@ -841,7 +877,7 @@ export function GroupComposer({
           {railStart || railEnd ? (
             <div
               data-follow-up-composer-footer=""
-              className="mt-1 flex min-h-6 select-none items-center justify-between gap-2 pl-[15px] pr-3.5"
+              className="mt-1 flex min-h-6 select-none items-center justify-between gap-2 overflow-hidden pl-[15px] pr-3.5 opacity-100 transition-[max-height,min-height,margin-top,opacity] duration-[180ms] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none"
             >
               <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
                 {railStart}

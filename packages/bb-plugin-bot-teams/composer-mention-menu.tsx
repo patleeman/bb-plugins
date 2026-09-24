@@ -10,6 +10,27 @@ import { cn } from "./lib/utils";
 
 const ROW_ICON_CLASS = "size-3.5 shrink-0 text-muted-foreground";
 
+/** BB has no # or @ icon; draw the character, as the channel sidebar does. */
+export function GlyphIcon({
+  glyph,
+  className = ROW_ICON_CLASS,
+}: {
+  glyph: "#" | "@";
+  className?: string;
+}) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "flex items-center justify-center text-[13px] font-medium leading-none",
+        className,
+      )}
+    >
+      {glyph}
+    </span>
+  );
+}
+
 function SuggestionRow({
   id,
   selected,
@@ -127,7 +148,7 @@ export function ComposerMentionMenu({
       ? matchingChannels(rooms, currentRoomId, query).map((room) => ({
           key: room.id,
           section: "Channels",
-          icon: <Icon name="Hash" className={ROW_ICON_CLASS} aria-hidden />,
+          icon: <GlyphIcon glyph="#" />,
           primary: room.name,
           trailing: <MutedTrailing>#{channelSlug(room.name)}</MutedTrailing>,
           title: room.name,
@@ -137,7 +158,7 @@ export function ComposerMentionMenu({
           ...matchingBroadcastMentions(query).map((mention) => ({
             key: `@${mention.handle}`,
             section: "Everyone",
-            icon: <Icon name="AtSign" className={ROW_ICON_CLASS} aria-hidden />,
+            icon: <GlyphIcon glyph="@" />,
             primary: `@${mention.handle}`,
             trailing: <MutedTrailing>Everyone in this channel</MutedTrailing>,
             title: `@${mention.handle}`,
