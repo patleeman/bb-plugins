@@ -1,5 +1,36 @@
 # Bots and Channels verification
 
+## Smart channels classify the send mode — 2026-09-24
+
+Smart channels now hide the composer's **Send mode** menu and let the classifier
+choose per recipient. Only a recipient that is currently running a task is
+classified; an idle recipient is sent to normally and queued as a follow-up. The
+classifier prompt and the Jev criteria now describe the choice by priority: a
+correction, cancellation, redirection, or an urgent, blocking, or P0 request
+steers; sequenced, dependent, ambiguous, or P1-and-lower work follows up; an
+out-of-band side question forks, even when it concerns the running task. The
+action taken still appears on the sent message as `Auto · Steer`, `Auto ·
+Follow-up`, or `Auto · Fork`.
+
+Explicit overrides still work in a Smart channel. `/steer`, `/followup`,
+`/fork`, and **Ask separately** set the mode for that message, and the menu
+reappears for it so the override is visible; choosing **Auto** hides it again.
+Directed and Everyone channels keep the menu unchanged.
+
+Verified in the running BB application with a disposable bot-free channel: a
+Smart channel rendered the composer with no Send mode control; typing
+`/fork what about SQLite?` there revealed the control reading **Send mode:
+Fork**; deleting that text hid it again; and the same channel switched to
+Directed showed **Send mode: Auto**. The channel was deleted afterwards and the
+default for new channels was not changed.
+
+Existing runtime regressions already cover the behaviour this relies on: idle
+single-bot messages classify in no chat mode, and busy Auto recipients use
+classifier actions in all three. A new unit test covers menu visibility. **288
+Bots tests**, package typecheck, and the plugin build pass. The forks screenshot
+capture now stages its channel in Directed mode, since a Smart channel hides the
+menu it asserts, and restores the channel's own mode afterwards.
+
 ## Channel row archive action — 2026-09-24
 
 Removed the one-click Archive/Restore button from channel sidebar rows. Their

@@ -2634,6 +2634,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
             autoFocus={!messages.length}
             roomId={id}
             roomName={room.name}
+            responseBehavior={room.responseBehavior}
             paused={!!room.archived}
             bots={bots}
             memberIds={room.memberIds}

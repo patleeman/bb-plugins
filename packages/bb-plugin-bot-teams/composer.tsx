@@ -41,7 +41,11 @@ import {
   type Draft,
 } from "./draft";
 import { SendModePicker } from "./send-mode-picker";
-import { parseSendMode, type SendMode } from "./send-mode";
+import {
+  parseSendMode,
+  showsSendModePicker,
+  type SendMode,
+} from "./send-mode";
 import { matchingBroadcastMentions, type BroadcastMention } from "./mentions";
 
 // Layout, spacing, and motion follow BB's PromptBoxInternal and
@@ -97,6 +101,7 @@ export function GroupComposer({
   autoFocus = false,
   roomId,
   roomName,
+  responseBehavior,
   paused,
   reply,
   onClearReply,
@@ -124,6 +129,8 @@ export function GroupComposer({
   onCreateBot: () => void;
   roomId: string;
   roomName: string;
+  /** Smart channels classify the action themselves, so they hide the menu. */
+  responseBehavior?: Room["responseBehavior"];
   paused: boolean;
   reply: RoomMessage | null;
   onClearReply: () => void;
@@ -805,17 +812,20 @@ export function GroupComposer({
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
-                  <SendModePicker
-                    value={sendMode}
-                    disabled={blocked}
-                    onChange={(next) =>
-                      setDraft((d) => ({
-                        ...d,
-                        sendMode: next,
-                        text: parseSendMode(d.text).text,
-                      }))
-                    }
-                  />
+                  {showsSendModePicker(responseBehavior, sendMode) ? (
+                    <SendModePicker
+                      value={sendMode}
+                      smart={responseBehavior === "smart"}
+                      disabled={blocked}
+                      onChange={(next) =>
+                        setDraft((d) => ({
+                          ...d,
+                          sendMode: next,
+                          text: parseSendMode(d.text).text,
+                        }))
+                      }
+                    />
+                  ) : null}
                 </div>
                 <div
                   data-promptbox-standard-actions=""

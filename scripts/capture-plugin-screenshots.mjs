@@ -1203,34 +1203,47 @@ const captures = [
       const fork = data.jobs.find((j) => j.forkSourceThreadId && j.reply === "SIDE_ANSWER");
       if (!fork?.threadId || fork.threadId === fork.forkSourceThreadId)
         throw new Error("Fork QA must contain a completed native fork with SIDE_ANSWER and a distinct source thread.");
-      await client.navigate("/");
-      await client.waitForText(room.name);
-      await client.evaluate(`(() => {
-        const button = Array.from(document.querySelectorAll('.channels-sidebar button')).find(b => b.textContent.includes(${JSON.stringify(room.name)}));
-        if (!button) throw new Error('Staged channel missing from real sidebar');
-        button.click();
-      })()`);
-      await client.waitForText("SIDE_ANSWER");
-      await client.evaluate(`document.querySelector('button[aria-label^="Toggle sidebar"][aria-expanded="true"]')?.click()`);
-      await sleep(350);
-      await client.evaluate(`(() => {
-        const answer = Array.from(document.querySelectorAll('.bot-room-message')).find(m => m.textContent.includes('SIDE_ANSWER') && m.querySelector('.channel-fork-label'));
-        if (!answer) throw new Error('Native fork answer must be visibly labeled Fork');
-        const trigger = document.querySelector('button[aria-label^="Send mode:"]');
-        if (!trigger) throw new Error('Send mode control missing');
-      })()`);
-      const sendLabel = await client.evaluate(`document.querySelector('button[aria-label^="Send mode:"]').getAttribute('aria-label')`);
-      await client.clickAriaButtonWithPointer(sendLabel);
-      for (const text of ["Send this message", "Change the task currently running.", "Wait for the current task to finish.", "Ask separately while the current task continues."])
-        await client.waitForText(text);
-      await client.evaluate(`(() => {
-        if (document.querySelectorAll('[role="menuitemradio"]').length !== 4) throw new Error('All four send modes must be rendered');
-      })()`);
+      // Smart channels classify the action themselves and hide the menu, so the
+      // capture stages this channel in Directed mode and restores it afterwards.
+      const behavior = room.responseBehavior ?? "everyone";
+      if (behavior === "smart") await pluginRpc("bot-teams", "channelState", { id: room.id, responseBehavior: "directed" });
+      const restoreBehavior = async () => {
+        if (behavior === "smart") await pluginRpc("bot-teams", "channelState", { id: room.id, responseBehavior: behavior });
+      };
+      try {
+        await client.navigate("/");
+        await client.waitForText(room.name);
+        await client.evaluate(`(() => {
+          const button = Array.from(document.querySelectorAll('.channels-sidebar button')).find(b => b.textContent.includes(${JSON.stringify(room.name)}));
+          if (!button) throw new Error('Staged channel missing from real sidebar');
+          button.click();
+        })()`);
+        await client.waitForText("SIDE_ANSWER");
+        await client.evaluate(`document.querySelector('button[aria-label^="Toggle sidebar"][aria-expanded="true"]')?.click()`);
+        await sleep(350);
+        await client.evaluate(`(() => {
+          const answer = Array.from(document.querySelectorAll('.bot-room-message')).find(m => m.textContent.includes('SIDE_ANSWER') && m.querySelector('.channel-fork-label'));
+          if (!answer) throw new Error('Native fork answer must be visibly labeled Fork');
+          const trigger = document.querySelector('button[aria-label^="Send mode:"]');
+          if (!trigger) throw new Error('Send mode control missing');
+        })()`);
+        const sendLabel = await client.evaluate(`document.querySelector('button[aria-label^="Send mode:"]').getAttribute('aria-label')`);
+        await client.clickAriaButtonWithPointer(sendLabel);
+        for (const text of ["Send this message", "Change the task currently running.", "Wait for the current task to finish.", "Ask separately while the current task continues."])
+          await client.waitForText(text);
+        await client.evaluate(`(() => {
+          if (document.querySelectorAll('[role="menuitemradio"]').length !== 4) throw new Error('All four send modes must be rendered');
+        })()`);
+      } catch (error) {
+        await restoreBehavior();
+        throw error;
+      }
       return async () => {
         await client.command("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
         await client.command("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
         await client.evaluate(`document.querySelector('button[aria-label^="Toggle sidebar"][aria-expanded="false"]')?.click()`);
         await sleep(350);
+        await restoreBehavior();
       };
     },
   },

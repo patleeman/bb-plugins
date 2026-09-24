@@ -9,11 +9,20 @@ export const sendModeLabels: Record<SendMode, string> = {
   fork: "Fork",
 };
 export const sendModeDescriptions: Record<SendMode, string> = {
-  auto: "Let Smart routing choose how to handle this message.",
+  auto: "Let the classifier choose how each busy bot handles this message.",
   steer: "Change the task currently running.",
   followup: "Wait for the current task to finish.",
   fork: "Ask separately while the current task continues.",
 };
+
+/**
+ * Smart channels classify every message, so the menu only appears once the
+ * sender has overridden that choice and needs to see or clear the override.
+ */
+export const showsSendModePicker = (
+  behavior: "smart" | "directed" | "everyone" | undefined,
+  mode: SendMode,
+) => behavior !== "smart" || mode !== "auto";
 
 /** Commands are parsed once at the send boundary, never from quoted chat history. */
 export function parseSendMode(text: string, mode: SendMode = "auto") {

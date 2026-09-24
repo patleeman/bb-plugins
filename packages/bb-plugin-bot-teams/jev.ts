@@ -105,12 +105,12 @@ export function jevRoutingRequest(
             }
           : {}),
         followup:
-          "Answer or do the requested work after the current task finishes. Use for dependent work, ambiguous intent, and any message when this bot has no busy task.",
+          "Answer or do the requested work after the current task finishes. Use for sequenced or dependent work, ambiguous intent, anything the sender marks P1 or a lower priority, and any message when this bot has no busy task.",
         ...(busy
           ? {
               steer:
-                "The sender clearly instructs this bot to correct, change, clarify, or cancel its current task now. A question about alternatives or an instruction to keep going is not a correction.",
-              fork: "An independent question or explicitly separate task to handle concurrently while the current task continues. Do not use for corrections or dependent work.",
+                "The sender clearly instructs this bot to correct, change, clarify, or cancel its current task now, or marks the request urgent, blocking, or P0. A question about alternatives or an instruction to keep going is not a correction.",
+              fork: "An out-of-band side question or separate task to handle beside the current task without disturbing it, even when it concerns that task. Do not use for corrections or dependent work.",
             }
           : {}),
       },
