@@ -9,7 +9,7 @@ const modes = [
     value: "smart",
     label: "Smart",
     description:
-      "Choose relevant bots, and steer, follow up, or fork a busy one",
+      "Choose a coordinator, collaborators, work order, and busy-bot action",
   },
   {
     value: "directed",

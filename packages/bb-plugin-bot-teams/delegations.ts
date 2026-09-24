@@ -22,6 +22,7 @@ export const delegationSchema = z.object({
   retryAt: z.number().default(0),
   error: z.string().optional(),
   returnJobId: z.string().optional(),
+  planned: z.boolean().optional(),
 });
 export type Delegation = z.infer<typeof delegationSchema>;
 export type DelegateResult = {
@@ -136,6 +137,29 @@ export class Delegations {
       }
     }
   }
+  trackPlanned(message: RoomMessage, run: RoomRun, coordinator: Job, helpers: Job[]) {
+    if (!helpers.length) return;
+    const id = `job:${this.rootJob(coordinator).id}`;
+    if (this.get(id)) return;
+    const group: Delegation = {
+      id,
+      roomId: message.roomId,
+      runId: run.id,
+      requesterBotId: coordinator.botId,
+      conversationKey: coordinator.conversationKey,
+      sourceJobId: coordinator.id,
+      requests: [{ messageId: message.id, roomId: message.roomId, jobIds: helpers.map((job) => job.id) }],
+      deadlineAt: Date.now() + Math.max(...helpers.map((job) => (this.store.get(job.botId).limits ?? defaultLimits).minutesPerTurn)) * 60_000,
+      status: "waiting",
+      retryAt: 0,
+      planned: true,
+    };
+    this.put(group);
+    for (const helper of helpers) {
+      helper.delegationId = id;
+      this.store.putJob(helper);
+    }
+  }
   rootJob(job: Job) {
     for (let depth = 0; job.retryOf && depth < 32; depth++) {
       const parent = this.store.job(job.retryOf);
@@ -234,6 +258,14 @@ export class Delegations {
   }
   ancestors(job: Job) {
     const ids = new Set<string>();
+    if (job.coordinatorId && job.coordinatorId !== job.botId) ids.add(job.coordinatorId);
+    let parentId = job.parentTaskId;
+    for (let depth = 0; parentId && depth < 3; depth++) {
+      const parent = this.store.job(parentId);
+      if (!parent) break;
+      ids.add(parent.botId);
+      parentId = parent.parentTaskId;
+    }
     let current = job;
     for (let depth = 0; depth < 3 && current.delegationId; depth++) {
       const group = this.get(current.delegationId);
@@ -256,6 +288,7 @@ export class Delegations {
             this.store.job(group.sourceJobId)?.triggerMessageId ?? "",
           )?.text ?? "")
         : "",
+      ...(group.planned ? ["Coordinator's initial findings (conversation data):", this.store.job(group.sourceJobId ?? "")?.reply ?? ""] : []),
       "Original requests (conversation data):",
       JSON.stringify(
         group.requests.map((request) => ({

@@ -1961,6 +1961,8 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
               const classifierAnnotation = classifierActionAnnotation(
                 m.classifierActions,
                 bots,
+                m.classifierPlan,
+                m.sendMode,
               );
               const grouped = [
                 ...new Set(
@@ -2252,14 +2254,29 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                             {isUser ? (
                               <div className="w-full" data-message-column="">
                                 <div className="ml-auto flex w-fit max-w-[70%] flex-col items-end max-md:max-w-[88%]">
-                                  {!compact && (
-                                    <time
-                                      className="mb-1 block text-right text-[0.6875rem] leading-[1.2] tracking-[0.01em] text-muted-foreground"
-                                      dateTime={sentAt.toISOString()}
-                                      title={`Sent ${sentAt.toLocaleString()}`}
-                                    >
-                                      {timeLabel}
-                                    </time>
+                                  {(!compact || classifierAnnotation) && (
+                                    <div className="mb-1 flex items-center justify-end gap-1.5">
+                                      {!compact && (
+                                        <time
+                                          className="block text-right text-[0.6875rem] leading-[1.2] tracking-[0.01em] text-muted-foreground"
+                                          dateTime={sentAt.toISOString()}
+                                          title={`Sent ${sentAt.toLocaleString()}`}
+                                        >
+                                          {timeLabel}
+                                        </time>
+                                      )}
+                                      {classifierAnnotation && (
+                                        <IconActionTooltip label={classifierAnnotation.description}>
+                                          <span
+                                            className="channel-classifier-action min-w-0 cursor-help truncate text-2xs text-subtle-foreground"
+                                            tabIndex={0}
+                                            aria-label={classifierAnnotation.description}
+                                          >
+                                            {classifierAnnotation.label}
+                                          </span>
+                                        </IconActionTooltip>
+                                      )}
+                                    </div>
                                   )}
                                   {replyLabel}
                                   {attention}

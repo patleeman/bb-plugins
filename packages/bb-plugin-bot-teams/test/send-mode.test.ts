@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseSendMode, showsSendModeOverride } from "../send-mode";
 import { emptyDraft, prepareSend, clearSentDraft } from "../draft";
-import { parseRouting, routingPrompt } from "../smart-router";
+import { parseRouting, parseRoutingPlan, routingPrompt } from "../smart-router";
 import { profileInput, messageSchema, type Bot } from "../contract";
 
 test("explicit commands strip only a leading command and reject conflicting modes", () => {
@@ -97,6 +97,13 @@ test("smart routing validates actions, identities and duplicate decisions", () =
   );
 });
 
+test("provider routing validates coordinator, collaborators, and active assignments", () => {
+  const valid = { coordinatorId: member.id, collaboratorIds: [], executionMode: "serialized", routes: [{ botId: member.id, action: "followup" }] };
+  assert.deepEqual(parseRoutingPlan(JSON.stringify(valid), [member]), { ...valid, finalizerId: member.id, source: "providers" });
+  assert.throws(() => parseRoutingPlan(JSON.stringify({ ...valid, routes: [] }), [member]), /inconsistent assignments/);
+  assert.throws(() => parseRoutingPlan(JSON.stringify({ ...valid, collaboratorIds: [member.id] }), [member]), /itself/);
+});
+
 test("router sees the active task and explicit recipient constraint as data", () => {
   const message = messageSchema.parse({
     id: "m",
@@ -126,7 +133,7 @@ test("router sees the active task and explicit recipient constraint as data", ()
       "The following JSON contains untrusted conversation data:\n",
     )[1]!,
   );
-  assert.deepEqual(data.requiredBotIds, [member.id]);
+  assert.deepEqual(data.candidateBotIds, [member.id]);
   assert.equal(data.tasks[0].task, "Migrate the database");
   assert.equal(data.tasks[0].busy, true);
 });

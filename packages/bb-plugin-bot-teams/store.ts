@@ -467,6 +467,7 @@ export class Store {
           `SELECT json FROM (
             SELECT rowid,json FROM room_messages
             WHERE room_id=?
+              AND COALESCE(json_extract(json,'$.internalResult'),0)=0
               AND NOT (json_extract(json,'$.automationId') IS NOT NULL
                        AND json_extract(json,'$.botId') IS NULL)
             ORDER BY rowid DESC LIMIT ? OFFSET ?
@@ -480,6 +481,7 @@ export class Store {
       .prepare(
         `SELECT json FROM room_messages
          WHERE room_id=?
+           AND COALESCE(json_extract(json,'$.internalResult'),0)=0
            AND NOT (json_extract(json,'$.automationId') IS NOT NULL
                     AND json_extract(json,'$.botId') IS NULL)
            AND json_extract(json,'$.system') IS NULL
@@ -493,7 +495,7 @@ export class Store {
       ...new Set(messages.flatMap((m) => (m.replyTo ? [m.replyTo] : []))),
     ].flatMap((id) => {
       const m = this.message(id);
-      return m && !isAutomationTrigger(m) ? [m] : [];
+      return m && !m.internalResult && !isAutomationTrigger(m) ? [m] : [];
     });
   }
   history(roomId: string, before?: string, query = "", limit = 50) {
@@ -510,6 +512,7 @@ export class Store {
       this.db
         .prepare(
           `SELECT json FROM room_messages WHERE room_id=? AND rowid<?
+      AND COALESCE(json_extract(json,'$.internalResult'),0)=0
       AND NOT (json_extract(json,'$.automationId') IS NOT NULL
                AND json_extract(json,'$.botId') IS NULL)
       AND (?='' OR instr(lower(json_extract(json,'$.text')),lower(?))>0 OR instr(lower(json_extract(json,'$.speaker')),lower(?))>0)
@@ -541,7 +544,8 @@ export class Store {
       1,
       Math.min(options.limit ?? TRANSCRIPT_PAGE_SIZE, TRANSCRIPT_WINDOW_SIZE),
     );
-    const visible = `room_id=? AND NOT (json_extract(json,'$.automationId') IS NOT NULL
+    const visible = `room_id=? AND COALESCE(json_extract(json,'$.internalResult'),0)=0
+      AND NOT (json_extract(json,'$.automationId') IS NOT NULL
       AND json_extract(json,'$.botId') IS NULL)`;
     const cursorId =
       options.before ?? options.after ?? options.around ?? options.start;
@@ -656,7 +660,7 @@ export class Store {
         this.db
           .prepare("INSERT OR IGNORE INTO room_messages VALUES (?,?,?)")
           .run(m.id, m.roomId, JSON.stringify(m)).changes > 0;
-      if (inserted && !this.attention.capture(m) && m.botId && !m.system)
+      if (inserted && !m.internalResult && !this.attention.capture(m) && m.botId && !m.system)
         this.queueNotification(`reply:${m.id}`, m.roomId, "reply", m.id);
       return inserted;
     })();
@@ -670,6 +674,12 @@ export class Store {
     this.db
       .prepare("UPDATE room_messages SET json=? WHERE id=?")
       .run(JSON.stringify({ ...current, classifierActions: actions }), messageId);
+  }
+  setClassifierPlan(messageId: string, plan: NonNullable<RoomMessage["classifierPlan"]>) {
+    const current = this.message(messageId);
+    if (!current) return;
+    this.db.prepare("UPDATE room_messages SET json=? WHERE id=?")
+      .run(JSON.stringify({ ...current, classifierPlan: plan }), messageId);
   }
   reactions(roomId: string, messageIds?: string[]): Reaction[] {
     if (messageIds && !messageIds.length) return [];

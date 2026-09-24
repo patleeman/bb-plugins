@@ -34,6 +34,8 @@ import {
   type SendMode,
   type DispatchAction,
   type RoutingDecision,
+  type RoutingPlan,
+  type RoutingSelection,
   type RoutingTask,
 } from "./send-mode";
 export const errorText = (cause: unknown) =>
@@ -195,7 +197,7 @@ export class Runtime {
     signal: AbortSignal,
     tasks?: RoutingTask[],
     requiredBotIds?: string[],
-  ) => Promise<(string | RoutingDecision)[]>;
+  ) => Promise<RoutingSelection>;
   readonly busy = new Map<string, { threadId: string; at: number }>();
   readonly abort = new AbortController();
   readonly data: ChannelData;
@@ -713,16 +715,26 @@ export class Runtime {
               ? members.map((b) => b.id)
               : [];
     if (returnOnly) selected = [];
+    if (mode === "smart" && all && !author?.botId && selected.length) {
+      const coordinatorId = explicit[0] ?? selected[0]!;
+      run.routingPlan = {
+        coordinatorId,
+        collaboratorIds: selected.filter((id) => id !== coordinatorId),
+        executionMode: "parallel",
+        finalizerId: coordinatorId,
+      };
+      m.classifierPlan = run.routingPlan;
+    }
     if (
       !scheduled &&
       !returnOnly &&
       members.length &&
       ((mode === "smart" &&
+        !author?.botId &&
+        (sendMode === "auto" || explicit.length !== 1) &&
         members.length > 1 &&
-        !all &&
-        !explicit.length &&
-        !(sendMode !== "auto" && selected.length)) ||
-        (sendMode === "auto" &&
+        !all) ||
+        (!author?.botId && sendMode === "auto" && (mode !== "smart" || !all) &&
           this.routingTasks(m, members).some(
             (task) => selected.includes(task.botId) && task.busy,
           )))
@@ -732,7 +744,14 @@ export class Runtime {
       run.routingBotIds = selected;
       selected = [];
     }
+    if (mode === "smart" && !author?.botId && !run.routing && !run.routingPlan && selected.length === 1) {
+      run.routingPlan = {
+        coordinatorId: selected[0]!, collaboratorIds: [], executionMode: "serialized", finalizerId: selected[0]!,
+      };
+      m.classifierPlan = run.routingPlan;
+    }
     const steerRequests: SteerRequest[] = [];
+    const appliedActions: NonNullable<RoomMessage["classifierActions"]> = [];
     this.store.db.transaction(() => {
       if (author?.botId)
         for (const direct of directMessages)
@@ -763,6 +782,23 @@ export class Runtime {
           action,
         );
         if (dispatch.steer) steerRequests.push(dispatch.steer);
+        if (dispatch.action !== action)
+          appliedActions.push({ botId, action: dispatch.action, suggestedAction: action });
+      }
+      if (appliedActions.length) this.store.setClassifierActions(m.id, appliedActions);
+      if (run.routingPlan?.coordinatorId) {
+        const jobs = this.store.requestJobs(run.id).filter((job) => job.triggerMessageId === m.id);
+        const coordinator = jobs.find((job) => job.botId === run.routingPlan!.coordinatorId);
+        if (coordinator) {
+          for (const job of jobs) {
+            job.rootTaskId = run.id;
+            job.coordinatorId = coordinator.botId;
+            if (job.id !== coordinator.id) job.parentTaskId = coordinator.id;
+            this.store.putJob(job);
+          }
+          if (run.routingPlan.executionMode === "parallel")
+            this.delegations.trackPlanned(m, run, coordinator, jobs.filter((job) => job.id !== coordinator.id));
+        }
       }
       if (!run.pendingJobIds.length && !run.routing) run.status = "done";
       this.trackDelegation(m, run, author?.sourceThreadId);
@@ -935,7 +971,7 @@ export class Runtime {
     const snapshot = JSON.stringify(results);
     const shouldReturn =
       source?.status !== "cancelled" &&
-      (await this.returnDecision(group, this.abort.signal));
+      (group.planned || await this.returnDecision(group, this.abort.signal));
     if (this.abort.signal.aborted) return;
     await this.locked(`room:${group.roomId}`, async () => {
       const live = this.delegations.get(group.id);
@@ -984,6 +1020,9 @@ export class Runtime {
               triggerMessageId: this.delegations.returnTrigger(live),
               delegationId: source?.delegationId,
               returnOf: live.id,
+              ...(source?.rootTaskId ? { rootTaskId: source.rootTaskId } : {}),
+              ...(source ? { parentTaskId: source.id } : {}),
+              ...(source?.coordinatorId ? { coordinatorId: source.coordinatorId } : {}),
               depth: 2,
               text: this.delegations.prompt(live),
               taskTitle: "Synthesize delegate results",
@@ -1059,6 +1098,11 @@ export class Runtime {
           job.conversationKey === key &&
           ["dispatching", "running"].includes(job.status),
       );
+    // A coordinated task with live delegates must retain its root and return path.
+    // Queue a correction instead of moving the source job into another run.
+    if (action === "steer" && activeJob &&
+        this.delegations.get(`job:${this.delegations.rootJob(activeJob).id}`)?.status === "waiting")
+      action = "followup";
     // A slow classifier must never steer a different task that started meanwhile.
     if (snapshot && snapshot.jobId !== activeJob?.id && action === "steer")
       action = "followup";
@@ -1475,7 +1519,7 @@ export class Runtime {
     this.routingAborts.set(run.id, controller);
     const signal = AbortSignal.any([this.abort.signal, controller.signal]);
     const task = (async () => {
-      let selected: (string | RoutingDecision)[] = [],
+      let selected: RoutingSelection = [],
         tasks: RoutingTask[] = [],
         error: string | undefined;
       try {
@@ -1502,7 +1546,40 @@ export class Runtime {
         );
       } catch (cause) {
         error = errorText(cause);
+        const message = this.store.message(run.id);
+        const single = run.routingBotIds?.length === 1 ? run.routingBotIds[0] : null;
+        if (message && single && !mentionsEveryone(message.sentText ?? message.text)) {
+          selected = {
+            coordinatorId: single,
+            collaboratorIds: [],
+            executionMode: "serialized",
+            finalizerId: single,
+            routes: [{ botId: single, action: "followup" }],
+            source: "fallback",
+          };
+          error = undefined;
+        }
       }
+      const literal = (room.responseBehavior ?? "everyone") !== "smart";
+      const first = Array.isArray(selected) ? selected[0] : undefined;
+      const primaryRoute: RoutingDecision | null = first
+        ? typeof first === "string"
+          ? { botId: first, action: "followup" }
+          : first
+        : null;
+      const plan: RoutingPlan | null = literal ? null : Array.isArray(selected)
+        ? {
+            coordinatorId: primaryRoute?.botId ?? null,
+            collaboratorIds: [],
+            executionMode: "serialized",
+            finalizerId: primaryRoute?.botId ?? null,
+            routes: primaryRoute ? [primaryRoute] : [],
+            source: "providers",
+          }
+        : selected;
+      const routes: RoutingDecision[] = plan?.routes ?? (Array.isArray(selected)
+        ? selected.map((route) => typeof route === "string" ? { botId: route, action: "followup" } : route)
+        : selected.routes);
       if (signal.aborted) return;
       await this.locked(`room:${room.id}`, async () => {
         const current = this.store.findRoom(room.id);
@@ -1521,11 +1598,37 @@ export class Runtime {
         const steers: SteerRequest[] = [];
         const classifierActions: NonNullable<RoomMessage["classifierActions"]> = [];
         this.store.db.transaction(() => {
+          const eligible = new Set(current.memberIds.filter((id) => id !== message.botId && !this.messageAncestors(message).has(id)));
+          const expectedIds = plan?.coordinatorId
+            ? [plan.coordinatorId, ...(plan.executionMode === "parallel" ? plan.collaboratorIds : [])]
+            : [];
+          if (!error && plan && (
+            plan.finalizerId !== plan.coordinatorId ||
+            (!plan.coordinatorId && plan.collaboratorIds.length > 0) ||
+            (plan.coordinatorId !== null && !eligible.has(plan.coordinatorId)) ||
+            plan.collaboratorIds.some((id) => !eligible.has(id) || id === plan.coordinatorId) ||
+            new Set(plan.collaboratorIds).size !== plan.collaboratorIds.length ||
+            new Set(plan.routes.map((route) => route.botId)).size !== plan.routes.length ||
+            plan.routes.length !== expectedIds.length ||
+            expectedIds.some((id) => !plan.routes.some((route) => route.botId === id)) ||
+            plan.routes.some((route) => !eligible.has(route.botId) || (route.botId !== plan.coordinatorId && !plan.collaboratorIds.includes(route.botId))) ||
+            (run.routingBotIds?.length && plan.routes.some((route) => !run.routingBotIds!.includes(route.botId)))
+          )) error = "Routing returned an inconsistent assignment.";
           live.routing = error ? "error" : "done";
           live.routingError = error;
-          if (!error)
-            for (const route of selected) {
-              const id = typeof route === "string" ? route : route.botId;
+          if (!error) {
+            if (plan) {
+              live.routingPlan = {
+                coordinatorId: plan.coordinatorId,
+                collaboratorIds: plan.collaboratorIds,
+                executionMode: plan.executionMode,
+                finalizerId: plan.finalizerId,
+                source: plan.source,
+              };
+              this.store.setClassifierPlan(message.id, live.routingPlan);
+            }
+            for (const route of routes) {
+              const id = route.botId;
               if (
                 id === message.botId ||
                 !current.memberIds.includes(id) ||
@@ -1535,9 +1638,7 @@ export class Runtime {
               const action =
                 message.sendMode && message.sendMode !== "auto"
                   ? message.sendMode
-                  : typeof route === "string"
-                    ? "followup"
-                    : route.action;
+                  : route.action;
               const snapshot = tasks.find((task) => task.botId === id);
               const dispatch = this.dispatchMessage(
                 current,
@@ -1549,19 +1650,38 @@ export class Runtime {
                 snapshot,
               );
               if (dispatch.steer) steers.push(dispatch.steer);
-              if (
-                (message.sendMode ?? "auto") === "auto" &&
-                typeof route !== "string" &&
-                snapshot?.busy
-              )
+              const routedJob = this.store.requestJobs(live.id).find((job) => job.botId === id && job.triggerMessageId === message.id);
+              if (routedJob) {
+                if (plan) {
+                  routedJob.rootTaskId = live.id;
+                  routedJob.coordinatorId = plan.coordinatorId ?? undefined;
+                  if (id !== plan.coordinatorId) routedJob.parentTaskId = this.store.requestJobs(live.id).find((job) => job.botId === plan.coordinatorId && job.triggerMessageId === message.id)?.id;
+                  this.store.putJob(routedJob);
+                }
+              }
+              if (dispatch.action !== action || ((message.sendMode ?? "auto") === "auto" && snapshot?.busy))
                 classifierActions.push({
                   botId: id,
                   action: dispatch.action,
-                  ...(dispatch.action !== route.action
-                    ? { suggestedAction: route.action }
+                  ...(dispatch.action !== action
+                    ? { suggestedAction: action }
                     : {}),
                 });
             }
+            if (plan?.coordinatorId) {
+              const jobs = this.store.requestJobs(live.id).filter((job) => job.triggerMessageId === message.id);
+              const coordinator = jobs.find((job) => job.botId === plan.coordinatorId);
+              if (coordinator) for (const helper of jobs.filter((job) => job.botId !== coordinator.botId)) {
+                helper.parentTaskId = coordinator.id;
+                this.store.putJob(helper);
+              }
+            }
+            if (plan?.executionMode === "parallel" && plan.coordinatorId) {
+              const jobs = this.store.requestJobs(live.id).filter((job) => job.triggerMessageId === message.id);
+              const coordinator = jobs.find((job) => job.botId === plan.coordinatorId);
+              if (coordinator) this.delegations.trackPlanned(message, live, coordinator, jobs.filter((job) => plan.collaboratorIds.includes(job.botId)));
+            }
+          }
           if (classifierActions.length)
             this.store.setClassifierActions(message.id, classifierActions);
           this.trackDelegation(message, live);
@@ -1571,6 +1691,7 @@ export class Runtime {
               : "done";
           this.store.putRun(live);
         })();
+        this.bb.log.debug(`Channel routing ${run.id}: ${error ? "error" : plan ? `${plan.executionMode}/${plan.source ?? "explicit"}/${plan.routes.length} active` : `literal/${routes.length} active`}`);
         for (const steer of steers) this.startSteer(steer);
         this.changed();
       });
@@ -1622,6 +1743,7 @@ export class Runtime {
     }
     // Deterministic delivery identity makes recovery and repeated collection idempotent.
     const id = `${trigger.id}:${botId}`;
+    const parent = trigger.botId ? this.sourceJobForMessage(trigger) : null;
     if (
       this.enqueue(bot, {
         id,
@@ -1632,6 +1754,9 @@ export class Runtime {
         runId: run.id,
         triggerMessageId: trigger.id,
         depth,
+        ...(parent?.rootTaskId ? { rootTaskId: parent.rootTaskId } : {}),
+        ...(parent ? { parentTaskId: parent.id } : {}),
+        ...(parent?.coordinatorId ? { coordinatorId: parent.coordinatorId } : {}),
         ...(trigger.automationId ? { automationId: trigger.automationId } : {}),
         attachments: trigger.attachments,
         ...dispatch,
@@ -1688,6 +1813,9 @@ export class Runtime {
       })
       .join("\n");
     const rosterVersion = createHash("sha256").update(roster).digest("hex");
+    const routingPlan = job.runId
+      ? this.store.runs(room.id).find((run) => run.id === job.runId)?.routingPlan
+      : undefined;
     const reference = trigger.replyTo
       ? this.store.message(trigger.replyTo)
       : null;
@@ -1710,6 +1838,18 @@ export class Runtime {
       `Consider this message from ${trigger.speaker}:`,
       (trigger.sentText ?? trigger.text) ||
         "Please inspect the attached files.",
+      ...(job.coordinatorId === job.botId
+        ? [
+            "You are the coordinator for this request. Only your completed synthesis is the owner-facing final answer. If you delegate, return a concise handoff now; Bot Teams will bring the settled results back to you.",
+            ...(routingPlan?.executionMode === "parallel"
+              ? [`These collaborators started in parallel: ${routingPlan.collaboratorIds.map((id) => this.store.get(id).name).join(", ")}. Return your initial findings now; Bot Teams will hold them and give you the settled collaborator results for one final synthesis.`]
+              : routingPlan?.collaboratorIds.length
+                ? [`These collaborators are available for delegation, but have not started: ${routingPlan.collaboratorIds.map((id) => this.store.get(id).name).join(", ")}.`]
+                : []),
+          ]
+        : job.coordinatorId
+          ? [`You are helping ${this.store.get(job.coordinatorId).name}. Return findings for that coordinator; your result is not the owner-facing final answer. Do not mention an ancestor to request a return.`]
+          : []),
       ...(job.automationId
         ? [
             "This is scheduled channel work. Do not create, resume, update, or manually run automations from this task. Your final answer is posted to this channel.",
@@ -2081,6 +2221,9 @@ export class Runtime {
           retryOf: id,
           delegationId: job.delegationId,
           returnOf: job.returnOf,
+          rootTaskId: job.rootTaskId,
+          parentTaskId: job.parentTaskId,
+          coordinatorId: job.coordinatorId,
           dispatchAction: job.dispatchAction,
           forkSourceThreadId: job.forkSourceThreadId,
           ...(job.automationId ? { automationId: job.automationId } : {}),
@@ -2294,6 +2437,19 @@ export class Runtime {
         )
           continue;
         const bot = this.store.get(job.botId);
+        const ancestors = this.delegations.ancestors(job);
+        const delegates = job.depth < 2 && !job.returnOf
+          ? room.memberIds.filter((id) => id !== bot.id && !ancestors.has(id) &&
+              (mentionsEveryone(job.reply ?? "") || mentioned(job.reply ?? "", this.store.get(id).handle)))
+          : [];
+        const coordinated = !!job.coordinatorId;
+        const isCoordinator = coordinated && job.coordinatorId === job.botId;
+        const internalResult = coordinated && (
+          !isCoordinator ||
+          this.delegations.get(`job:${this.delegations.rootJob(job).id}`)?.status === "waiting" ||
+          delegates.length > 0 ||
+          !!run.finalMessageId
+        );
         const directMessageIds = (job.directMessageRequestIds ?? []).map((id) =>
           directMessageId(job.threadId!, id),
         );
@@ -2323,28 +2479,26 @@ export class Runtime {
           createdAt: job.updatedAt,
           replyTo: directMessageIds.at(-1) ?? job.triggerMessageId,
           attachments: job.outputAttachments,
+          ...(internalResult ? { internalResult: true } : {}),
         };
         if (this.store.putMessage(reply)) {
-          const currentRoom = this.store.room(room.id);
-          this.store.putRoom({
-            ...currentRoom,
-            updatedAt: Math.max(currentRoom.updatedAt + 1, Date.now()),
-          });
-          if (isAutoTitlePlaceholder(currentRoom.name))
-            this.startRoomTitle(currentRoom, reply);
+          if (!internalResult) {
+            const currentRoom = this.store.room(room.id);
+            this.store.putRoom({
+              ...currentRoom,
+              updatedAt: Math.max(currentRoom.updatedAt + 1, Date.now()),
+            });
+            if (isAutoTitlePlaceholder(currentRoom.name))
+              this.startRoomTitle(currentRoom, reply);
+          }
         }
         if (job.depth < 2 && !job.returnOf) {
-          const ancestors = this.delegations.ancestors(job);
-          for (const id of room.memberIds)
-            if (
-              id !== bot.id &&
-              !ancestors.has(id) &&
-              (mentionsEveryone(reply.text) ||
-                mentioned(reply.text, this.store.get(id).handle))
-            )
-              this.invite(room, run, reply, id, job.depth + 1);
+          for (const id of delegates)
+            this.invite(room, run, reply, id, job.depth + 1);
           this.trackDelegation(reply, run, undefined, job);
         }
+        if (isCoordinator && !internalResult && !run.finalMessageId)
+          run.finalMessageId = job.id;
       }
       for (const run of runs) {
         run.status =

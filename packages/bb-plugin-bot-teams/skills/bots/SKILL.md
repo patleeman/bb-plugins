@@ -150,7 +150,7 @@ Use `--mode fork` on `channel send` or `sendMode: "fork"` on
 `bots_channel_send` to answer separately while primary work continues. `/fork`
 also works at the start of the text. `steer` changes active work; `followup`
 queues behind it; `auto` lets Smart routing decide. Explicit modes override
-classification. Mentions select recipients, not delivery mode. Reply to a fork’s
+the busy-bot action. In Smart channels, mentions become candidates for a coordinator or collaborator; in Directed channels they select recipients. Reply to a fork’s
 answer to continue that fork. An ordinary message targets the primary session.
 Forks share workspace files and must leave shared MEMORY.md updates to the
 primary; include durable findings in the answer. Native fork support and an
@@ -282,9 +282,9 @@ other bots’ missions or share unrelated private conversation data.
 
 `bb bots channel behavior CHANNEL [smart|directed|everyone]` reads or changes the
 mode. `channel create --behavior MODE` sets it at creation. Smart is the new-channel
-default and selects relevant bots through a configured routing model, and also
-selects the send mode (steer, follow-up, or fork) for a recipient that is already
-running a task; Directed only responds to mentions/replies; Everyone addresses all
+default and selects one coordinator, collaborators, serialized or parallel work, and
+the send mode (steer, follow-up, or fork) for a recipient already running a task.
+Only the coordinator posts the owner-facing final answer. Directed only responds to mentions/replies; Everyone addresses all
 members. `@all` or `@channel` explicitly
 requests everyone regardless of mode. Use it for a full advisory panel. With multiple bots, a plain message may select no bots. A channel with just one
 eligible bot routes every message to it automatically. Native tools `bots_channel_behavior` and

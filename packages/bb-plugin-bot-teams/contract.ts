@@ -153,6 +153,9 @@ export const jobSchema = z.object({
   contextMessageId: z.string().optional(),
   rosterVersion: z.string().optional(),
   delegationId: z.string().optional(),
+  rootTaskId: z.string().optional(),
+  parentTaskId: z.string().optional(),
+  coordinatorId: idSchema.optional(),
   returnOf: z.string().optional(),
   timedOut: z.boolean().optional(),
   timeoutNoticePending: z.boolean().optional(),
@@ -252,6 +255,14 @@ export const messageSchema = z.object({
     action: z.enum(["steer", "followup", "fork"]),
     suggestedAction: z.enum(["steer", "followup", "fork"]).optional(),
   })).max(16).optional(),
+  classifierPlan: z.object({
+    coordinatorId: idSchema.nullable(),
+    collaboratorIds: z.array(idSchema).max(16),
+    executionMode: z.enum(["serialized", "parallel"]),
+    finalizerId: idSchema.nullable(),
+    source: z.enum(["jev", "providers", "fallback"]).optional(),
+  }).optional(),
+  internalResult: z.boolean().optional(),
   conversationKey: z.string().optional(),
   automationId: z.string().optional(),
   id: z.string(),
@@ -356,6 +367,14 @@ export const runSchema = z.object({
   routingError: z.string().optional(),
   routingDepth: z.number().optional(),
   routingBotIds: z.array(idSchema).optional(),
+  routingPlan: z.object({
+    coordinatorId: idSchema.nullable(),
+    collaboratorIds: z.array(idSchema).max(16),
+    executionMode: z.enum(["serialized", "parallel"]),
+    finalizerId: idSchema.nullable(),
+    source: z.enum(["jev", "providers", "fallback"]).optional(),
+  }).optional(),
+  finalMessageId: z.string().optional(),
 });
 export type RoomRun = z.infer<typeof runSchema>;
 const transcriptPageSchema = z.object({

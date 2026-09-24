@@ -32,4 +32,17 @@ test("classifier annotation names the applied action and recipient", () => {
     },
   );
   assert.equal(classifierActionAnnotation(undefined, bots), null);
+  assert.deepEqual(
+    classifierActionAnnotation(undefined, bots, { coordinatorId: bots[0]!.id, collaboratorIds: [bots[1]!.id], executionMode: "serialized", finalizerId: bots[0]!.id, source: "jev" }),
+    { label: "Auto · Serialized", description: "Atlas coordinates and finalizes. Scribe waits for delegation." },
+  );
+  assert.deepEqual(
+    classifierActionAnnotation(
+      [{ botId: bots[0]!.id, action: "followup", suggestedAction: "steer" }],
+      bots,
+      { coordinatorId: bots[0]!.id, collaboratorIds: [], executionMode: "serialized", finalizerId: bots[0]!.id },
+      "steer",
+    ),
+    { label: "Smart · Serialized", description: "Atlas coordinates and finalizes. No collaborators. Requested Steer for Atlas; Bot Teams used Follow-up." },
+  );
 });

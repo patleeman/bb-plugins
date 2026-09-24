@@ -49,12 +49,11 @@ Fork**; deleting that text hid it again; and the same channel switched to
 Directed showed **Send mode: Auto**. The channel was deleted afterwards and the
 default for new channels was not changed.
 
-The Chat mode menu now says what Smart decides: its Smart option reads "Choose
-relevant bots, and steer, follow up, or fork a busy one". The Bot Teams setting
-for new channels, the `bots_channel_behavior` tool, the bots skill, and the
-README carry the same clause. Verified live in a disposable Smart channel: the
-rendered menu showed the new Smart description, checked, above the unchanged
-Directed and Everyone entries.
+The Chat mode menu describes Smart dependency routing: its Smart option reads
+"Choose a coordinator, collaborators, work order, and busy-bot action". The Bot
+Teams setting for new channels, the `bots_channel_behavior` tool, the bots
+skill, and the README describe the same behavior. In a Smart channel, verify
+the menu shows this description above Directed and Everyone.
 
 Existing runtime regressions already cover the behaviour this relies on: idle
 single-bot messages classify in no chat mode, and busy Auto recipients use

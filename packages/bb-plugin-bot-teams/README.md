@@ -38,11 +38,11 @@ ID**. On touch screens, the menu button stays visible; Archive is inside the men
 
 The **Chat mode** selector beneath the message box has three choices:
 
-- **Smart** chooses the smallest relevant set of bots for an unaddressed message, including none for acknowledgments and finished conversations. It also chooses the send mode for a recipient that is already running a task: steer, follow-up, or fork. New channels start here.
+- **Smart** chooses one coordinator, records collaborators, and decides whether they work in sequence or in parallel. Mentions are candidates for that decision. Smart also chooses steer, follow-up, or fork for a busy bot. New channels start here.
 - **Directed** calls bots you mention or reply to. A channel with just one eligible bot always routes to that bot, in every chat mode.
 - **Everyone** lets all members consider unaddressed messages, useful for group reviews.
 
-`@handle` and replies to a bot address that bot in the channel; they are channel messages, not DMs. `@all` and `@channel` address every current channel member (`@everyone` is also supported). Choosing a mode in the UI or owner CLI remembers it for future channels. Existing channels keep Everyone until changed. Bots work concurrently and post as they finish. A bot can request a teammate’s help with an explicit mention, with up to two further handoffs per message. `[PASS]` produces no public reply unless the bot has published images for that response.
+`@handle` and replies to a bot address that bot in Directed mode; in Smart mode they identify candidates. These are channel messages, not DMs. `@all` and `@channel` request every current member (`@everyone` is also supported). Choosing a mode in the UI or owner CLI remembers it for future channels. Existing channels keep Everyone until changed. Smart helpers return their results through the coordinator, who posts the final answer. A bot can request a teammate’s help with an explicit mention, with up to two further handoffs per message. `[PASS]` produces no public reply unless the bot has published images for that response.
 
 Channels do not need to be started or resumed. A working bot appears at the bottom of the transcript with its latest safe one-line activity and a muted **Stop** control for its current response. Stopping a response leaves the channel open. Each bot has a primary session per channel. Each session handles one task at a time, and the same bot can work in separate channels concurrently. Forks answer separate requests concurrently, with their own activity and Stop controls. Mentions choose the recipient; they do not imply an interruption.
 
@@ -50,13 +50,15 @@ Hover or focus a message on desktop for **React**, **Reply**, **Copy**, and a li
 
 Bots receive standing guidance to write brief, conversational replies, use Markdown when it improves scanning, avoid dense walls of text and assistant boilerplate, and stay silent when they have nothing useful to add. Channel messages use BB’s native Markdown renderer, including short paragraphs, bullets, numbered steps, inline code, fenced code blocks, and links. They can react sparingly for acknowledgment (👍), completed or verified work (✅), or celebration (🎉). Questions and assignments addressed to a bot in the channel still need an answer, action, or blocker.
 
-Smart routing uses **Jev** through OpenCode Zen's direct structured-decision API. **Plugins → Bot Teams → Settings** controls the classifier, secret Zen API key, Jev model (default `jev-1.13`), timeout (default 5 seconds), and minimum confidence for steer/fork (default 0.7). `OPENCODE_API_KEY` on the BB server is an alternative to the secret setting. Recipient and action decisions are batched into one API request, without creating an agent session or loading tools and global instructions. Low-confidence steer/fork decisions become follow-ups. Delegation return decisions use the same API.
+Smart routing uses **Jev** through OpenCode Zen's direct structured-decision API. **Plugins → Bot Teams → Settings** controls the classifier, secret Zen API key, Jev model (default `jev-1.13`), timeout (default 5 seconds), and minimum confidence for parallel work or steer/fork (default 0.7). `OPENCODE_API_KEY` on the BB server is an alternative to the secret setting. Coordinator, collaborator, execution mode, and action decisions are batched into one API request. Low-confidence parallel work becomes serialized; low-confidence steer/fork becomes follow-up. Delegation return decisions use the same API.
 
-For provider-based classification, select **providers** explicitly. Its primary/fallback settings default to Pi / `opencode-go/qwen3.8-flash`, then Codex / `gpt-5.6-luna`. This slower compatibility option creates temporary hidden agent sessions; each attempt can take up to 30 seconds. Jev failures never silently switch to an agent session. They keep the message visible with **Retry routing**, and delegation returns retry without waking the requester twice.
+For provider-based classification, select **providers** explicitly. Its primary/fallback settings default to Pi / `opencode-go/qwen3.8-flash`, then Codex / `gpt-5.6-luna`. This slower compatibility option creates temporary hidden agent sessions; each attempt can take up to 30 seconds. Jev failures never silently switch to an agent session. A single explicit recipient safely falls back to follow-up. Other failures keep the message visible with **Retry routing** and do not fan out.
 
-Explicit modes with addressed recipients bypass action classification. Single-bot channels skip recipient selection; busy Auto messages still classify the action in every channel mode. No keyword checks infer correction intent. See [OpenCode's Jev documentation](https://opencode.ai/docs/zen/#jev) for its endpoint and model availability.
+Explicit modes override the busy-bot action. Smart still classifies dependency shape when more than one recipient is possible. Single-bot channels skip coordinator selection; busy Auto messages still classify the action in every channel mode. Directed and Everyone keep literal recipients. No keyword checks infer correction intent. See [OpenCode's Jev documentation](https://opencode.ai/docs/zen/#jev) for its endpoint and model availability.
 
-When Auto routes to a busy bot, a small label beside the sent message's timestamp shows the applied action. Hover or focus it to see which bot the classifier selected and whether Bot Teams changed the suggestion before dispatch. Explicit send modes have no classifier label.
+If a bot has live delegates, a steer queues as a follow-up so its return path stays attached to the original task. The message annotation shows the applied action.
+
+Smart messages show the selected execution mode beside the sent timestamp. Hover or focus the label to see the coordinator, collaborators, and applied busy-bot actions. Explicit send modes still show a Smart plan when topology was classified.
 
 The composer is adapted from BB’s thread composer: the same prompt box, **+** menu, dictation strip, attachment previews, mention menu, and the row of controls beneath it. Work in progress sits in a card tucked behind the top of the box, like a thread’s follow-ups. Type `#` to find another channel; choosing one inserts a stable channel reference that renders as a link in the transcript. It supports attachments through the plus button, paste, and drag and drop (10 files per message, 8 MB each). Dictation uses BB’s configured transcription service and microphone preference. Message text, attachment references, and replies survive reloads. Unsent uploads expire after seven days.
 
@@ -139,8 +141,7 @@ hover on a touch screen.
 
 ## Parallel questions and tasks
 
-The classifier decides this for you. Each recipient that is **currently
-running** a task is classified on its own:
+Smart first decides whether one coordinator delegates work or several bots contribute in parallel. For each **currently running** recipient, the classifier then chooses an action:
 
 - **Steer** when the message matters to that running task: a correction,
   cancellation, redirection, or anything marked urgent, blocking, or P0.
@@ -149,15 +150,13 @@ running** a task is classified on its own:
 - **Fork** when you ask something out of band beside the running task, even if
   it is about that task.
 
-A recipient with no running task is never classified; the message is sent
-normally and queued as a follow-up. The chosen action appears on the sent
-message as **Auto · Steer**, **Auto · Follow-up**, or **Auto · Fork**.
+An idle bot starts as a follow-up when selected. The Smart plan appears on the sent message as **Auto · Serialized** or **Auto · Parallel**.
 
 To decide one message yourself, use the caret beside **Send**, where a thread
 composer keeps its own send options:
 
 - **Auto**: the classifier chooses the action for each busy recipient, and in
-  Smart channels also chooses the recipients themselves. This is the default.
+  Smart channels also chooses the coordinator and execution mode. This is the default.
 - **Steer**: change the task currently running. Also available as `/steer`.
 - **Follow-up**: wait for the current task to finish. Also `/followup` or `/queue`.
 - **Fork**: clone the selected bot’s available session context and handle the
@@ -167,9 +166,7 @@ composer keeps its own send options:
 An explicit mode overrides the classifier in every chat mode. While a message
 carries one, it also appears beside the **+** menu so the override stays
 visible; choosing **Auto** in either control returns the message to the
-classifier, and sending clears it. The router still selects recipients for
-unaddressed messages in Smart channels; mention a bot to bypass that selection
-when using an explicit mode.
+classifier, and sending clears it. Smart still decides whether multiple mentioned bots work together or in parallel; the explicit mode controls the busy-session action.
 
 A fork’s answer appears in the channel, linked to the question and labeled
 **Fork**. Reply to that answer to continue the same fork. Ordinary channel
@@ -497,6 +494,8 @@ Channel decisions and blockers that Bot Teams itself records stay on the channel
 When a bot directly asks another bot for work through a mention or reply, Bots records the handoff. After every direct delegate settles, the requester receives one synthesis turn with each result, failure, cancellation, or timeout. Separate consultation messages from the same response join one return. Nested handoffs finish their own synthesis first; retries retain their ancestry and renew the wait deadline.
 
 The configured classifier decides whether the exchange contains a work request and substantive results. Acknowledgments and unrelated replies do not wake the requester. Return turns use the existing maximum handoff depth and cannot start another delegation. Cross-channel consultations return to the requesting bot’s original channel and session. The state and deterministic return ID survive reloads. No new tool or CLI command is required: native channel send, `bb bots channel send --reply-to`, and final-answer mentions all use the same runtime.
+
+Smart parallel work creates a return group when it starts. Helpers can finish in any order, including after nested delegations. Their results stay in task status and return to the coordinator. Only the coordinator's final synthesis appears as the channel answer. Serialized work starts the coordinator alone and records named helpers until the coordinator delegates to them.
 
 ## Attention requests
 

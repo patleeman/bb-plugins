@@ -158,20 +158,23 @@ export function requestStatus(
     pending: unfinished.length,
     failed: latest.filter((j) => j.status === "error").length,
     cancelled: latest.filter((j) => j.status === "cancelled").length,
-    responses: jobs.slice(offset, offset + limit).map((j) => ({
-      id: j.id,
-      retryOf: j.retryOf ?? null,
-      supersededBy: superseded.get(j.id) ?? null,
-      botId: j.botId,
-      name: store.get(j.botId).name,
-      status: j.status,
-      cancellationPending: !!j.cancellationPending,
-      threadId: j.threadId,
-      messageId: store.message(j.id)?.id ?? null,
-      reply: j.reply?.slice(0, 4000) ?? null,
-      truncated: (j.reply?.length ?? 0) > 4000,
-      error: j.error,
-    })),
+    responses: jobs.slice(offset, offset + limit).map((j) => {
+      const published = store.message(j.id);
+      return {
+        id: j.id,
+        retryOf: j.retryOf ?? null,
+        supersededBy: superseded.get(j.id) ?? null,
+        botId: j.botId,
+        name: store.get(j.botId).name,
+        status: j.status,
+        cancellationPending: !!j.cancellationPending,
+        threadId: j.threadId,
+        messageId: published && !published.internalResult ? published.id : null,
+        reply: j.reply?.slice(0, 4000) ?? null,
+        truncated: (j.reply?.length ?? 0) > 4000,
+        error: j.error,
+      };
+    }),
     nextOffset: offset + limit < jobs.length ? offset + limit : null,
   };
 }
@@ -273,13 +276,13 @@ export function registerChannelTools(
   );
   tool(
     "bots_channel_send",
-    "Post to a channel as the calling agent. @handle or a reply targets a bot; @all or @channel requests every member. Unaddressed messages follow the channel's Smart/Directed/Everyone behavior. A bot's final answer posts automatically for a channel task. In a DM, the final answer stays in the DM; use this tool only when the owner asks to share an answer with the channel. Returns a request ID; use bots_channel_request to collect replies. Reuse requestId on retries.",
+    "Post to a channel as the calling agent. In Smart mode, @handle or a reply supplies routing candidates; in Directed mode it targets a bot. @all or @channel requests every member. A coordinator posts the final answer for Smart team work. In a DM, the final answer stays in the DM; use this tool only when the owner asks to share an answer with the channel. Returns a request ID; use bots_channel_request to collect replies. Reuse requestId on retries.",
     rpcContract.send.input,
     (input, threadId) => send(input, threadId),
   );
   tool(
     "bots_channel_behavior",
-    "Set a channel's response behavior. Smart chooses relevant bots and whether to steer, follow up, or fork a busy one, Directed only responds to mentions/replies, Everyone invites all members. @all and @channel always request all bots.",
+    "Set a channel's response behavior. Smart chooses a coordinator, collaborators, serialized or parallel work, and busy-bot actions. Directed uses literal mentions and replies. Everyone invites all members. @all and @channel always request all bots.",
     z.object({
       id: z.string().uuid(),
       responseBehavior: z.enum(["smart", "directed", "everyone"]),

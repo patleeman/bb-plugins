@@ -110,7 +110,7 @@ export default async function plugin(bb: BbPluginApi) {
       options: ["smart", "directed", "everyone"],
       default: "smart",
       description:
-        "Smart chooses relevant bots, and whether to steer, follow up, or fork a busy bot. Directed responds to mentions and replies. Everyone invites all members.",
+        "Smart chooses a coordinator, collaborators, work order, and busy-bot action. Directed responds to mentions and replies. Everyone invites all members.",
     },
     routingEngine: {
       type: "select",
@@ -141,11 +141,11 @@ export default async function plugin(bb: BbPluginApi) {
     },
     jevActionConfidence: {
       type: "number",
-      label: "Minimum confidence for steer or fork",
+      label: "Minimum confidence for parallel, steer, or fork",
       default: 0.7,
       experimental_schema: z.number().min(0).max(1),
       description:
-        "A value from 0 to 1. Uncertain action choices become follow-ups.",
+        "A value from 0 to 1. Uncertain parallel work becomes serialized; uncertain steer or fork becomes follow-up.",
     },
     routingProvider: {
       type: "string",
@@ -198,6 +198,7 @@ export default async function plugin(bb: BbPluginApi) {
         signal,
         tasks,
         requiredBotIds,
+        (room.responseBehavior ?? "everyone") !== "smart",
       );
     } finally {
       store.db

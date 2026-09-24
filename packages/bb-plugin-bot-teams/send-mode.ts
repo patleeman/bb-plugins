@@ -9,7 +9,7 @@ export const sendModeLabels: Record<SendMode, string> = {
   fork: "Fork",
 };
 export const sendModeDescriptions: Record<SendMode, string> = {
-  auto: "Let the classifier choose how each busy bot handles this message.",
+  auto: "Let Smart choose the coordinator and work order, and classify busy-bot actions.",
   steer: "Change the task currently running.",
   followup: "Wait for the current task to finish.",
   fork: "Ask separately while the current task continues.",
@@ -38,6 +38,15 @@ export function parseSendMode(text: string, mode: SendMode = "auto") {
 }
 
 export type RoutingDecision = { botId: string; action: DispatchAction };
+export type RoutingPlan = {
+  coordinatorId: string | null;
+  collaboratorIds: string[];
+  executionMode: "serialized" | "parallel";
+  finalizerId: string | null;
+  routes: RoutingDecision[];
+  source?: "jev" | "providers" | "fallback";
+};
+export type RoutingSelection = RoutingPlan | (string | RoutingDecision)[];
 export type RoutingTask = {
   botId: string;
   /** The session already resolved from an explicit reply, otherwise the primary session. */

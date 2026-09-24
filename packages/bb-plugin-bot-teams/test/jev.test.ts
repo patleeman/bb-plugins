@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   askJev,
   selectJevBots,
+  selectJevActions,
   classifyJevReturn,
   jevRoutingRequest,
 } from "../jev";
@@ -46,6 +47,14 @@ const choice = (value: string, confidence = 1) => ({
   confidence,
   probabilities: { [value]: 1 },
 });
+const routeAnswers = (coordinatorId: string, execution: "serialized" | "parallel", collaborators: string[] = [], actions: Record<string, string> = {}) => ({
+  coordinator: choice(coordinatorId),
+  execution: choice(execution),
+  ...Object.fromEntries(bots.flatMap((bot) => [
+    [`collaborator:${bot.id}`, choice(collaborators.includes(bot.id) ? "yes" : "no")],
+    [`action:${bot.id}`, choice(actions[bot.id] ?? "followup")],
+  ])),
+});
 
 test("Jev batches all recipients and actions into one direct request", async (t) => {
   const calls: { url: unknown; init: RequestInit | undefined }[] = [];
@@ -55,10 +64,7 @@ test("Jev batches all recipients and actions into one direct request", async (t)
     async (url: unknown, init: RequestInit) => {
       calls.push({ url, init });
       return Response.json({
-        answers: {
-          [bots[0]!.id]: choice("fork"),
-          [bots[1]!.id]: choice("skip"),
-        },
+        answers: routeAnswers(bots[0]!.id, "serialized", [], { [bots[0]!.id]: "fork" }),
       });
     },
   );
@@ -82,22 +88,58 @@ test("Jev batches all recipients and actions into one direct request", async (t)
     new AbortController().signal,
     tasks,
   );
-  assert.deepEqual(result, [{ botId: bots[0]!.id, action: "fork" }]);
+  assert.deepEqual(result, { coordinatorId: bots[0]!.id, collaboratorIds: [], executionMode: "serialized", finalizerId: bots[0]!.id, routes: [{ botId: bots[0]!.id, action: "fork" }], source: "jev" });
   assert.equal(calls.length, 1);
   assert.equal(calls[0]!.url, "https://opencode.ai/zen/v1/systemone");
   const body = JSON.parse(String(calls[0]!.init!.body));
   assert.equal(body.model, "jev-1.13");
-  assert.equal(Object.keys(body.questions).length, 2);
+  assert.equal(Object.keys(body.questions).length, 6);
   assert.equal(JSON.parse(body.state).message.text, message.text);
   assert.equal(calls[0]!.init!.redirect, "error");
+});
+
+test("Jev distinguishes work with a helper from each bot weighing in", async (t) => {
+  const named = bots.map((bot, i) => ({ ...bot, name: ["News Desk", "Secretary"][i]!, handle: ["news-desk", "secretary"][i]! }));
+  const states: unknown[] = [];
+  t.mock.method(globalThis, "fetch", async (_url: unknown, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    states.push(JSON.parse(body.state));
+    const parallel = states.length === 2;
+    return Response.json({ answers: routeAnswers(named[0]!.id, parallel ? "parallel" : "serialized", [named[1]!.id]) });
+  });
+  const serialMessage = { ...message, text: "@news-desk work with @secretary" };
+  const parallelMessage = { ...message, text: "@news-desk and @secretary each weigh in" };
+  const candidateIds = named.map((bot) => bot.id);
+  const serial = await selectJevBots(config, serialMessage, [], named, new AbortController().signal, [], candidateIds);
+  const parallel = await selectJevBots(config, parallelMessage, [], named, new AbortController().signal, [], candidateIds);
+  assert.equal(serial.coordinatorId, named[0]!.id);
+  assert.deepEqual(serial.collaboratorIds, [named[1]!.id]);
+  assert.equal(serial.executionMode, "serialized");
+  assert.deepEqual(serial.routes.map((route) => route.botId), [named[0]!.id]);
+  assert.equal(parallel.executionMode, "parallel");
+  assert.deepEqual(parallel.routes.map((route) => route.botId), candidateIds);
+  assert.equal(parallel.finalizerId, named[0]!.id);
+  assert.deepEqual((states[0] as { message: { candidateBotIds: string[] } }).message.candidateBotIds, candidateIds);
+});
+
+test("Directed Jev classification keeps every literal recipient", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => Response.json({ answers: {
+    [bots[0]!.id]: choice("steer", 0.9),
+    [bots[1]!.id]: choice("fork", 0.2),
+  } }));
+  assert.deepEqual(
+    await selectJevActions(config, message, [], bots, new AbortController().signal, tasks, bots.map((bot) => bot.id)),
+    [{ botId: bots[0]!.id, action: "steer" }, { botId: bots[1]!.id, action: "followup" }],
+  );
 });
 
 test("uncertain Jev steer and fork decisions default to follow-up", async (t) => {
   t.mock.method(globalThis, "fetch", async () =>
     Response.json({
       answers: {
-        [bots[0]!.id]: choice("steer", 0.3),
-        [bots[1]!.id]: choice("fork", 0.6),
+        ...routeAnswers(bots[0]!.id, "parallel", [bots[1]!.id]),
+        [`action:${bots[0]!.id}`]: choice("steer", 0.3),
+        [`action:${bots[1]!.id}`]: choice("fork", 0.6),
       },
     }),
   );
@@ -110,20 +152,36 @@ test("uncertain Jev steer and fork decisions default to follow-up", async (t) =>
       new AbortController().signal,
       tasks,
     ),
-    bots.map((bot) => ({ botId: bot.id, action: "followup" })),
+    { coordinatorId: bots[0]!.id, collaboratorIds: [bots[1]!.id], executionMode: "parallel", finalizerId: bots[0]!.id, routes: bots.map((bot) => ({ botId: bot.id, action: "followup" })), source: "jev" },
   );
 });
 
-test("explicit recipients cannot be skipped and idle bots cannot be steered", async (t) => {
+test("uncertain parallel work stays with one coordinator", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => Response.json({ answers: {
+    ...routeAnswers(bots[0]!.id, "parallel", [bots[1]!.id]),
+    execution: choice("parallel", 0.3),
+  } }));
+  const plan = await selectJevBots(config, message, [], bots, new AbortController().signal, [], bots.map((bot) => bot.id));
+  assert.equal(plan.executionMode, "serialized");
+  assert.deepEqual(plan.collaboratorIds, [bots[1]!.id]);
+  assert.deepEqual(plan.routes.map((route) => route.botId), [bots[0]!.id]);
+});
+
+test("explicit mentions become candidates and idle bots cannot be steered", async (t) => {
   const request = jevRoutingRequest(message, [], bots, [], [bots[1]!.id]);
-  assert.deepEqual(Object.keys(request.questions), [bots[1]!.id]);
-  const question = request.questions[bots[1]!.id]!;
+  assert.deepEqual(Object.keys(request.questions), ["coordinator", "execution", `collaborator:${bots[1]!.id}`, `action:${bots[1]!.id}`]);
+  const question = request.questions[`action:${bots[1]!.id}`]!;
   assert.deepEqual(
     question.type === "choice" && Object.keys(question.criteria),
-    ["followup"],
+    ["skip", "followup"],
   );
   t.mock.method(globalThis, "fetch", async () =>
-    Response.json({ answers: { [bots[1]!.id]: choice("skip") } }),
+    Response.json({ answers: {
+      coordinator: choice(bots[1]!.id),
+      execution: choice("serialized"),
+      [`collaborator:${bots[1]!.id}`]: choice("no"),
+      [`action:${bots[1]!.id}`]: choice("steer"),
+    } }),
   );
   await assert.rejects(
     selectJevBots(
