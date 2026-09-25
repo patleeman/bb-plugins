@@ -25,7 +25,6 @@ import {
   ChannelsPage,
   ChannelsHeader,
   channelWorkbenchTabs,
-  ChannelsSidebar,
   ChannelsNavigation,
   ChannelRedirect,
   ChannelLinkNavigation,
@@ -339,11 +338,6 @@ export default definePluginApp((app) => {
     component: ChannelsPage,
     headerContent: ChannelsHeader,
     fixedTabs: channelWorkbenchTabs,
-  });
-  app.slots.experimental_threadList({
-    id: "channels",
-    title: "Channels and threads",
-    component: ChannelsSidebar,
   });
   app.slots.experimental_sidebarNavigation({
     id: "channels",

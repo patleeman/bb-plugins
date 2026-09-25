@@ -594,63 +594,16 @@ export function ChannelRedirect({ subPath }: { subPath?: string }) {
   );
   return null;
 }
-export function ChannelsNavigation(props: ExperimentalSidebarNavigationProps) {
-  const [expanded, setExpanded] = useState(false);
-  const channel = props.items.find(
-    (item) =>
-      item.action.kind === "open-plugin-panel" &&
-      item.action.pluginId === "bot-teams" &&
-      item.action.panelId === "channels",
-  );
-  const rest = props.items.filter((item) => item !== channel);
-  const ordered = [rest[0], channel, ...rest.slice(1)].filter((item): item is typeof props.items[number] => !!item);
-  const visible = expanded ? ordered : ordered.slice(0, 10);
+export function ChannelsNavigation({
+  experimental_Original: Original,
+}: ExperimentalSidebarNavigationProps) {
   return (
-    <nav className="channels-navigation" aria-label="Main navigation">
-      {visible.map((item) => {
-        const icon =
-          item === channel
-            ? "MessageSquare"
-            : item.icon.kind === "plugin"
-              ? item.icon.icon || "Puzzle"
-              : {
-                  "new-thread": "MessageCirclePlus",
-                  search: "Search",
-                  extensions: "Puzzle",
-                }[item.icon.name];
-        return (
-          <button
-            key={item.id}
-            {...item.experimental_splitProps}
-            className="channel-nav-row"
-            disabled={item.isDisabled}
-            aria-current={
-              item !== channel && props.activeItemId === item.id
-                ? "page"
-                : undefined
-            }
-            aria-keyshortcuts={item.shortcut?.ariaKeyShortcuts}
-            onClick={(e) =>
-              props.experimental_activate(item.id, {
-                openInSplit: e.metaKey || e.ctrlKey,
-              })
-            }
-          >
-            <Icon name={icon} />
-            <span>{item === channel ? "New channel" : item.label}</span>
-          </button>
-        );
-      })}
-      {ordered.length > 10 && (
-        <button
-          className="channel-nav-row"
-          onClick={() => setExpanded(!expanded)}
-        >
-          <Icon name="MoreHorizontal" />
-          {expanded ? "Less" : "More"}
-        </button>
-      )}
-    </nav>
+    <>
+      <Original />
+      <div className="channels-navigation-list">
+        <ChannelsSidebar activeThreadId={null} onNavigate={() => {}} />
+      </div>
+    </>
   );
 }
 
@@ -698,10 +651,9 @@ function compareChannels(a: Room, b: Room, display: ChannelDisplay): number {
 }
 
 export function ChannelsSidebar({
-  Original,
   onNavigate,
   activeThreadId,
-}: PluginThreadListProps) {
+}: Pick<PluginThreadListProps, "activeThreadId" | "onNavigate">) {
   const { rooms, activeRoomIds, attentionCounts, approvalCounts, error } =
       useRoster(true),
     rpc = useRpc<typeof rpcContract>(),
@@ -1002,9 +954,6 @@ export function ChannelsSidebar({
       {deleting && (
         <DeleteChannel room={deleting} onClose={() => setDeleting(null)} />
       )}
-      <div className="channels-thread-list">
-        <Original />
-      </div>
     </>
   );
 }

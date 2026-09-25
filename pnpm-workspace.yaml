@@ -4,4 +4,4 @@ allowBuilds:
   better-sqlite3: true
   esbuild: true
 minimumReleaseAgeExclude:
-  - '@get-bb/plugin-sdk@0.4.6 || 0.4.21'
+  - '@get-bb/plugin-sdk@0.4.6 || 0.4.21 || 0.5.24'

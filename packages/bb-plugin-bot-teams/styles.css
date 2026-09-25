@@ -1027,6 +1027,11 @@
   padding: 4px 8px;
   font-size: var(--text-sm);
 }
+.channels-navigation-list {
+  max-height: min(36vh, 360px);
+  overflow-y: auto;
+  border-bottom: 1px solid var(--border);
+}
 .channels-sidebar {
   padding: 4px 16px;
   font-size: var(--text-sm);
