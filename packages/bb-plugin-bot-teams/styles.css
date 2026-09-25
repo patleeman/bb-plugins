@@ -1033,7 +1033,7 @@
   border-bottom: 1px solid var(--border);
 }
 .channels-sidebar {
-  padding: 4px 16px;
+  padding: 4px 8px;
   font-size: var(--text-sm);
 }
 .channel-nav-row {
