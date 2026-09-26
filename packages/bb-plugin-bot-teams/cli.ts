@@ -97,14 +97,14 @@ const commands = [
   [
     "list",
     "List bots and channels",
-    "[--retired | --all] [--limit N] [--offset N]",
+    "[--archived | --all] [--limit N] [--offset N]",
   ],
   [
-    "retire",
-    "Retire a bot, stop its work and leave its channels; keep files and history",
+    "archive",
+    "Archive a bot, stop its work and leave its channels; keep files and history",
     "<bot>",
   ],
-  ["restore", "Restore a retired bot with mission work paused", "<bot>"],
+  ["restore", "Restore an archived bot with mission work paused", "<bot>"],
   ["retry", "Retry one failed or stopped channel response", "<job-id>"],
   [
     "channel search",
@@ -701,12 +701,13 @@ export function registerCli(
             ["limit", "offset"],
             command === "channel list"
               ? ["archived", "all"]
-              : ["retired", "all"],
+              : ["archived", "retired", "all"],
           );
           a.positional(0);
-          if (a.flag("all") && (a.flag("archived") || a.flag("retired")))
+          if ((a.flag("all") && (a.flag("archived") || a.flag("retired"))) ||
+              (command === "list" && a.flag("archived") && a.flag("retired")))
             throw new UsageError(
-              "Choose --all or a single archive/retirement filter.",
+              "Choose --all or one archive filter.",
             );
           const { limit, offset } = a.page(100, 50);
           const allRooms = store
@@ -720,7 +721,7 @@ export function registerCli(
             );
           const filteredBots = store
             .all()
-            .filter((b) => a.flag("all") || !!b.retired === a.flag("retired"));
+            .filter((b) => a.flag("all") || !!b.retired === (a.flag("archived") || a.flag("retired")));
           const rooms = allRooms.slice(offset, offset + limit),
             bots = filteredBots.slice(offset, offset + limit);
           const data =
@@ -760,13 +761,13 @@ export function registerCli(
             ].join("\n") || "No results.",
           );
         }
-        if (command === "retire" || command === "restore") {
+        if (command === "archive" || command === "retire" || command === "restore") {
           const a = argumentsFor(rest),
             [selector] = a.positional(1);
           return emit(
             await call("retire", {
               id: ownBot(selector!).id,
-              retired: command === "retire",
+              retired: command !== "restore",
             }),
           );
         }

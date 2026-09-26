@@ -339,7 +339,7 @@ export function ChannelAutomationsView({
                         size="sm"
                         onClick={() => navigate.toThread(run.responseThreadId!)}
                       >
-                        Open DM
+                        Open work thread
                       </Button>
                     )}
                     {run.error && <p role="alert">{run.error}</p>}

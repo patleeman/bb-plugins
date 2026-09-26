@@ -174,11 +174,11 @@ export function ErrorMessage({ error }: { error: string | null }) {
 export function ProfileForm({
   bot,
   onSaved,
-  onRetire,
+  onArchive,
 }: {
   bot: Bot;
   onSaved: (bot: Bot) => void | Promise<void>;
-  onRetire?: () => void;
+  onArchive?: () => void;
 }) {
   const rpc = useRpc<typeof rpcContract>();
   const draftKey = `bb:bots:profile:${bot.id}`;
@@ -310,11 +310,11 @@ export function ProfileForm({
           </FormRow>
         </Section>
         <Section title="Behavior">
-          <FormRow label="Model">
+          <FormRow label="Model" hint="Changing the provider or model starts fresh bot threads. Past threads stay in history.">
             <ProviderModelPicker
               disabled={pending}
               className="profile-picker-control max-w-[360px]"
-              allowProviderChange={false}
+              allowProviderChange
               value={{
                 providerId: draft.providerId,
                 model: draft.model,
@@ -423,23 +423,23 @@ export function ProfileForm({
           </p>
         </details>
       )}
-      {bot && onRetire && (
+      {bot && onArchive && (
         <Section title="Danger zone" className="bot-danger-zone">
           <div className="bot-danger-zone-content">
             <p>
               {bot.retired
-                ? "This bot is retired. Restore it to make it available again."
-                : "Retiring stops this bot and removes it from every channel. Its workspace and history are preserved."}
+                ? "This bot is archived. Restore it to make it available again."
+                : "Archiving stops this bot and removes it from every channel. Its workspace and history are preserved."}
             </p>
             <Button
               type="button"
               size="sm"
               variant={bot.retired ? "outline" : "destructive"}
-              className={bot.retired ? undefined : "bot-retire-button"}
+              className={bot.retired ? undefined : "bot-archive-button"}
               disabled={pending}
-              onClick={onRetire}
+              onClick={onArchive}
             >
-              {bot.retired ? "Restore bot" : "Retire bot"}
+              {bot.retired ? "Restore bot" : "Archive bot"}
             </Button>
           </div>
         </Section>
@@ -723,7 +723,7 @@ const activityTime = (at: number) =>
       ? { timeStyle: "short" }
       : { dateStyle: "short", timeStyle: "short" },
   ).format(at);
-/** Read-only log of bot calls. Each row opens the bot's DM. */
+/** Read-only log of bot calls. Each row opens the bot's work thread. */
 export function WorkList({ jobs, bots }: { jobs: Job[]; bots: Bot[] }) {
   const navigate = useBbNavigate();
   if (!jobs.length) return <EmptyState title="No activity yet" />;
@@ -746,7 +746,7 @@ export function WorkList({ jobs, bots }: { jobs: Job[]; bots: Bot[] }) {
               type="button"
               className="activity-row"
               disabled={!job.threadId}
-              title={job.threadId ? "Open bot DM" : undefined}
+              title={job.threadId ? "Open work thread" : undefined}
               aria-label={`${bot?.name ?? "Bot"}, ${status.label}: ${title}`}
               onClick={() => job.threadId && openWorkThread(navigate, job.threadId, job.roomId)}
             >

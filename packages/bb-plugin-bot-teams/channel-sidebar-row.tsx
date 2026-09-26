@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type ReactNode } from "react";
+import { useId, useRef, useState } from "react";
 import { experimental_Icon as Icon } from "@get-bb/plugin-sdk/app";
 import type { Room } from "./contract";
 import { IconActionTooltip } from "./channel-controls";
@@ -37,10 +37,7 @@ export function ChannelSidebarRow({
   onCopyId,
   onArchive,
   onDelete,
-  children,
 }: {
-  /** Bot DMs shown while this channel is selected. */
-  children?: ReactNode;
   room: Room;
   selected: boolean;
   working: boolean;
@@ -195,7 +192,6 @@ export function ChannelSidebarRow({
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
-    {selected && children}
     </>
   );
 }

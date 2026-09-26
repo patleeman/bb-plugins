@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  ThreadChat,
   experimental_Icon as Icon,
   useBbNavigate,
   useRpc,
@@ -7,7 +8,6 @@ import {
 import { Button } from "./components/ui/button";
 import { openWorkThread } from "./channel-threads";
 import {
-  answerableQuestion,
   type ApprovalDecision,
   type ChannelApproval,
   type rpcContract,
@@ -29,6 +29,73 @@ const decisionResults: Record<ApprovalDecision, string> = {
 const settledMs = 8000;
 
 type Settled = { id: string; botId: string; label: string };
+type Answers = Record<string, { selected: string[]; freeText?: string }>;
+
+function QuestionForm({
+  approval,
+  busy,
+  archived,
+  onAnswer,
+}: {
+  approval: ChannelApproval;
+  busy: boolean;
+  archived: boolean;
+  onAnswer: (answers: Answers) => void;
+}) {
+  const [answers, setAnswers] = useState<Answers>({});
+  const update = (id: string, answer: { selected: string[]; freeText?: string }) =>
+    setAnswers((old) => ({ ...old, [id]: answer }));
+  const ready = approval.questions.length > 0 && approval.questions.every((q) => {
+    const answer = answers[q.id];
+    return !!answer?.selected.length || !!answer?.freeText?.trim();
+  });
+  return (
+    <form className="channel-approval-form" onSubmit={(event) => {
+      event.preventDefault();
+      if (ready) onAnswer(answers);
+    }}>
+      {approval.questions.map((question) => {
+        const answer = answers[question.id] ?? { selected: [] };
+        return (
+          <fieldset key={question.id} className="channel-approval-question" disabled={busy || archived}>
+            <legend>{question.prompt}</legend>
+            {question.options.map((option) => (
+              <label key={option.value} className="channel-approval-option">
+                <input
+                  type={question.multiSelect ? "checkbox" : "radio"}
+                  name={`${approval.id}-${question.id}`}
+                  value={option.value}
+                  checked={answer.selected.includes(option.value)}
+                  onChange={(event) => update(question.id, {
+                    ...answer,
+                    selected: question.multiSelect
+                      ? event.target.checked
+                        ? [...answer.selected, option.value]
+                        : answer.selected.filter((value) => value !== option.value)
+                      : [option.value],
+                  })}
+                />
+                <span>{option.label}{option.description && <small>{option.description}</small>}</span>
+              </label>
+            ))}
+            {question.allowFreeText && (
+              <textarea
+                aria-label={`Your answer to ${question.prompt}`}
+                placeholder={question.options.length ? "Add your own answer" : "Your answer"}
+                value={answer.freeText ?? ""}
+                maxLength={4000}
+                onChange={(event) => update(question.id, { ...answer, freeText: event.target.value })}
+              />
+            )}
+          </fieldset>
+        );
+      })}
+      <Button size="sm" type="submit" disabled={!ready || busy || archived}>
+        {busy ? "Sending…" : "Send answer"}
+      </Button>
+    </form>
+  );
+}
 
 export function approvalFor(
   approvals: ChannelApproval[],
@@ -63,6 +130,7 @@ export function ChannelApprovalDeck({
   const navigate = useBbNavigate();
   const [settled, setSettled] = useState<Settled[]>([]);
   const [pending, setPending] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string[]>([]);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   useEffect(
     () => () => {
@@ -86,7 +154,7 @@ export function ChannelApprovalDeck({
     approval: ChannelApproval,
     input:
       | { decision: ApprovalDecision }
-      | { answer: { questionId: string; selected: string[] } },
+      | { answers: Answers },
     label: string,
   ) => {
     if (pending) return;
@@ -115,7 +183,6 @@ export function ChannelApprovalDeck({
     <section className="channel-approvals" aria-label="Requests waiting on you">
       {waiting.map((approval) => {
         const bot = name(approval.botId);
-        const question = answerableQuestion(approval);
         const busy = pending === approval.id;
         return (
           <article
@@ -151,36 +218,34 @@ export function ChannelApprovalDeck({
                   {decisionLabels[decision]}
                 </Button>
               ))}
-              {question?.options.map((option) => (
+              {approval.kind !== "other" && (
                 <Button
-                  key={option.value}
                   size="sm"
-                  variant="default"
-                  disabled={busy || archived}
-                  onClick={() =>
-                    void answer(
-                      approval,
-                      {
-                        answer: {
-                          questionId: question.id,
-                          selected: [option.value],
-                        },
-                      },
-                      `You answered ${option.label}`,
-                    )
-                  }
+                  variant="ghost"
+                  aria-expanded={expanded.includes(approval.id)}
+                  onClick={() => setExpanded((old) => old.includes(approval.id)
+                    ? old.filter((id) => id !== approval.id)
+                    : [...old, approval.id])}
                 >
-                  {option.label}
+                  {expanded.includes(approval.id) ? "Hide work context" : "Review work context"}
                 </Button>
-              ))}
+              )}
               <Button size="sm" variant="ghost" onClick={() => open(approval)}>
-                Open DM
+                Open work thread
               </Button>
             </div>
-            {approval.kind === "other" && (
-              <p className="channel-approval-note">
-                Answer this one in the bot’s DM.
-              </p>
+            {approval.kind === "question" && (
+              <QuestionForm
+                approval={approval}
+                busy={busy}
+                archived={archived}
+                onAnswer={(answers) => void answer(approval, { answers }, "Answered by you")}
+              />
+            )}
+            {(approval.kind === "other" || expanded.includes(approval.id)) && (
+              <div className="channel-approval-native" aria-label="Work thread request">
+                <ThreadChat threadId={approval.threadId} variant="compact" layout="contained" />
+              </div>
             )}
           </article>
         );

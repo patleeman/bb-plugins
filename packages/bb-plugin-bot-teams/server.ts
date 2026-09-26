@@ -18,6 +18,7 @@ import {
   responseBehavior,
   type Bot,
   type BotCreateRequest,
+  type Conversation,
   type Room,
   type Attachment,
 } from "./contract";
@@ -27,6 +28,7 @@ import { usePersonalProject } from "./bot-project";
 import {
   Runtime,
   jobPrompt,
+  legacyBotStartMessage,
   missingThread,
   primaryLane,
   roomTitleThreadPrefix,
@@ -75,6 +77,70 @@ function botCreateRequestView(request: BotCreateRequest) {
 export default async function plugin(bb: BbPluginApi) {
   const store = new Store(bb.storage.database());
   const runtime = new Runtime(bb, store);
+  const activeConversations = (id: string) =>
+    store.conversations(id).filter((c) =>
+      !c.archivedAt && !isForkConversation(c.key));
+  const removeLegacyDirectStart = async (conversation: Conversation, queued: Awaited<
+    ReturnType<typeof bb.sdk.threads.queuedMessages.list>
+  >) => {
+    if (conversation.key !== "admin") return queued;
+    const legacy = queued.filter((item) =>
+      item.originPluginId === "bot-teams" &&
+      item.content.length === 1 &&
+      item.content[0]?.type === "text" &&
+      item.content[0].text === legacyBotStartMessage);
+    for (const item of legacy)
+      await bb.sdk.threads.queuedMessages.delete({
+        threadId: conversation.threadId,
+        queuedMessageId: item.id,
+      });
+    return queued.filter((item) => !legacy.includes(item));
+  };
+  const assertConversationIdle = async (conversation: Conversation) => {
+    try {
+      const thread = await bb.sdk.threads.get({ threadId: conversation.threadId });
+      if (thread.status === "active")
+        throw new Error("Wait for this bot's current response before starting a new thread.");
+      const queued = await removeLegacyDirectStart(conversation, await bb.sdk.threads.queuedMessages.list({
+        threadId: conversation.threadId,
+      }));
+      if (queued.length)
+        throw new Error("Wait for this bot's queued messages before starting a new thread.");
+    } catch (cause) {
+      if (!missingThread(cause)) throw cause;
+      store.deleteConversation(conversation.threadId);
+    }
+  };
+  const ensureDirectConversation = async (bot: Bot) => {
+    const current = activeConversations(bot.id).find((c) => c.key === "admin");
+    if (current) {
+      try {
+        await bb.sdk.threads.get({ threadId: current.threadId });
+        await removeLegacyDirectStart(current, await bb.sdk.threads.queuedMessages.list({
+          threadId: current.threadId,
+        }));
+        return current;
+      } catch (cause) {
+        if (!missingThread(cause)) throw cause;
+        store.deleteConversation(current.threadId);
+      }
+    }
+    return runtime.conversation(bot, "admin", "admin", "Direct message");
+  };
+  const newDirectConversation = async (bot: Bot) => {
+    const current = activeConversations(bot.id).find((c) => c.key === "admin");
+    if (!current) return ensureDirectConversation(bot);
+    await assertConversationIdle(current);
+    // A deleted BB thread is removed by assertConversationIdle.
+    if (!store.byThread(current.threadId)) return ensureDirectConversation(bot);
+    store.archiveConversation(current);
+    try {
+      return await ensureDirectConversation(bot);
+    } catch (cause) {
+      store.restoreConversation(current);
+      throw cause;
+    }
+  };
   const notifications = new ChannelNotifications(bb, store);
   const approvals = new ChannelApprovals(bb, store, () => runtime.changed());
   bb.rpc.register(
@@ -615,9 +681,10 @@ export default async function plugin(bb: BbPluginApi) {
     },
     channelForThread: ({ threadId }) => {
       const conversation = store.byThread(threadId);
-      if (conversation?.kind !== "group" || !conversation.key.startsWith("group:"))
+      const key = conversation?.originalKey ?? conversation?.key;
+      if (conversation?.kind !== "group" || !key?.startsWith("group:"))
         return null;
-      const roomId = conversation.key.slice("group:".length).split(":")[0]!;
+      const roomId = key.slice("group:".length).split(":")[0]!;
       return store.findRoom(roomId) ? roomId : null;
     },
     channelFiles: ({ id, before }) => runtime.data.files(id, before),
@@ -741,8 +808,10 @@ export default async function plugin(bb: BbPluginApi) {
     },
     retire: ({ id, retired }) => runtime.retire(id, retired),
     retryJob: ({ id }) => runtime.retryJob(id),
-    history: ({ id, before, query, limit }) =>
-      store.history(id, before, query, limit),
+    history: ({ id, before, after, through, query, limit }) =>
+      after
+        ? store.historyAfter(id, after, through, limit)
+        : store.history(id, before, query, limit),
     transcript: ({ id, ...options }) => store.transcript(id, options),
     get: ({ id }) => ({
       bot: store.get(id),
@@ -760,36 +829,50 @@ export default async function plugin(bb: BbPluginApi) {
             "This profile changed elsewhere. Reload the latest profile before saving.",
           );
         const profile = { ...previous, ...patch };
-        if (profile.providerId !== previous.providerId)
-          throw new Error(
-            "An existing bot keeps its provider so its conversations stay intact. Create another bot to use a different provider.",
-          );
         const bot = {
           ...previous,
           ...profile,
           updatedAt: Math.max(Date.now(), previous.updatedAt + 1),
         };
-        // Existing canonical chats pick up model changes as well as future rooms.
-        if (
-          bot.model !== previous.model ||
-          bot.reasoningLevel !== previous.reasoningLevel
-        ) {
-          for (const c of store.conversations(id)) {
-            try {
-              await bb.sdk.threads.update({
-                threadId: c.threadId,
-                model: bot.model || null,
-                reasoningLevel: bot.reasoningLevel,
-              });
-            } catch (cause) {
-              if (!missingThread(cause)) throw cause;
-              store.db
-                .prepare("DELETE FROM conversations WHERE thread_id=?")
-                .run(c.threadId);
-            }
+        const changedModel = bot.providerId !== previous.providerId ||
+          bot.model !== previous.model;
+        if (changedModel) {
+          if (store.work(id).some(isExecuting))
+            throw new Error("Wait for this bot's current work before changing its provider or model.");
+          const conversations = activeConversations(id);
+          for (const conversation of conversations)
+            await assertConversationIdle(conversation);
+          const present = conversations.filter((c) => !!store.byThread(c.threadId));
+          store.db.transaction(() => {
+            for (const conversation of present) store.archiveConversation(conversation);
+            store.put(bot);
+          })();
+          try {
+            if (present.some((c) => c.key === "admin"))
+              await ensureDirectConversation(bot);
+          } catch (cause) {
+            store.db.transaction(() => {
+              store.put(previous);
+              for (const conversation of present)
+                store.restoreConversation(conversation);
+            })();
+            throw cause;
           }
+        } else {
+          if (bot.reasoningLevel !== previous.reasoningLevel)
+            for (const c of activeConversations(id)) {
+              try {
+                await bb.sdk.threads.update({
+                  threadId: c.threadId,
+                  reasoningLevel: bot.reasoningLevel,
+                });
+              } catch (cause) {
+                if (!missingThread(cause)) throw cause;
+                store.deleteConversation(c.threadId);
+              }
+            }
+          store.put(bot);
         }
-        store.put(bot);
         runtime.changed();
         return bot;
       }),
@@ -804,7 +887,7 @@ export default async function plugin(bb: BbPluginApi) {
             await runtime.cancel(job, "Bot paused by the owner.");
           for (const c of store
             .conversations(id)
-            .filter((c) => c.kind !== "group"))
+            .filter((c) => c.kind !== "group" && !c.archivedAt))
             await bb.sdk.threads.stop({ threadId: c.threadId });
           runtime.busy.delete(id);
         }
@@ -838,9 +921,9 @@ export default async function plugin(bb: BbPluginApi) {
     wake: ({ id }) =>
       runtime.locked(id, async () => ({ queued: runtime.wake(store.get(id)) })),
     conversation: ({ id }) =>
-      runtime.locked(id, () =>
-        runtime.conversation(store.get(id), "admin", "admin", "Bot chat"),
-      ),
+      runtime.locked(id, () => ensureDirectConversation(store.get(id))),
+    newConversation: ({ id }) =>
+      runtime.locked(id, () => newDirectConversation(store.get(id))),
     handoffSource: async ({ threadId }) => {
       const thread = await bb.sdk.threads.get({ threadId });
       return {
@@ -1342,16 +1425,50 @@ export default async function plugin(bb: BbPluginApi) {
             sendAt: Date.now() + 1500,
           }
         : { action: "proceed" };
-    // Native BB replies in a bot thread belong to the owner, even when that
-    // thread was originally created for channel or mission work. The checks
-    // below guard Bot Teams' own dispatches, not direct conversation.
+    // Channel work threads are execution records. Owner requests belong in
+    // the channel, where their audience and reply destination are explicit.
+    const managedInput = store
+      .work(c.botId)
+      .some(
+        (job) =>
+          job.threadId === context.thread.id &&
+          isExecuting(job) &&
+          (context.input.text === jobPrompt(job) ||
+            context.input.text === job.pendingSteer?.priorPrompt),
+      );
+    if (c.archivedAt)
+      return {
+        action: "reject",
+        message: c.kind === "admin"
+          ? `This direct message is in history. Open the current chat: /plugins/bot-teams/channels/dm/${c.botId}`
+          : "This bot thread is in history. Send a new request in its channel.",
+      };
+    if (c.kind === "group" && context.initiator === "user" &&
+        context.originPluginId !== "bot-teams" && !managedInput) {
+      const roomId = c.key.slice("group:".length).split(":")[0];
+      return {
+        action: "reject",
+        message: `Send this request in the channel: /plugins/bot-teams/channels/${roomId}`,
+      };
+    }
+    const bot = store.get(c.botId);
+    if (bot.retired && c.kind === "admin")
+      return {
+        action: "reject",
+        message: "This bot is archived. Restore it from the Bot Teams page.",
+      };
+    if (bot.paused && c.kind === "admin")
+      return {
+        action: "wait",
+        reason: "This bot is paused. Resume it from the Bot Teams page.",
+      };
+    // Native owner replies to setup and mission threads remain direct.
     if (context.initiator === "user" && context.originPluginId !== "bot-teams")
       return { action: "proceed" };
-    const bot = store.get(c.botId);
     if (bot.retired)
       return {
         action: "reject",
-        message: "This bot is retired. Restore it from the Bot Teams page.",
+        message: "This bot is archived. Restore it from the Bot Teams page.",
       };
     if (bot.paused && c.kind !== "group")
       return {
@@ -1374,7 +1491,7 @@ export default async function plugin(bb: BbPluginApi) {
         return {
           action: "reject",
           message:
-            "Send a message from the group chat or this bot's canonical chat.",
+            "Send a message from the channel.",
         };
       if (job.roomId) {
         const room = store.room(job.roomId);
@@ -1411,7 +1528,7 @@ export default async function plugin(bb: BbPluginApi) {
       throw cause;
     }
   };
-  // A bot's DM row must not outlive the thread it points at.
+  // A bot work thread must not outlive the thread it points at.
   bb.events.on("thread.deleted", ({ thread }) => {
     if (store.byThread(thread.id)) store.deleteConversation(thread.id);
   });
@@ -1492,6 +1609,7 @@ export default async function plugin(bb: BbPluginApi) {
   });
   bb.background.service("rooms", {
     async start(signal) {
+      await runtime.renameLegacyWorkThreads();
       await runtime.recoverRoomTitles();
       await recoverRoutingSessions(bb, store);
       await recoverApprovedBotCreates(signal);

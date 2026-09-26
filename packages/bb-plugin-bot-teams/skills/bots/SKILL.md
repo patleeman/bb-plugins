@@ -68,15 +68,13 @@ channels it belongs to through these tools; creating one automatically joins its
 creator. Bots may request another persistent bot with `bb bots create`, but BB
 pauses for explicit owner approval before creating its workspace and profile.
 Review these requests in **Plugins → Bots → Pending bot approvals**; they are
-not hidden inside the requesting bot’s DM.
+not hidden inside the requesting bot’s work thread.
 For a channel task, a bot’s final answer posts to the channel automatically. Use
 that answer or an explicit @mention instead of sending a duplicate via a tool.
-The owner can also send a DM by typing in the bot's BB thread. After a channel
-task ends, the bot's reply stays in the DM. If the owner asks to share it with
-the channel, use `bots_channel_send` once. A DM received during an active
-channel task may be addressed in the task's final channel answer. Whenever an
-answer goes to the channel, it shows a tombstone linking to the DM and the
-posted answer; the owner's DM text stays in the BB thread.
+The owner sends channel requests in the channel. A bot's BB thread is its work
+record for that channel, including tools and approvals. Direct owner messages
+to a channel work thread are rejected with a link to the channel. Never copy
+private text from an older work thread into a channel answer.
 Cross-channel consultations exclude the sender, allow up to three explicit
 messages per work session, and keep the two-hop handoff limit. A request is capped
 at 32 responses. Stop and limits are surfaced in request status. Each channel has
@@ -164,7 +162,7 @@ by a channel selector. Archive cancels unfinished work and keeps history.
 its messages, reactions, membership, activity, and draft uploads after stopping
 unfinished responses. The UI offers the same action in the sidebar context
 menu and channel options, with a confirmation dialog. Bot profiles and workspaces
-are preserved; existing bot DMs and sent project files remain
+are preserved; existing bot work threads and sent project files remain
 in BB storage. Prefer archive when history should remain available.
 `channel list` shows active channels; use `--archived` or `--all` for others.
 `channel messages` returns chronological messages within each page, with the
@@ -211,7 +209,7 @@ BB Automations in the Bots project, backed by a fixed script that queues channel
 work. Run history records **dispatch**, while channel Activity records the bot's
 response and failures. Pause/delete affects future runs; stop an existing response
 in Activity. If the previous response or its handoffs remain unfinished, the next
-tick is skipped. Archived/deleted channels and retired/removed bots do not wake.
+tick is skipped. Archived or deleted channels and archived or removed bots do not wake.
 Existing schedules remain in Automations for inspection and cleanup. Restoring a
 channel or reinviting a bot makes an enabled schedule eligible again.
 
@@ -251,9 +249,9 @@ bb bots job JOB_ID --json
 bb bots stop JOB_ID --json
 ```
 
-Activity includes response IDs, status, errors, and BB thread IDs for bot DMs. Stop
+Activity includes response IDs, status, errors, and BB thread IDs for bot work threads. Stop
 targets that specific response, leaves the channel open, and is idempotent.
-Use `bb thread show THREAD_ID` to inspect the bot DM when needed.
+Use `bb thread show THREAD_ID` to inspect the bot work thread when needed.
 History, reactions, work, and bot files survive restarts. CLI output is bounded;
 reduce `--limit` for large message or activity pages.
 
@@ -263,19 +261,19 @@ A request to consult a group authorizes creating a consultation channel, invitin
 relevant bots, sharing the task brief, and asking focused follow-ups. Do not change
 other bots’ missions or share unrelated private conversation data.
 
-## History, retirement, and recovery
+## History, archiving, and recovery
 
 - `bb bots channel search <channel> <query> [--before MESSAGE_ID] [--limit N] --json`
   searches all retained message text and speaker names. Use `nextBefore` as the
   next `--before` cursor; it remains stable when new messages arrive.
-- `bb bots retire <bot> --json` stops current work and removes the bot from all
+- `bb bots archive <bot> --json` stops current work and removes the bot from all
   channels while retaining its profile, mission, memory, files, and history.
-- `bb bots list --retired --json` finds retired bots. `--all` includes both states.
+- `bb bots list --archived --json` finds archived bots. `--all` includes both states.
 - `bb bots restore <bot> --json` restores availability with mission work paused.
   Invite the bot to its channels again explicitly.
 - `bb bots retry <job-id> --json` retries one failed or stopped channel response.
   Repeating the command returns the same retry. To retry a failed retry, use its
-  new job ID. Archived channels and retired/nonmember bots must be restored and
+  new job ID. Archived channels and archived/nonmember bots must be restored and
   invited first. Unresolved cancellation must finish before retrying.
 
 ## Response behavior and chat etiquette
@@ -324,7 +322,7 @@ do not post images. Do not substitute local Markdown image paths for this tool.
 
 ## Channel knowledge, artifacts, and budgets
 
-Channels have no shared context store. Your bot DM for each channel keeps
+Channels have no shared context store. Your bot work thread for each channel keeps
 that channel's history. Use shared `MEMORY.md` only for facts appropriate to all
 your channels.
 

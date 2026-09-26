@@ -149,8 +149,8 @@ test("CLI creates and patches profiles, preserves fields, and exposes its skill"
       "Researcher",
     );
     const changed = await x.run(["update", b.id, "--provider", "different"]);
-    assert.notEqual(changed.exitCode, 0);
-    assert.equal(x.store.get(b.id).providerId, "codex");
+    assert.equal(changed.exitCode, 0);
+    assert.equal(x.store.get(b.id).providerId, "different");
     const invalid = await x.run(["update", b.id, "--interval", "-1"]);
     assert.equal(invalid.exitCode, 2);
     await x.create("Atlas");
@@ -401,9 +401,22 @@ test("approved creation rolls back the bot when recording completion fails", asy
   }
 });
 
-test("CLI propagates default-model reasoning and clearing a model to existing work threads", async () => {
+test("CLI updates reasoning and starts fresh threads when a model changes", async () => {
   const x = await setup();
   try {
+    let sequence = 0;
+    x.harness.sdk.stub("threads.spawn", async () =>
+      makeThreadResponse({ id: `thr_replacement_${++sequence}`, status: "idle" }));
+    const clearedStarts = new Set<string>();
+    x.harness.inspection.sdk.stub("threads.queuedMessages.list", async ({ threadId }) =>
+      String(threadId).startsWith("thr_replacement_") && !clearedStarts.has(threadId) ? [{
+        id: `start_${threadId}`,
+        content: [{ type: "text", text: "Preparing direct message" }],
+      }] : []);
+    x.harness.inspection.sdk.stub("threads.queuedMessages.delete", async ({ threadId }) => {
+      clearedStarts.add(threadId);
+      return { ok: true };
+    });
     const bot = botSchema.parse(
       await x.ok(["create", "Default", "--mission", "Review facts"]),
     );
@@ -419,14 +432,16 @@ test("CLI propagates default-model reasoning and clearing a model to existing wo
     await x.ok(["update", bot.id, "--reasoning", "high"]);
     assert.deepEqual(
       x.harness.inspection.sdk.callsTo("threads.update").at(-1)?.[0],
-      { threadId: "thr_existing", model: null, reasoningLevel: "high" },
+      { threadId: "thr_existing", reasoningLevel: "high" },
     );
     await x.ok(["update", bot.id, "--model", "model-b"]);
+    const second = x.store.conversations(bot.id).find((c) => c.key === "admin")!;
+    assert.notEqual(second.threadId, "thr_existing");
+    assert.equal(x.store.byThread("thr_existing")?.originalKey, "admin");
     await x.ok(["update", bot.id, "--model", ""]);
-    assert.deepEqual(
-      x.harness.inspection.sdk.callsTo("threads.update").at(-1)?.[0],
-      { threadId: "thr_existing", model: null, reasoningLevel: "high" },
-    );
+    const third = x.store.conversations(bot.id).find((c) => c.key === "admin")!;
+    assert.notEqual(third.threadId, second.threadId);
+    assert.equal(x.store.byThread(second.threadId)?.originalKey, "admin");
     assert.equal(x.store.get(bot.id).model, "");
   } finally {
     await x.close();
@@ -983,13 +998,13 @@ test("CLI retirement, restoration, and searching retained channel history", asyn
     ])) as { messages: unknown[]; nextBefore: null };
     assert.equal(next.messages.length, 2);
     assert.equal(next.nextBefore, null);
-    await x.ok(["retire", b.id]);
+    await x.ok(["archive", b.id]);
     assert.equal(
       ((await x.ok(["list"])) as { bots: unknown[] }).bots.length,
       0,
     );
     assert.equal(
-      ((await x.ok(["list", "--retired"])) as { bots: unknown[] }).bots.length,
+      ((await x.ok(["list", "--archived"])) as { bots: unknown[] }).bots.length,
       1,
     );
     await x.ok(["restore", b.id]);
@@ -1019,13 +1034,13 @@ test("filtered bot list pagination counts only visible bots", async () => {
     };
     assert.equal(active.bots.length, 1);
     assert.equal(active.nextOffset, null);
-    const retired = (await x.ok(["list", "--retired"])) as {
+    const retired = (await x.ok(["list", "--archived"])) as {
       bots: unknown[];
       nextOffset: number;
     };
     assert.equal(retired.bots.length, 50);
     assert.equal(retired.nextOffset, 50);
-    assert.equal((await x.run(["list", "--retired", "--all"])).exitCode, 2);
+    assert.equal((await x.run(["list", "--archived", "--all"])).exitCode, 2);
   } finally {
     await x.close();
   }

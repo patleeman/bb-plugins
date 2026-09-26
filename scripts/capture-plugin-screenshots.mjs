@@ -1279,10 +1279,13 @@ const captures = [
           throw new Error("Seed a thumbs-up reaction on the live Atlas reply before capturing");
         }
         const header = document.querySelector(".channel-header");
-        const title = header.querySelector('button.channel-title');
         const row = header.closest('[data-testid="app-page-header-content-row"]');
+        const title = row.querySelector('.channel-title[role="button"]');
         if (!title || title.textContent.trim() !== "#Launch room" || !title.getAttribute("aria-label").includes("Rename channel")) {
           throw new Error("The channel name must be the clickable header title");
+        }
+        if (!row.firstElementChild.contains(title)) {
+          throw new Error("The channel title must sit inside BB's native pane drag handle");
         }
         if (title.getBoundingClientRect().left > row.getBoundingClientRect().left + 24 || /Channels/.test(row.innerText)) {
           throw new Error("The channel title must replace Channels at the left of the header");

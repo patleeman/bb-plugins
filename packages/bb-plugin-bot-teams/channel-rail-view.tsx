@@ -242,7 +242,7 @@ function LiveRow({
         type="button"
         className="channel-rail-row channel-rail-live-open"
         disabled={!entry.threadId}
-        title={entry.threadId ? "Open this bot's DM" : undefined}
+        title={entry.threadId ? "Open this bot's work thread" : undefined}
         onClick={() =>
           entry.threadId && openWorkThread(navigate, entry.threadId, roomId)
         }
@@ -287,8 +287,8 @@ function LiveRow({
 }
 
 /**
- * A member and their DM are the same bot, so this is one row: it carries the
- * bot's state and opens its DM when there is one.
+ * A member and their work thread are linked, so this row carries the
+ * bot's state and opens its work thread when there is one.
  */
 function MemberRow({
   member,
@@ -302,8 +302,8 @@ function MemberRow({
   const { threadId } = useBbContext();
   const navigate = useBbNavigate();
   const actions = useSidebarThreadActions();
-  const dm = thread?.threadId ?? member.threadId;
-  const split = useSidebarThreadSplit(dm ?? "");
+  const workThreadId = thread?.threadId ?? member.threadId;
+  const split = useSidebarThreadSplit(workThreadId ?? "");
   const stateLabels = {
     working: "Working",
     queued: "Queued",
@@ -313,27 +313,27 @@ function MemberRow({
   } as const;
   // An idle bot is the resting case; saying so on every row is just noise.
   const showState = member.state !== "idle";
-  const splittable = !!dm && split.isAvailable;
+  const splittable = !!workThreadId && split.isAvailable;
   return (
     <button
       type="button"
       className="channel-rail-row"
-      aria-current={dm && threadId === dm ? "page" : undefined}
+      aria-current={workThreadId && threadId === workThreadId ? "page" : undefined}
       title={
         splittable
           ? "Drag or ⌘-click to open in a split"
           : // Live activity already reads in Live now; only a fault is worth a tooltip.
             (member.state === "attention" ? (member.detail ?? undefined) : undefined)
       }
-      {...(dm ? split.splitProps : {})}
+      {...(workThreadId ? split.splitProps : {})}
       onClick={(event) => {
-        if (!dm)
+        if (!workThreadId)
           return navigate.toPluginPanel("bots", {
             subPath: `${member.bot.id}/profile`,
           });
         if (splittable && (event.metaKey || event.ctrlKey))
-          actions.open(dm, { split: true });
-        else openWorkThread(navigate, dm, roomId);
+          actions.open(workThreadId, { split: true });
+        else openWorkThread(navigate, workThreadId, roomId);
       }}
     >
       <span className="channel-rail-avatar" aria-hidden>
@@ -608,7 +608,7 @@ export function ChannelRail({
               render={(member) => (
                 <MemberRow
                   member={member}
-                  thread={threads.find((dm) => dm.botId === member.bot.id)}
+                  thread={threads.find((entry) => entry.botId === member.bot.id)}
                   roomId={room.id}
                 />
               )}

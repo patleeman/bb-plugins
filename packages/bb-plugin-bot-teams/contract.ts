@@ -135,6 +135,10 @@ export const conversationSchema = z.object({
   title: z.string(),
   kind: z.enum(["admin", "group", "mission"]),
   createdAt: z.number(),
+  archivedAt: z.number().optional(),
+  originalKey: z.string().optional(),
+  providerId: z.string().optional(),
+  model: z.string().optional(),
 });
 export type Conversation = z.infer<typeof conversationSchema>;
 export const attachmentSchema = z.object({
@@ -317,7 +321,7 @@ export const approvalQuestion = z.object({
     )
     .default([]),
 });
-/** A bot's pending request, forwarded from its DM into the channel. */
+/** A bot's pending request, forwarded from its work thread into the channel. */
 export const approvalSchema = z.object({
   id: z.string(),
   threadId: z.string(),
@@ -332,14 +336,6 @@ export const approvalSchema = z.object({
   createdAt: z.number(),
 });
 export type ChannelApproval = z.infer<typeof approvalSchema>;
-/** Only a single plain question is answerable from the channel. */
-export const answerableQuestion = (approval: ChannelApproval) =>
-  approval.kind === "question" &&
-  approval.questions.length === 1 &&
-  !approval.questions[0]!.multiSelect &&
-  approval.questions[0]!.options.length > 0
-    ? approval.questions[0]!
-    : null;
 export const notifyInput = z.object({
   channelId: z.string().uuid(),
   requestId: z.string().uuid(),
@@ -547,13 +543,18 @@ export const rpcContract = defineRpcContract({
     input: z.object({
       id: z.string().uuid(),
       before: z.string().optional(),
+      after: z.string().optional(),
+      through: z.string().optional(),
       query: z.string().trim().max(500).optional(),
       limit: z.number().int().min(1).max(100).default(50),
-    }),
+    }).refine((input) => !(input.before && input.after), "Choose one history cursor.")
+      .refine((input) => !input.through || !!input.after, "A range needs an after cursor.")
+      .refine((input) => !input.after || !input.query, "Search and forward ranges cannot be combined."),
     output: z.object({
       messages: z.array(messageSchema),
       parents: z.array(messageSchema),
       nextBefore: z.string().nullable(),
+      nextAfter: z.string().nullable(),
     }),
   },
   transcript: {
@@ -606,6 +607,10 @@ export const rpcContract = defineRpcContract({
     output: z.object({ queued: z.boolean() }),
   },
   conversation: {
+    input: z.object({ id: idSchema }),
+    output: conversationSchema,
+  },
+  newConversation: {
     input: z.object({ id: idSchema }),
     output: conversationSchema,
   },
@@ -730,17 +735,17 @@ export const rpcContract = defineRpcContract({
         threadId: z.string().min(1).max(200),
         interactionId: z.string().min(1).max(200),
         decision: approvalDecision.optional(),
-        answer: z
-          .object({
-            questionId: z.string().min(1).max(200),
+        answers: z.record(
+          z.string().min(1).max(200),
+          z.object({
             selected: z.array(z.string().max(500)).max(32),
             freeText: z.string().max(4000).optional(),
-          })
-          .optional(),
+          }),
+        ).optional(),
       })
       .refine(
-        (v) => (v.decision === undefined) !== (v.answer === undefined),
-        "Send either a decision or an answer.",
+        (v) => (v.decision === undefined) !== (v.answers === undefined),
+        "Send either a decision or answers.",
       ),
     output: z.object({ resolved: z.literal(true) }),
   },

@@ -7,9 +7,9 @@ Persistent bots with their own files, mission, and memory, and Slack-style chann
 1. Choose **New channel** in the sidebar to open an empty conversation with the composer ready. It starts with just you. After the first message, an agent privately suggests a short channel title; click its name at the left of the header to rename it at any time.
 2. Type `@` to find a bot or choose `@all` / `@channel` to address everyone in the channel. Sending a mention invites that bot into the channel. The picker also includes **Create new bot…**, which opens a new thread with bot setup instructions prefilled. Describe what you need in chat; the agent creates the bot and invites it to this channel. Your channel draft stays saved.
 3. Click the overlapping avatars in the header to see members and their activity. **Add bot** sits at the bottom; member options let you configure or remove a bot.
-4. Open **Bot Teams** to administer profiles, `MISSION.md`, `MEMORY.md`, and activity. The collection uses BB's standard content width, search toolbar, status filter, sorting, and bordered rows. Shared conversations live in Channels. Each bot also has a DM you can open from its channel.
+4. Choose a bot under **Direct messages**, below Channels in the left sidebar, to chat privately. Open **Bot Teams** to manage profiles, edit `MISSION.md` and `MEMORY.md`, or inspect activity. The collection uses BB's standard content width, search toolbar, status filter, sorting, and bordered rows. Shared conversations live in Channels. Each bot also has a work thread you can open from its channel activity.
 
-In a thread, choose **Handoff to new channel** from the composer’s **+** menu, or **Start channel from thread** from the thread’s sidebar menu. Bot Teams opens a new channel with an editable draft that references the source thread. Add bots and your request, then send it.
+In a thread, choose **Handoff to new channel** from the composer’s **+** menu, or **Start channel from thread** from the thread’s sidebar menu. Bot Teams opens a new channel with a removable source thread chip above the editable message. Add bots and your request, then send it. The sent message keeps the thread reference as a link.
 
 **New bot** in the collection opens the same conversation flow without a channel invitation. Send the prefilled instructions, or add your bot’s purpose first. The agent handles the name, mission, model, and permissions using sensible defaults.
 
@@ -19,6 +19,8 @@ highlighting, line numbers, formatting controls, find and replace, undo/redo,
 and a rendered preview. Use ⌘S / Ctrl+S to save. The editor adapts to the viewport
 and shows unsaved/saved state. Reloading with unsaved edits asks before
 discarding them. Profile, mission, and memory drafts survive navigation and reloads on the same device. Profile and document saves reject stale versions instead of overwriting newer edits. Interrupted host cancellation stays visible and retries automatically.
+
+Active bots appear under **Direct messages** in the Channels sidebar. Channels and Direct messages can each be collapsed and searched. Use the Direct messages three-dot menu to show archived bots. Opening a bot shows its current direct thread in BB's regular chat layout. New direct threads open empty, with no queued introduction. Choose **New thread** from the thread's three-dot menu or enter `/new` in its composer to start fresh. The **Threads** workbench tab lists the current and previous direct threads; past threads open as read-only transcripts. The composer model picker updates the bot's provider or model and starts fresh bot threads: the current direct chat is replaced immediately, while channel and mission work threads are created with the new selection on their next task. Earlier threads remain available through the Threads workbench or their channel work links. Wait for current work and queued messages to finish before changing a provider or model.
 
 Your channel messages appear in right-aligned bubbles, like regular threads.
 Bot and BB agent messages stay left-aligned with their names and avatars.
@@ -42,11 +44,11 @@ The **Chat mode** selector beneath the message box has three choices:
 - **Directed** calls bots you mention or reply to. A channel with just one eligible bot always routes to that bot, in every chat mode.
 - **Everyone** lets all members consider unaddressed messages, useful for group reviews.
 
-`@handle` and replies to a bot address that bot in Directed mode; in Smart mode they identify candidates. These are channel messages, not DMs. `@all` and `@channel` request every current member (`@everyone` is also supported). Choosing a mode in the UI or owner CLI remembers it for future channels. Existing channels keep Everyone until changed. Smart helpers return their results through the coordinator, who posts the final answer. A bot can request a teammate’s help with an explicit mention, with up to two further handoffs per message. `[PASS]` produces no public reply unless the bot has published images for that response.
+`@handle` and replies to a bot address that bot in Directed mode; in Smart mode they identify candidates. These are channel messages. `@all` and `@channel` request every current member (`@everyone` is also supported). Choosing a mode in the UI or owner CLI remembers it for future channels. Existing channels keep Everyone until changed. Smart helpers return their results through the coordinator, who posts the final answer. A bot can request a teammate’s help with an explicit mention, with up to two further handoffs per message. `[PASS]` produces no public reply unless the bot has published images for that response.
 
 Channels do not need to be started or resumed. A working bot appears at the bottom of the transcript with its latest safe one-line activity and a muted **Stop** control for its current response. Stopping a response leaves the channel open. Each bot has a primary session per channel. Each session handles one task at a time, and the same bot can work in separate channels concurrently. Forks answer separate requests concurrently, with their own activity and Stop controls. Mentions choose the recipient; they do not imply an interruption.
 
-Hover or focus a message on desktop for **React**, **Reply**, **Copy**, and a link to its bot DM or source thread when available. Right-click, use Shift+F10, or long-press to open the unified message menu with **Reply**, **Add selected text to chat**, **Emoji**, **Copy**, and that same link. The full emoji picker supports text search, category browsing, skin tones, recently used emoji, and keyboard selection. It uses [Emoji Picker React](https://github.com/ealush/emoji-picker-react) with native emoji and BB’s theme colors. Emoji reactions persist, show who reacted, and toggle when clicked. Bots can use `bots_react` to acknowledge a message without writing another response. Reactions do not start more work. Replies link back to their original message.
+Hover or focus a message on desktop for **React**, **Reply**, **Copy**, and a link to its bot work thread or source thread when available. Right-click, use Shift+F10, or long-press to open the unified message menu with **Reply**, **Add selected text to chat**, **Emoji**, **Copy**, and that same link. The full emoji picker supports text search, category browsing, skin tones, recently used emoji, and keyboard selection. It uses [Emoji Picker React](https://github.com/ealush/emoji-picker-react) with native emoji and BB’s theme colors. Emoji reactions persist, show who reacted, and toggle when clicked. Bots can use `bots_react` to acknowledge a message without writing another response. Reactions do not start more work. Replies link back to their original message.
 
 Bots receive standing guidance to write brief, conversational replies, use Markdown when it improves scanning, avoid dense walls of text and assistant boilerplate, and stay silent when they have nothing useful to add. Channel messages use BB’s native Markdown renderer, including short paragraphs, bullets, numbered steps, inline code, fenced code blocks, and links. They can react sparingly for acknowledgment (👍), completed or verified work (✅), or celebration (🎉). Questions and assignments addressed to a bot in the channel still need an answer, action, or blocker.
 
@@ -64,10 +66,10 @@ The composer is adapted from BB’s thread composer: the same prompt box, **+** 
 
 PNG, JPEG, GIF, and WebP images appear as composer previews and inline in sent messages, including images pasted with text. Click an image to expand it and download the original. Other file types stay downloadable. Image bytes are checked before inline display; SVG and HTML remain downloads. Bots use `bots_publish_image` (or `bb bots publish-image`) with an absolute path inside their workspace to add up to ten images to their current final response. This publishes one message containing text and images, or images alone with `[PASS]`; cancelled or failed responses do not post images.
 
-On desktop, hover over Channels to reveal its header actions; they stay visible on touch screens. Use the three-dot menu at the right of the Channels header to switch between active and archived channels, organize the list by pinned channels or activity, and sort by update time, creation time, or name. Select the current sort again to reverse its direction; the organize and sort choices persist on this device. Search finds channels in both views and labels archived results. Clearing or closing search returns to the selected view. Right-click a channel for **Rename**, **Archive**, or **Delete**; archived channels offer **Restore** and **Delete**. Keyboard users can open this menu with Shift+F10. The channel menu in the header contains rename, pin, archive, and delete actions. **Automations** and **Activity** open as separate tabs in BB’s right workbench. Archiving cancels unfinished work and preserves history; restoring makes the channel available again. Deletion requires confirmation, stops unfinished responses, and permanently removes channel messages, reactions, membership, activity, and draft uploads. Bot profiles, workspaces, and other channels are kept. Existing bot DMs and sent files in BB's project storage remain under BB's own retention. Removing a bot cancels its pending channel work and preserves its messages and reactions. Channels support up to 16 bots.
+On desktop, hover over Channels to reveal its header actions; they stay visible on touch screens. Use the three-dot menu at the right of the Channels header to switch between active and archived channels, organize the list by pinned channels or activity, and sort by update time, creation time, or name. Select the current sort again to reverse its direction; the organize and sort choices persist on this device. Search finds channels in both views and labels archived results. Clearing or closing search returns to the selected view. Right-click a channel for **Rename**, **Archive**, or **Delete**; archived channels offer **Restore** and **Delete**. Keyboard users can open this menu with Shift+F10. The channel menu in the header contains rename, pin, archive, and delete actions. **Automations** and **Activity** open as separate tabs in BB’s right workbench. Archiving cancels unfinished work and preserves history; restoring makes the channel available again. Deletion requires confirmation, stops unfinished responses, and permanently removes channel messages, reactions, membership, activity, and draft uploads. Bot profiles, workspaces, and other channels are kept. Existing bot work threads and sent files in BB's project storage remain under BB's own retention. Removing a bot cancels its pending channel work and preserves its messages and reactions. Channels support up to 16 bots.
 
 BB’s **Settings → Appearance** can select sidebar providers. **Channels navigation** shows the channel list below the normal navigation while BB’s Thread list provider keeps threads below it.
-Selecting a channel shows its bot DMs directly beneath it in the sidebar. Selecting another channel shows that channel’s DMs instead.
+The sidebar lists channels. Bot work threads stay available from channel messages, activity, and approvals.
 
 ## Channel workspace
 
@@ -77,7 +79,7 @@ resize, collapse, and split controls with Browser and Terminal. On compact scree
 its workbench drawer.
 
 - There is no shared channel context. Each bot keeps its own `MISSION.md`,
-  `MEMORY.md`, and one DM per channel, which already holds that
+  `MEMORY.md`, and one work thread per channel, which already holds that
   channel's history.
 - **Version history** compares and restores `MISSION.md` and `MEMORY.md`. Restore loads a draft before saving. Bot documents are snapshotted
   when read/saved and after completed bot turns, not on every filesystem write.
@@ -91,7 +93,7 @@ its workbench drawer.
 - Channel links store the channel ID, so renaming a channel keeps links working.
   Plain `#name` references resolve only when unambiguous and outside Markdown
   code, existing links, images, and URL fragments.
-- Activity shows each task, queue position or blocking reason, and **Open DM**.
+- Activity shows each task, queue position or blocking reason, and **Open work thread**.
   Reading marks messages seen only while the channel is focused and at the bottom.
 
 ## Channel rail
@@ -110,9 +112,8 @@ state.
   blocked on, so they can be answered without leaving the channel.
 - **Members** shows every bot in the channel, labelled only when it is doing
   something: working, queued, needs attention or paused. Idle is the resting
-  case and goes unsaid. A member and their DM are the same bot, so the row is
-  also the DM: click to open it, or ⌘-click (drag) for a split. A bell marks a
-  DM waiting on your approval.
+  case and goes unsaid. A member row opens that bot's work thread when one
+  exists; ⌘-click (drag) opens it in a split. A bell marks work waiting on your approval.
 - The soonest scheduled run counts down on its own row and can be paused.
 - **Output** collects the files bots published here.
 - **Usage** appears only once the day's turns are worth a glance, or something
@@ -210,11 +211,11 @@ both IDs. Bots can manage only their own schedules in channels they belong to.
 The existing **Automations** plugin must be enabled. It stores these schedules
 in the Personal project and runs a fixed dispatcher script. Automation history
 shows dispatch status alongside the actual response status, errors, and links to
-the channel answer and bot DM. Retries are reflected in the response status. Pausing or deleting a schedule affects
+the channel answer and bot work thread. Retries are reflected in the response status. Pausing or deleting a schedule affects
 future runs. Stop an existing response in Activity.
 
 A tick is skipped while that automation's previous response or handoffs remain
-unfinished. Archived/deleted channels and retired/removed bots do not wake;
+unfinished. Archived or deleted channels and archived or removed bots do not wake;
 their schedules remain available in Automations for inspection or cleanup.
 Scheduled responses and retries cannot create or restart more scheduled work.
 The [Bots skill](skills/bots/SKILL.md#channel-automations) documents the tools
@@ -224,11 +225,11 @@ and CLI commands.
 
 Channels always respond to explicit messages. Separately, a bot’s mission work can be paused from its administration page. New bots start with scheduled mission work paused. **Wake now** asks for one bounded step toward the mission. Schedules are off by default and do not replay missed intervals after downtime. Pausing mission work does not disable channel replies.
 
-**Retire bot** stops its current work, removes it from every channel, and keeps its profile, files, and history. Use the collection’s **Retired** filter to find it. **Restore bot** makes it available for invitations again, with scheduled mission work paused.
+**Archive bot** stops its current work, removes it from every channel, and keeps its profile, files, and history. Use the collection’s **Archived** filter to find it. **Restore bot** makes it available for invitations again, with scheduled mission work paused.
 
-Failed channel responses show **Open DM** and **Retry response**. Retrying keeps the original message and targets only that bot; repeated clicks do not start duplicate retries. A long response gets a wrap-up request at 75% of its time limit (15 minutes at the 20-minute default), asking the bot to stop new work, save its state, and report progress. If it reaches the limit without finishing, Bot Teams stops the response, posts the last recorded progress in the channel, and preserves its bot DM and workspace. **Resume response** continues in that same DM. For an important checkpoint or blocker before then, bots can use `bots_channel_notify`; it leaves a durable channel message and notifies the owner without waking other bots. Restore and invite a removed bot before retrying.
+Failed channel responses show **Open work thread** and **Retry response**. Retrying keeps the original message and targets only that bot; repeated clicks do not start duplicate retries. A long response gets a wrap-up request at 75% of its time limit (15 minutes at the 20-minute default), asking the bot to stop new work, save its state, and report progress. If it reaches the limit without finishing, Bot Teams stops the response, posts the last recorded progress in the channel, and preserves its bot work thread and workspace. **Resume response** continues in that same work thread. For an important checkpoint or blocker before then, bots can use `bots_channel_notify`; it leaves a durable channel message and notifies the owner without waking other bots. Restore and invite a removed bot before retrying.
 
-Default limits are 100 started turns per hour, 1,000 per day, 20 minutes per turn, and two concurrent forks per bot. **Usage and limits** in the channel workbench and the bot’s **Usage** tab make these editable. Both bot and channel turn budgets apply; existing work can finish while new work waits. Provider billing and token details remain in the bot DM. BB’s provider and concurrency limits also apply.
+Default limits are 100 started turns per hour, 1,000 per day, 20 minutes per turn, and two concurrent forks per bot. **Usage and limits** in the channel workbench and the bot’s **Usage** tab make these editable. Both bot and channel turn budgets apply; existing work can finish while new work waits. Provider billing and token details remain in the bot work thread. BB’s provider and concurrency limits also apply.
 
 ## Persistence
 
@@ -247,7 +248,7 @@ Each bot lives at `<BB data directory>/plugins/bot-teams/homes/<bot-id>/`:
 
 **Profile → Workspace** shows the exact path. Document saves detect stale editor versions. Profiles, channel history, reactions, membership, work, and draft uploads live in the plugin’s SQLite database. Sent attachments use BB’s project attachment storage. Back up `plugins/bot-teams` along with BB’s conversation and attachment storage. Migrated installations also retain `plugins/bots/homes`; the new homes path links to it so saved workspace paths stay valid.
 
-Each bot has a DM for each channel, backed by a hidden BB thread. Channel tasks also run in that thread. The first turn receives bounded channel history and saved context. Later turns receive the new request, unseen channel messages, and saved context only when it changes. Previously delivered files are not attached again. Forks have separate DMs and reply histories. **Open DM** shows the native conversation with its messages, tools, approvals, and failures. Typing there sends a DM to the bot; typing in the channel composer sends a channel message. After a channel task ends, a bot's DM reply stays in the DM unless the bot posts an answer to the channel. A DM sent during an active channel task may be addressed in its final channel answer. When an answer goes to the channel, it shows a short tombstone linking to the DM, followed by the answer. The DM text stays in the BB thread. Existing group conversations appear as Channels without losing history; old group links redirect to their channel. Existing private work sessions remain stored and accessible through BB, while the Bot Teams page is for configuration.
+Each bot has a hidden BB work thread for each channel. Channel tasks run in that thread, but requests and answers belong in the channel. The first turn receives bounded channel history and saved context. Later turns receive the new request and channel messages since the previous channel snapshot. When that gap exceeds the prompt budget, the bot gets exact start and end message IDs and can read the omitted range forward in pages. Previously delivered files are not attached again. Forks have separate work threads and reply histories. **Open work thread** shows the native execution record with its messages, tools, approvals, and failures. Typing a direct request there is rejected with a link to its channel. Existing group conversations appear as Channels without losing history; old group links redirect to their channel. Existing work sessions remain stored and accessible through BB. The Bot Teams page holds bot configuration; direct chats live below Channels in the sidebar.
 
 Channels initially load 200 messages. **Load earlier messages** pages through the retained transcript. **Search channel** searches all stored message text and names; selecting a result or an older reply reference loads and focuses its message. This is a single-owner local feature. Bots use BB’s configured providers, credentials, tools, and skills on the primary machine. Separate directories provide persistent storage, not separate accounts. Shared `MEMORY.md` should contain only information appropriate for every channel the bot joins.
 
@@ -265,8 +266,8 @@ bb bots channel behavior 'Launch room' directed --json
 bb bots channel send 'Launch room' --text '@atlas Review this brief.' --attach ./brief.pdf --json
 bb bots channel messages 'Launch room' --json
 bb bots channel search 'Launch room' 'decision' --json
-bb bots retire @atlas --json
-bb bots list --retired --json
+bb bots archive @atlas --json
+bb bots list --archived --json
 bb bots restore @atlas --json
 bb bots retry <job-id> --json
 bb bots activity --channel 'Launch room' --json
@@ -340,7 +341,7 @@ The first command previews the migration. Apply backs up the complete Council
 SQLite database and settings under `plugins/bot-teams/imports/council-v1`, disables
 Council, imports every member’s exact persona and configured provider/model/
 reasoning, and creates Council and preset channels. Chief advisors retain a
-synthesis role in their mission; disabled members are retired. Schedules remain
+synthesis role in their mission; disabled members are archived. Schedules remain
 off. Imported IDs are recorded for safe reruns; conflicting profiles are never
 overwritten. Private personas and session history are not committed to Git.
 
@@ -378,14 +379,13 @@ The running BB app shows the setup instructions in its standard new-thread compo
 ![Bot Teams in the running BB application](assets/staged-preview.png)
 
 The renamed Bot Teams collection in BB, filtered to the staged Atlas research
-bot. Atlas has mission schedules off; the capture restores its prior retirement
-state afterward.
+bot. The staged capture used a research bot with mission schedules off.
 
 ![The floating channel rail beside a staged channel transcript](assets/channel-rail.png)
 
 The running BB application shows the rail floating over the staged Rail QA
 channel's right gutter:
-an open decision under **Needs you**, the bot DM, the member roster
+an open decision under **Needs you**, the bot work thread, the member roster
 with its live state, a scheduled digest counting down, the published
 `rail-check.csv`, and the channel's turns used today. Live now is absent here
 because no bot is working at capture time.
@@ -473,7 +473,7 @@ The channel composer's footer carries the same control BB puts under a thread co
 - **All bots in this channel** sets one mode for work started here, overriding each member's own. This is the lever for a work session: open the gate, get the task done, set it back to **Each bot's own**. A bot whose provider cannot offer that mode keeps its own.
 - **Each bot** shows one row per member with BB's own picker bound to that bot's provider, because a channel can hold bots on different providers. A change here follows the bot into every channel, and is disabled while the channel setting applies.
 
-The channel's setting rides every dispatch, so it reaches long-lived bot DMs too. It takes effect on the bot's next turn, not the one already running, and it does not retry an action that was already refused. Mission work runs outside any channel and always uses the bot's own mode.
+The channel's setting rides every dispatch, so it reaches long-lived bot work threads too. It takes effect on the bot's next turn, not the one already running, and it does not retry an action that was already refused. Mission work runs outside any channel and always uses the bot's own mode.
 
 Only the owner can change a channel's permissions. Bots have no tool for it, and the CLI refuses when a bot calls it.
 
@@ -483,9 +483,9 @@ Only the owner can change a channel's permissions. Bots have no tool for it, and
 
 ## Approvals in the channel
 
-When a bot's DM stops for an approval, the request is forwarded to the channel that started the work, so you do not have to find the DM. A card appears below the transcript: the bot, what it wants (the command, the file change, the permission, the plan, or the tool), and the provider's reason. **Approve**, **Approve for session**, and **Deny** answer the real request in the DM; only the decisions the provider offers are shown. A single multiple-choice question shows one button per choice. Anything else shows **Open DM** alone, so nothing is answered blind. A handled card collapses to a one-line result.
+When a bot's work thread stops for an approval or question, the request appears in the channel that started the work. The card shows the bot, the requested command, file change, permission, plan, or tool, and the provider's reason and available details. **Approve**, **Approve for session**, and **Deny** answer the real request in the work thread; only the decisions the provider offers are shown. Questions with several parts, multiple choices, or free text can be answered in the card. Provider and plugin requests that need their own controls render the native work-thread interaction inside the channel. **Open work thread** remains available for broader context. A handled card collapses to a one-line result.
 
-While a bot waits, its row in the **Working** card above the composer reads **Needs approval** in amber with a **Review** button that jumps to the card. The channel's sidebar row shows the bell, and so does that bot's nested DM row.
+While a bot waits, its row in the **Working** card above the composer reads **Needs approval** in amber with a **Review** button that jumps to the card. The channel's sidebar row also shows the bell.
 
 Channel decisions and blockers that Bot Teams itself records stay on the channel message, described below. Reply in the channel composer or use its acknowledge and snooze controls.
 

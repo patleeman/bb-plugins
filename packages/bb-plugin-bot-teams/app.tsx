@@ -43,7 +43,7 @@ const tabs = ["profile", "mission", "memory", "activity", "usage"] as const;
 function BotDetail({ id, tab }: { id: string; tab: string }) {
   const rpc = useRpc<typeof rpcContract>(),
     navigate = useBbNavigate();
-  const [retireOpen, setRetireOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [data, setData] = useState<{
       bot: Bot;
       conversations: Conversation[];
@@ -104,7 +104,7 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
         ? "paused"
         : "ready";
   const statusLabel = bot.retired
-    ? "Retired"
+    ? "Archived"
     : bot.error
       ? "Failing"
       : botStatus === "paused"
@@ -145,9 +145,9 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
         </div>
       </header>
       <Modal
-        title={`Retire ${bot.name}?`}
-        open={retireOpen}
-        onOpenChange={setRetireOpen}
+        title={`Archive ${bot.name}?`}
+        open={archiveOpen}
+        onOpenChange={setArchiveOpen}
       >
         <p className="text-sm leading-5">
           This stops the bot’s work and removes it from every channel. Its
@@ -159,7 +159,7 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
             variant="ghost"
             size="sm"
             disabled={pending}
-            onClick={() => setRetireOpen(false)}
+            onClick={() => setArchiveOpen(false)}
           >
             Cancel
           </Button>
@@ -170,11 +170,11 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
             onClick={() =>
               action(async () => {
                 await rpc.call("retire", { id, retired: true });
-                setRetireOpen(false);
+                setArchiveOpen(false);
               })
             }
           >
-            Retire bot
+            Archive bot
           </Button>
         </div>
         <ErrorMessage error={error} />
@@ -192,11 +192,11 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
                 key={bot.id}
                 bot={bot}
                 onSaved={load}
-                onRetire={() => {
+                onArchive={() => {
                   if (bot.retired) {
                     void action(() => rpc.call("retire", { id, retired: false }));
                   } else {
-                    setRetireOpen(true);
+                    setArchiveOpen(true);
                   }
                 }}
               />

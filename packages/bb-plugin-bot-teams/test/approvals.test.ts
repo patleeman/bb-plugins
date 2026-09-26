@@ -251,13 +251,13 @@ test("a single multiple-choice question is answerable from the channel", async (
   await x.approvals.tick();
   const approval = x.approvals.list(x.room.id)[0]!;
   assert.equal(approval.kind, "question");
-  assert.equal(approval.title, "Which branch?");
+  assert.equal(approval.title, "has a question");
   assert.equal(approval.questions[0]?.options.length, 2);
   await x.approvals.resolve({
     id: x.room.id,
     threadId: "work",
     interactionId: "int-1",
-    answer: { questionId: "q1", selected: ["next"] },
+    answers: { q1: { selected: ["next"] } },
   });
   assert.deepEqual((x.resolved[0] as { resolution: unknown }).resolution, {
     kind: "user_answer",
@@ -268,13 +268,51 @@ test("a single multiple-choice question is answerable from the channel", async (
       id: x.room.id,
       threadId: "work",
       interactionId: "int-1",
-      answer: { questionId: "q1", selected: ["trunk"] },
+      answers: { q1: { selected: ["trunk"] } },
     }),
     /no longer offered/,
   );
 });
 
-test("anything else is forwarded as a link only", async () => {
+test("all parts of a multi-question request are answerable from the channel", async () => {
+  const x = setup([interaction({ payload: {
+    kind: "user_question",
+    questions: [
+      { id: "q1", prompt: "Which branches?", multiSelect: true,
+        allowFreeText: false, options: [
+          { value: "main", label: "Main" }, { value: "next", label: "Next" },
+        ] },
+      { id: "q2", prompt: "Why?", multiSelect: false,
+        allowFreeText: true, options: [] },
+    ],
+  } })]);
+  await x.approvals.tick();
+  assert.equal(x.approvals.list(x.room.id)[0]?.title, "has 2 questions");
+  const answers = {
+    q1: { selected: ["main", "next"] },
+    q2: { selected: [], freeText: "  Both ship today.  " },
+  };
+  await x.approvals.resolve({ id: x.room.id, threadId: "work", interactionId: "int-1", answers });
+  assert.deepEqual((x.resolved[0] as { resolution: unknown }).resolution, {
+    kind: "user_answer",
+    answers: {
+      q1: { selected: ["main", "next"] },
+      q2: { selected: [], freeText: "Both ship today." },
+    },
+  });
+  await assert.rejects(
+    x.approvals.resolve({ id: x.room.id, threadId: "work", interactionId: "int-1",
+      answers: { q1: { selected: ["main"] } } }),
+    /Answer every question/,
+  );
+  await assert.rejects(
+    x.approvals.resolve({ id: x.room.id, threadId: "work", interactionId: "int-1",
+      answers: { q1: { selected: ["main"] }, q2: { selected: ["main"] } } }),
+    /no longer offered/,
+  );
+});
+
+test("provider requests are forwarded for native inline rendering", async () => {
   const view = approvalView(
     interaction({
       payload: { kind: "codex/custom", title: "Pick a file", data: null },

@@ -71,7 +71,8 @@ export class ChannelNotifications {
         return null;
       const m = this.store.message(attention.id);
       if (!m || m.system) return null;
-      const bot = m.botId ? this.store.get(m.botId) : null;
+      const bot = m.botId ? this.store.findBot(m.botId) : null;
+      if (m.botId && !bot) return null;
       if (bot && (bot.retired || !room.memberIds.includes(bot.id))) return null;
       const threadId =
         this.store.job(m.id)?.threadId ?? m.sourceThreadId ?? null;

@@ -3,7 +3,6 @@ import { useBbNavigate, useRpc } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "./contract";
 import { emptyDraft } from "./draft";
-import { channelHandoffText } from "./handoff-draft";
 
 const eventName = "bb:bots:handoff-to-channel";
 
@@ -30,7 +29,7 @@ export function ChannelHandoffController() {
             key,
             JSON.stringify({
               ...emptyDraft(),
-              text: channelHandoffText(source),
+              handoffSource: source,
             }),
           );
         } catch {

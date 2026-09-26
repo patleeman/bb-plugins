@@ -60,7 +60,7 @@ export function BotCollection({
     message: string;
   } | null>(null);
   const activeCount = bots.filter((bot) => !bot.retired).length;
-  const retiredCount = bots.length - activeCount;
+  const archivedCount = bots.length - activeCount;
   const search = query.trim().toLowerCase();
   const visible = bots
     .filter(
@@ -68,7 +68,7 @@ export function BotCollection({
         `${b.name} @${b.handle} ${b.description}`
           .toLowerCase()
           .includes(search) &&
-        (status === "retired"
+        (status === "archived"
           ? !!b.retired
           : !b.retired &&
             (status === "all" ||
@@ -211,7 +211,7 @@ export function BotCollection({
         ) : null}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-base font-semibold">
-            {status === "retired" ? "Retired bots" : "Bots"}
+            {status === "archived" ? "Archived bots" : "Bots"}
           </h1>
           <Button
             size="sm"
@@ -223,7 +223,7 @@ export function BotCollection({
         <ResourceToolbar
           value={query}
           onChange={setQuery}
-          placeholder={`Search ${status === "retired" ? retiredCount : activeCount} ${status === "retired" ? "retired bots" : "bots"}`}
+          placeholder={`Search ${status === "archived" ? archivedCount : activeCount} ${status === "archived" ? "archived bots" : "bots"}`}
           controls={
             <>
               <Menu
@@ -247,7 +247,7 @@ export function BotCollection({
                   ["all", "All bots"],
                   ["ready", "Ready"],
                   ["attention", "Needs attention"],
-                  ["retired", "Retired"],
+                  ["archived", "Archived"],
                 ].map(([value, label]) => (
                   <button
                     key={value}
@@ -313,13 +313,13 @@ export function BotCollection({
           <EmptyState
             role="status"
             title={
-              !activeCount && status !== "retired" && !query
+              !activeCount && status !== "archived" && !query
                 ? "No active bots"
                 : "No bots match this search"
             }
             description={
-              !activeCount && status !== "retired" && !query
-                ? "Retired bots and their files are preserved."
+              !activeCount && status !== "archived" && !query
+                ? "Archived bots and their files are preserved."
                 : undefined
             }
             action={
@@ -328,11 +328,11 @@ export function BotCollection({
                 size="sm"
                 onClick={() => {
                   setQuery("");
-                  setStatus(!activeCount ? "retired" : "all");
+                  setStatus(!activeCount ? "archived" : "all");
                 }}
               >
-                {!activeCount && status !== "retired"
-                  ? "View retired bots"
+                {!activeCount && status !== "archived"
+                  ? "View archived bots"
                   : "Clear filters"}
               </Button>
             }

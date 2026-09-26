@@ -16,9 +16,13 @@ import { agentAuthor, requestStatus } from "../agent-channels";
 import { channelResponseFailures, channelWork } from "../channel-work";
 import { Store, document, saveDocument } from "../store";
 import { Runtime, jobPrompt, mentioned, recipients } from "../runtime";
-import { profileInput, roomSchema, type Bot, type Room } from "../contract";
+import { profileInput, roomSchema, type Bot, type Conversation, type Room } from "../contract";
 import { emptyDraft, prepareSend, readDraft, clearSentDraft } from "../draft";
-import { channelHandoffText } from "../handoff-draft";
+import {
+  channelHandoffMessage,
+  channelHandoffText,
+  displayChannelHandoffText,
+} from "../handoff-draft";
 import { directMessageId } from "../direct-messages";
 
 const bot = (
@@ -145,7 +149,7 @@ test("persistent channel turns receive only new messages", async () => {
     await x.runtime.drive(x.a);
     assert.equal(
       (x.harness.inspection.sdk.callsTo("threads.spawn")[0]?.[0] as { title: string }).title,
-      "DM with Atlas · #Research",
+      "Atlas work · #Research",
     );
     const first = x.store.work(x.a.id)[0]!;
     assert.match(first.text, /Members:/);
@@ -167,6 +171,106 @@ test("persistent channel turns receive only new messages", async () => {
       }).input[0]?.text,
       jobPrompt(second),
     );
+  } finally {
+    await x.close();
+  }
+});
+
+test("legacy bot thread titles are renamed without changing custom titles", async () => {
+  const x = setup();
+  try {
+    for (const [id, kind] of [["group", "group"], ["fork", "group"], ["admin", "admin"], ["custom", "group"]] as const)
+      x.store.putConversation({
+        id, botId: x.a.id, key: id, threadId: `thr_${id}`,
+        title: "Legacy", kind, createdAt: 1,
+      });
+    const titles: Record<string, string> = {
+      thr_group: "DM with Atlas · #Research",
+      thr_fork: "DM with Atlas · #Research · Fork",
+      thr_admin: "DM with Atlas",
+      thr_custom: "My custom work title",
+    };
+    x.harness.inspection.sdk.stub("threads.get", async ({ threadId }) =>
+      makeThreadResponse({ id: threadId, title: titles[threadId]!, status: "idle" }));
+    await x.runtime.renameLegacyWorkThreads();
+    assert.deepEqual(
+      x.harness.inspection.sdk.callsTo("threads.update").map(([input]) => input),
+      [
+        { threadId: "thr_admin", title: "Atlas thread" },
+        { threadId: "thr_fork", title: "Atlas work · #Research · Fork" },
+        { threadId: "thr_group", title: "Atlas work · #Research" },
+      ],
+    );
+  } finally {
+    await x.close();
+  }
+});
+
+test("channel turns keep more than forty intervening messages and page an exact overflow range", async () => {
+  const x = setup();
+  try {
+    x.runtime.send(x.room, "@atlas First question", randomUUID());
+    await x.runtime.drive(x.a);
+    const first = x.store.work(x.a.id)[0]!;
+    x.runtime.complete(first.threadId!, "First answer");
+    await x.runtime.driveRoom(x.room);
+
+    const ids: string[] = [];
+    for (let index = 0; index < 45; index++) {
+      const id = randomUUID();
+      ids.push(id);
+      x.store.putMessage({
+        id, roomId: x.room.id, runId: id, botId: null,
+        speaker: "You", text: `Update ${index}`, createdAt: Date.now(),
+        replyTo: null, attachments: [],
+      });
+    }
+    x.runtime.send(x.room, "@atlas Second question", randomUUID());
+    await x.runtime.drive(x.a);
+    const second = x.store.work(x.a.id)[0]!;
+    assert.match(second.text, /Update 0/);
+    assert.match(second.text, /Update 44/);
+    assert.doesNotMatch(second.text, /earlier channel messages were too large/);
+
+    const firstPage = x.store.historyAfter(x.room.id, first.id, ids[44], 20);
+    assert.equal(firstPage.messages[0]?.id, ids[0]);
+    assert.equal(firstPage.nextAfter, ids[19]);
+    const secondPage = x.store.historyAfter(x.room.id, firstPage.nextAfter!, ids[44], 30);
+    assert.equal(secondPage.messages.at(-1)?.id, ids[44]);
+    assert.equal(secondPage.nextAfter, null);
+  } finally {
+    await x.close();
+  }
+});
+
+test("oversized channel gaps name the exact omitted message range", async () => {
+  const x = setup();
+  try {
+    x.runtime.send(x.room, "@atlas First question", randomUUID());
+    await x.runtime.drive(x.a);
+    const first = x.store.work(x.a.id)[0]!;
+    x.runtime.complete(first.threadId!, "First answer");
+    await x.runtime.driveRoom(x.room);
+    const ids: string[] = [];
+    for (let index = 0; index < 4; index++) {
+      const id = randomUUID();
+      ids.push(id);
+      x.store.putMessage({
+        id, roomId: x.room.id, runId: id, botId: null,
+        speaker: "You", text: `Update ${index}: ${"x".repeat(16000)}`,
+        createdAt: Date.now(), replyTo: null, attachments: [],
+      });
+    }
+    x.runtime.send(x.room, "@atlas Second question", randomUUID());
+    await x.runtime.drive(x.a);
+    const second = x.store.work(x.a.id)[0]!;
+    assert.match(second.text, /earlier channel messages were too large/);
+    assert.match(second.text, new RegExp(`after ${first.contextMessageId} through ${ids[1]}`));
+    assert.match(second.text, /Repeat with nextAfter until it is null/);
+    assert.match(second.text, /Update 3/);
+    assert.doesNotMatch(second.text, /Update 0:/);
+    const page = x.store.historyAfter(x.room.id, first.contextMessageId!, ids[1], 100);
+    assert.deepEqual(page.messages.filter((message) => ids.includes(message.id)).map((message) => message.id), ids.slice(0, 2));
   } finally {
     await x.close();
   }
@@ -1351,7 +1455,7 @@ test("default hourly limits count dispatches that never became active", async ()
   }
 });
 
-test("direct owner replies can run in bot work threads despite bot and channel state", async () => {
+test("owner requests in channel work threads are rejected and directed to the channel", async () => {
   const x = setup();
   await plugin(x.bb);
   try {
@@ -1378,9 +1482,46 @@ test("direct owner replies can run in bot work threads despite bot and channel s
             originPluginId: null,
           }),
         ),
-        { action: "proceed" },
+        {
+          action: "reject",
+          message: `Send this request in the channel: /plugins/bot-teams/channels/${x.room.id}`,
+        },
       );
     }
+  } finally {
+    await x.close();
+  }
+});
+
+test("a managed channel dispatch proceeds even when core marks its initiator as user", async () => {
+  const x = setup();
+  await plugin(x.bb);
+  try {
+    x.store.putConversation({
+      id: "group-dispatch",
+      botId: x.a.id,
+      key: `group:${x.room.id}`,
+      threadId: "thr_group_dispatch",
+      title: "Research",
+      kind: "group",
+      createdAt: 1,
+    });
+    x.runtime.enqueue(x.a, {
+      id: "managed-dispatch",
+      text: "Check the release",
+      conversationKey: `group:${x.room.id}`,
+      roomId: x.room.id,
+    });
+    const job = x.store.job("managed-dispatch")!;
+    x.store.putJob({ ...job, threadId: "thr_group_dispatch", status: "dispatching" });
+    const hook = x.harness.inspection.registrations.hooks["message.dispatch"]!;
+    const result = await hook(makeMessageDispatchHookContext({
+      thread: { id: "thr_group_dispatch" },
+      input: { text: jobPrompt(x.store.job("managed-dispatch")!) },
+      origin: "sdk",
+      originPluginId: null,
+    }));
+    assert.equal(result.action, "proceed");
   } finally {
     await x.close();
   }
@@ -1792,6 +1933,70 @@ test("channel handoff draft links to standard and projectless source threads", (
   );
 });
 
+test("channel handoff keeps an editable draft and sends its thread reference", () => {
+  const source = {
+    threadId: "thr_source",
+    projectId: "proj_test",
+    title: "Source work",
+  };
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+  };
+  storage.setItem("draft", JSON.stringify({
+    ...emptyDraft(),
+    handoffSource: source,
+    text: "Check the remaining issue.",
+  }));
+  const draft = readDraft(storage, "draft");
+  assert.equal(draft.text, "Check the remaining issue.");
+  assert.deepEqual(draft.handoffSource, source);
+  const sent = prepareSend(storage, "draft", "room", draft);
+  assert.equal(
+    sent.payload.text,
+    "Continue from [Source work](/projects/proj_test/threads/thr_source) (@thread:thr_source)\n\nCheck the remaining issue.",
+  );
+  assert.equal(
+    displayChannelHandoffText(sent.payload.text),
+    "Continue from [Source work](/projects/proj_test/threads/thr_source)\n\nCheck the remaining issue.",
+  );
+  assert.equal(
+    channelHandoffMessage(null, "No source"),
+    "No source",
+  );
+  storage.setItem("draft", JSON.stringify({
+    ...sent.draft,
+    handoffSource: null,
+  }));
+  assert.equal(clearSentDraft(storage, "draft", sent.draft), false);
+  assert.equal(readDraft(storage, "draft").handoffSource, null);
+  storage.setItem("draft", JSON.stringify(sent.draft));
+  assert.equal(clearSentDraft(storage, "draft", sent.draft), true);
+  assert.equal(readDraft(storage, "draft").handoffSource, null);
+});
+
+test("an unsent legacy handoff draft becomes a thread chip", () => {
+  const source = {
+    threadId: "thr_source",
+    projectId: "proj_test",
+    title: "Design [v2]",
+  };
+  const stored = JSON.stringify({
+    ...emptyDraft(),
+    text: `${channelHandoffText(source)}\n\nPlease continue.`,
+  });
+  const draft = readDraft({ getItem: () => stored, setItem: () => {} }, "draft");
+  assert.deepEqual(draft.handoffSource, source);
+  assert.equal(draft.text, "Please continue.");
+  assert.equal(
+    channelHandoffMessage(draft.handoffSource, draft.text),
+    `${channelHandoffText(source)}\n\nPlease continue.`,
+  );
+});
+
 test("archive stops channel work, preserves history and read state is monotonic", async () => {
   const x = setup();
   try {
@@ -1915,6 +2120,7 @@ test("channel requests run without starting a bot's paused scheduled mission", a
           makeMessageDispatchHookContext({
             thread: { id: job.threadId! },
             input: { text: jobPrompt(job) },
+            originPluginId: "bot-teams",
           }),
         )
       ).action,
@@ -2222,6 +2428,118 @@ test("a deleted admin conversation does not block future bot work", async () => 
   }
 });
 
+function stubDirectStartQueue(x: ReturnType<typeof setup>) {
+  const queueReads = new Map<string, number>();
+  x.harness.inspection.sdk.stub("threads.queuedMessages.list", async ({ threadId }) => {
+    if (x.store.byThread(threadId)?.kind === "group") return [];
+    const reads = queueReads.get(threadId) ?? 0;
+    queueReads.set(threadId, reads + 1);
+    return reads ? [] : [{
+      id: `start_${threadId}`,
+      content: [{ type: "text", text: "Preparing direct message" }],
+    }];
+  });
+}
+
+test("a bot keeps one current direct thread and preserves earlier threads in history", async () => {
+  const x = setup();
+  await plugin(x.bb);
+  try {
+    stubDirectStartQueue(x);
+    const first = await x.harness.behavior.callRpc("conversation", { id: x.a.id }) as Conversation;
+    const repeated = await x.harness.behavior.callRpc("conversation", { id: x.a.id }) as Conversation;
+    assert.equal(repeated.threadId, first.threadId);
+
+    const second = await x.harness.behavior.callRpc("newConversation", { id: x.a.id }) as Conversation;
+    assert.notEqual(second.threadId, first.threadId);
+    const directSpawns = x.harness.inspection.sdk.callsTo("threads.spawn")
+      .map(([args]) => args as { input: unknown[]; sendAt?: number; title?: string })
+      .filter((args) => args.title === `${x.a.name} thread`);
+    assert.equal(directSpawns.length, 2);
+    for (const spawn of directSpawns) {
+      assert.deepEqual(spawn.input, [{
+        type: "text",
+        text: "Preparing direct message",
+        mentions: [],
+      }]);
+      assert.ok(spawn.sendAt);
+    }
+    assert.equal(x.harness.inspection.sdk.callsTo("threads.queuedMessages.delete").length, 2);
+    const history = await x.harness.behavior.callRpc("get", { id: x.a.id }) as { conversations: Conversation[] };
+    assert.equal(history.conversations.filter((c: { key: string }) => c.key === "admin").length, 1);
+    assert.equal(history.conversations.find((c: { threadId: string }) => c.threadId === first.threadId)?.originalKey, "admin");
+    assert.ok(history.conversations.find((c: { threadId: string }) => c.threadId === first.threadId)?.archivedAt);
+    assert.equal(new Store(x.store.db).conversations(x.a.id).length, 2);
+
+    const hook = x.harness.inspection.registrations.hooks["message.dispatch"]!;
+    const archived = await hook(makeMessageDispatchHookContext({
+      thread: { id: first.threadId },
+      origin: "plugin",
+      originPluginId: "bot-teams",
+    }));
+    assert.equal(archived.action, "reject");
+  } finally {
+    await x.close();
+  }
+});
+
+test("changing a model or provider starts new bot sessions and retains their history", async () => {
+  const x = setup();
+  await plugin(x.bb);
+  try {
+    stubDirectStartQueue(x);
+    const direct = await x.harness.behavior.callRpc("conversation", { id: x.a.id }) as Conversation;
+    const group = await x.runtime.conversation(x.a, `group:${x.room.id}`, "group", x.room.name);
+    const updated = await x.harness.behavior.callRpc("update", {
+      id: x.a.id,
+      providerId: "pi",
+      model: "other-model",
+      expectedUpdatedAt: x.a.updatedAt,
+    }) as Bot;
+    assert.equal(updated.providerId, "pi");
+    const after = x.store.conversations(x.a.id);
+    const current = after.find((c) => c.key === "admin")!;
+    assert.notEqual(current.threadId, direct.threadId);
+    assert.equal(current.providerId, "pi");
+    assert.equal(current.model, "other-model");
+    assert.equal(after.find((c) => c.threadId === direct.threadId)?.originalKey, "admin");
+    assert.equal(after.find((c) => c.threadId === group.threadId)?.originalKey, `group:${x.room.id}`);
+    assert.equal(after.some((c) => c.key === `group:${x.room.id}`), false);
+    assert.equal(
+      await x.harness.behavior.callRpc("channelForThread", { threadId: group.threadId }),
+      x.room.id,
+    );
+    const nextGroup = await x.runtime.conversation(updated, `group:${x.room.id}`, "group", x.room.name);
+    assert.notEqual(nextGroup.threadId, group.threadId);
+    assert.equal(nextGroup.providerId, "pi");
+  } finally {
+    await x.close();
+  }
+});
+
+test("new direct threads and model changes wait for active work", async () => {
+  const x = setup();
+  await plugin(x.bb);
+  try {
+    stubDirectStartQueue(x);
+    await x.harness.behavior.callRpc("conversation", { id: x.a.id });
+    x.harness.inspection.sdk.stub("threads.get", async () =>
+      makeThreadResponse({ status: "active" }));
+    await assert.rejects(
+      x.harness.behavior.callRpc("newConversation", { id: x.a.id }),
+      /current response/,
+    );
+    await assert.rejects(
+      x.harness.behavior.callRpc("update", { id: x.a.id, model: "new-model" }),
+      /current response/,
+    );
+    assert.equal(x.store.conversations(x.a.id).filter((c) => c.key === "admin").length, 1);
+    assert.equal(x.store.get(x.a.id).model, "");
+  } finally {
+    await x.close();
+  }
+});
+
 test("stale profile saves cannot overwrite a newer edit", async () => {
   const x = setup();
   await plugin(x.bb);
@@ -2351,6 +2669,16 @@ test("history pages use stable cursors while new messages arrive, with old reply
       225,
     );
     assert.equal(third.nextBefore, null);
+    const forward = await x.harness.behavior.callRpc("history", {
+      id: x.room.id, after: "message-0", through: "message-3", limit: 2,
+    }) as { messages: { id: string }[]; nextAfter: string | null };
+    assert.deepEqual(forward.messages.map((message) => message.id), ["message-1", "message-2"]);
+    assert.equal(forward.nextAfter, "message-2");
+    const end = await x.harness.behavior.callRpc("history", {
+      id: x.room.id, after: forward.nextAfter!, through: "message-3", limit: 2,
+    }) as { messages: { id: string }[]; nextAfter: string | null };
+    assert.deepEqual(end.messages.map((message) => message.id), ["message-3"]);
+    assert.equal(end.nextAfter, null);
     assert.equal(
       x.store.history(x.room.id, undefined, "100%_literal").messages[0]?.id,
       "message-0",
@@ -2392,7 +2720,7 @@ test("retiring stops all work and leaves channels while preserving identity and 
     assert.throws(
       () =>
         x.runtime.send(x.store.room(x.room.id), "@atlas hello", randomUUID()),
-      /retired/,
+      /archived/,
     );
     await x.runtime.retire(x.a.id, false);
     assert.equal(x.store.get(x.a.id).paused, true);

@@ -13,11 +13,13 @@ import {
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import * as Popover from "@radix-ui/react-popover";
 import {
   useBbNavigate,
@@ -59,10 +61,7 @@ import {
   ContextMenuItem,
 } from "./components/ui/context-menu";
 import { WorkList, ErrorMessage, message } from "./bot-ui";
-import {
-  ChannelThreadList,
-  openWorkThread,
-} from "./channel-threads";
+import { openWorkThread } from "./channel-threads";
 import { channelQueues, channelResponseFailures, channelWork } from "./channel-work";
 import { ChannelRail, useChannelRail } from "./channel-rail-view";
 import { railHasLiveWork } from "./channel-rail";
@@ -70,6 +69,11 @@ import { ChannelApprovalDeck } from "./channel-approvals";
 import { ChannelSearch } from "./channel-search";
 import { ChannelAttentionBanner, MessageAttention } from "./attention-view";
 import { ChannelSidebarRow } from "./channel-sidebar-row";
+import {
+  BotDirectMessageHeader,
+  BotDirectMessagePage,
+  BotDirectThreadsPanel,
+} from "./bot-direct-chat";
 import { ChannelPermissionPicker } from "./channel-permissions";
 import {
   channelLinkDestination,
@@ -95,7 +99,11 @@ const FAILED_ROW_CLASS = activityRowClass(
   "channel-response-error flex items-start gap-2 px-3 py-2 text-sm",
 );
 import { GroupComposer } from "./composer";
-import { ChannelWorkCard } from "./channel-work-card";
+import { displayChannelHandoffText } from "./handoff-draft";
+import {
+  channelWorkSignature,
+  ChannelWorkTrail,
+} from "./channel-work-trail";
 import { ChannelModePicker } from "./channel-mode-picker";
 import {
   IconActionTooltip,
@@ -112,6 +120,10 @@ import { classifierActionAnnotation } from "./classifier-action";
 const uuid = /^[a-f0-9-]{36}$/;
 const channelId = (subPath: string) =>
   uuid.test(subPath.split("/")[0] ?? "") ? subPath.split("/")[0]! : null;
+const directMessageBotId = (subPath: string) => {
+  const [kind, id] = subPath.split("/");
+  return kind === "dm" && /^bot_[a-f0-9]{16}$/.test(id ?? "") ? id! : null;
+};
 function useRoster(reconcile = false) {
   const rpc = useRpc<typeof rpcContract>();
   const connectionState = useRealtimeConnectionState();
@@ -299,10 +311,10 @@ function MessageActionButtons({
         <Button
           variant="ghost"
           size="icon"
-          aria-label={job?.threadId || message.botId ? "Open bot DM" : "Open source thread"}
+          aria-label={job?.threadId || message.botId ? "Open work thread" : "Open source thread"}
           onClick={onView}
         >
-          <IconActionTooltip label={job?.threadId || message.botId ? "Open bot DM" : "Open source thread"}>
+          <IconActionTooltip label={job?.threadId || message.botId ? "Open work thread" : "Open source thread"}>
             <Icon name="ExternalLink" />
           </IconActionTooltip>
         </Button>
@@ -654,19 +666,26 @@ export function ChannelsSidebar({
   onNavigate,
   activeThreadId,
 }: Pick<PluginThreadListProps, "activeThreadId" | "onNavigate">) {
-  const { rooms, activeRoomIds, attentionCounts, approvalCounts, error } =
+  const { bots, rooms, activeRoomIds, attentionCounts, approvalCounts, error } =
       useRoster(true),
     rpc = useRpc<typeof rpcContract>(),
     navigate = useBbNavigate();
   const [selected, setSelected] = useState<string | null>(null),
-    [search, setSearch] = useState(""),
-    [searching, setSearching] = useState(false),
+    [channelSearch, setChannelSearch] = useState(""),
+    [directSearch, setDirectSearch] = useState(""),
+    [channelSearching, setChannelSearching] = useState(false),
+    [directSearching, setDirectSearching] = useState(false),
+    [channelsCollapsed, setChannelsCollapsed] = useState(false),
+    [directCollapsed, setDirectCollapsed] = useState(false),
     [archived, setArchived] = useState(false),
+    [showArchivedBots, setShowArchivedBots] = useState(false),
     [display, setDisplay] = useState(readChannelDisplay),
     [renaming, setRenaming] = useState<Room | null>(null),
     [deleting, setDeleting] = useState<Room | null>(null),
     [failure, setFailure] = useState<string | null>(null),
     [pending, setPending] = useState(false);
+  const channelListId = useId();
+  const directListId = useId();
   const channelPanel = useRef<string | null>(null);
   const updateDisplay = (next: ChannelDisplay) => {
     setDisplay(next);
@@ -743,12 +762,41 @@ export function ChannelsSidebar({
     navigate.toPluginPanel("channels", { subPath: id });
     onNavigate();
   };
-  const query = search.trim().toLowerCase();
+  const openDirectMessage = (id: string) => {
+    setSelected(`dm:${id}`);
+    navigate.toPluginPanel("channels", { subPath: `dm/${id}` });
+    onNavigate();
+  };
+  const channelQuery = channelSearch.trim().toLowerCase();
+  const directQuery = directSearch.trim().toLowerCase();
+  const directBots = bots
+    .filter((bot) => `${bot.name} @${bot.handle}`.toLowerCase().includes(directQuery))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const activeDirectBots = directBots.filter((bot) => !bot.retired);
+  const archivedDirectBots = directBots.filter((bot) => bot.retired);
+  const visibleDirectBots = showArchivedBots
+    ? [...activeDirectBots, ...archivedDirectBots]
+    : activeDirectBots;
+  const directBotRow = (bot: Bot) => (
+    <a key={bot.id}
+      href={`/plugins/bot-teams/channels/dm/${bot.id}`}
+      className="channel-nav-row direct-message-nav-row"
+      aria-current={selected === `dm:${bot.id}` ? "page" : undefined}
+      onClick={(event) => {
+        if (event.metaKey || event.ctrlKey) return;
+        event.preventDefault();
+        openDirectMessage(bot.id);
+      }}>
+      <span className="direct-message-avatar" aria-hidden>{bot.avatar}</span>
+      <span className="channel-nav-name">{bot.name}</span>
+      {bot.retired && <span className="channel-nav-archived">Archived</span>}
+    </a>
+  );
   const list = rooms
     .filter(
       (r) =>
-        (query ? true : !!r.archived === archived) &&
-        r.name.toLowerCase().includes(query),
+        (channelQuery ? true : !!r.archived === archived) &&
+        r.name.toLowerCase().includes(channelQuery),
     )
     .sort((a, b) =>
       (display.organization === "pinned"
@@ -772,17 +820,23 @@ export function ChannelsSidebar({
     <>
       <section className="channels-sidebar" aria-label="Channels">
         <header>
-          <span className="channels-sidebar-heading">
-            {archived ? "Archived channels" : "Channels"}
-          </span>
+          <button type="button" className="channels-sidebar-collapse"
+            aria-expanded={!channelsCollapsed} aria-controls={channelListId}
+            onClick={() => setChannelsCollapsed(!channelsCollapsed)}>
+            <Icon name={channelsCollapsed ? "ChevronRight" : "ChevronDown"} />
+            <span className="channels-sidebar-heading">
+              {archived ? "Archived channels" : "Channels"}
+            </span>
+          </button>
           <Button
             variant="ghost"
             size="icon"
             aria-label="Search channels"
-            aria-expanded={searching}
+            aria-expanded={channelSearching}
             onClick={() => {
-              setSearching(!searching);
-              setSearch("");
+              setChannelSearching(!channelSearching);
+              setChannelSearch("");
+              setChannelsCollapsed(false);
             }}
           >
             <Icon name="Search" />
@@ -877,7 +931,8 @@ export function ChannelsSidebar({
                 aria-label={archived ? "Show active channels" : "Show archived channels"}
                 onSelect={() => {
                   setArchived(!archived);
-                  setSearch("");
+                  setChannelSearch("");
+                  setChannelsCollapsed(false);
                 }}
               >
                 <Icon name={archived ? "ListView" : "Archive"} />
@@ -886,19 +941,15 @@ export function ChannelsSidebar({
             </DropdownMenuContent>
           </DropdownMenu>
         </header>
-        {searching && (
+        <div id={channelListId} hidden={channelsCollapsed}>
+        {channelSearching && (
           <Input
             autoFocus
-            aria-label="Search all channels"
-            placeholder="Search all channels…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            aria-label="Search channels"
+            placeholder="Search channels…"
+            value={channelSearch}
+            onChange={(e) => setChannelSearch(e.target.value)}
           />
-        )}
-        {query && (
-          <p className="channels-search-scope">
-            Searching active and archived channels
-          </p>
         )}
         {error && <ErrorMessage error={error} />}
         <ErrorMessage error={failure} />
@@ -925,24 +976,69 @@ export function ChannelsSidebar({
                 onCopyId={() => void copyChannelId(r.id)}
                 onArchive={() => void archive(r)}
                 onDelete={() => setDeleting(r)}
-              >
-                <ChannelThreadList
-                  roomId={r.id}
-                  refreshKey={`${activeRoomIds.includes(r.id)}:${approvalCounts[r.id] ?? 0}:${r.updatedAt}`}
-                />
-              </ChannelSidebarRow>
+              />
             ))}
           </div>
         ))}
         {!list.length && (
           <p className="channel-menu-label">
-            {query
+            {channelQuery
               ? "No matching channels"
               : archived
                 ? "No archived channels"
                 : "No active channels"}
           </p>
         )}
+        </div>
+      </section>
+      <section className="channels-sidebar direct-messages-sidebar" aria-label="Direct messages">
+        <header>
+          <button type="button" className="channels-sidebar-collapse"
+            aria-expanded={!directCollapsed} aria-controls={directListId}
+            onClick={() => setDirectCollapsed(!directCollapsed)}>
+            <Icon name={directCollapsed ? "ChevronRight" : "ChevronDown"} />
+            <span className="channels-sidebar-heading">Direct messages</span>
+          </button>
+          <Button variant="ghost" size="icon"
+            aria-label="Search direct messages" aria-expanded={directSearching}
+            onClick={() => {
+              setDirectSearching(!directSearching);
+              setDirectSearch("");
+              setDirectCollapsed(false);
+            }}>
+            <Icon name="Search" />
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" aria-label="Direct message list options">
+                <Icon name="MoreHorizontal" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" aria-label="Direct message list options">
+              <DropdownMenuItem
+                aria-label={showArchivedBots ? "Hide archived bots" : "Show archived bots"}
+                onSelect={() => {
+                  setShowArchivedBots(!showArchivedBots);
+                  setDirectCollapsed(false);
+                }}>
+                <Icon name={showArchivedBots ? "ListView" : "Archive"} />
+                {showArchivedBots ? "Hide archived bots" : "Show archived bots"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </header>
+        <div id={directListId} hidden={directCollapsed}>
+        {directSearching && (
+          <Input autoFocus aria-label="Search direct messages"
+            placeholder="Search direct messages…" value={directSearch}
+            onChange={(event) => setDirectSearch(event.target.value)} />
+        )}
+        {activeDirectBots.map(directBotRow)}
+        {showArchivedBots && archivedDirectBots.map(directBotRow)}
+        {!visibleDirectBots.length && <p className="channel-menu-label">
+          {directQuery ? "No matching bots" : "No active bots"}
+        </p>}
+        </div>
       </section>
       {renaming && (
         <RenameChannel
@@ -1085,20 +1181,25 @@ export const channelWorkbenchTabs: PluginFixedTabRegistration[] = (
   panelId: "channels",
   title: workbenchLabels[panel],
   icon: {
-    activity: "Activity",
+    activity: "List",
     automations: "Clock",
     usage: "ChartNoAxesCombined",
   }[panel],
   layout: "flush",
   component: function ChannelWorkbenchTab({ subPath }) {
+    const botId = directMessageBotId(subPath);
     const id = channelId(subPath);
-    return id ? (
+    return botId && panel === "activity" ? (
+      <BotDirectThreadsPanel botId={botId} selectedThreadId={subPath.split("/")[2]} />
+    ) : id ? (
       <ChannelWorkbench key={id} id={id} panel={panel} />
     ) : (
       <p className="p-4 text-sm text-muted-foreground">Open a channel to see its details.</p>
     );
   },
 }));
+
+export const directThreadsTab = channelWorkbenchTabs[0]!;
 
 /** Stable reference to our own Automations tab, for opening it from the rail. */
 export const automationsTab = channelWorkbenchTabs.find(
@@ -1131,6 +1232,14 @@ function ChannelWorkbench({ id, panel }: { id: string; panel: WorkbenchPanel }) 
 }
 
 export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
+  const botId = directMessageBotId(subPath);
+  return botId
+    ? <BotDirectMessageHeader key={botId} botId={botId}
+        selectedThreadId={subPath.split("/")[2]} threadsTab={directThreadsTab} />
+    : <ChannelHeader subPath={subPath} />;
+}
+
+function ChannelHeader({ subPath }: PluginNavPanelProps) {
   const id = channelId(subPath),
     { data, error, load } = useChannel(id, false),
     { bots } = useRoster();
@@ -1145,6 +1254,16 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
     [settingsOpen, setSettingsOpen] = useState(false);
   const [failure, setFailure] = useState<string | null>(null),
     [pending, setPending] = useState(false);
+  const [titleHost, setTitleHost] = useState<Element | null>(null);
+  const attachHeader = useCallback((header: HTMLDivElement | null) => {
+    if (!header) return;
+    const row = header.closest('[data-testid="app-page-header-content-row"]');
+    // BB owns pane dragging on the left title area. Mount the channel title
+    // there so the native focus tab and drag handler surround the real name.
+    setTitleHost(
+      row?.firstElementChild?.firstElementChild?.firstElementChild ?? null,
+    );
+  }, []);
   useEffect(() => {
     setMembersOpen(false);
     setInviteOpen(false);
@@ -1177,22 +1296,49 @@ export function ChannelsHeader({ subPath }: PluginNavPanelProps) {
       });
       setMembersOpen(false);
     });
+  const heading = (
+    <div className="channel-heading">
+      <span
+        role="button"
+        tabIndex={0}
+        className="channel-title"
+        aria-label={`Rename channel: ${room.name}`}
+        onPointerDown={(event) => {
+          if (event.button !== 0 || !titleHost) return;
+          // Portal events follow the plugin's React tree. Forward the
+          // pointer start to BB's title node so its pane drag starts.
+          titleHost.dispatchEvent(
+            new PointerEvent("pointerdown", {
+              bubbles: true,
+              button: event.button,
+              buttons: event.buttons,
+              clientX: event.clientX,
+              clientY: event.clientY,
+              pointerId: event.pointerId,
+              pointerType: event.pointerType,
+              isPrimary: event.isPrimary,
+            }),
+          );
+        }}
+        onClick={() => setSettingsOpen(true)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setSettingsOpen(true);
+          }
+        }}
+      >
+        <span className="channel-hash" aria-hidden>
+          #
+        </span>
+        <span className="channel-title-name">{room.name}</span>
+      </span>
+      {room.archived && <small>Archived</small>}
+    </div>
+  );
   return (
-    <div className="channel-header">
-      <div className="channel-heading">
-        <Button
-          variant="ghost"
-          className="channel-title"
-          aria-label={`Rename channel: ${room.name}`}
-          onClick={() => setSettingsOpen(true)}
-        >
-          <span className="channel-hash" aria-hidden>
-            #
-          </span>
-          <span className="channel-title-name">{room.name}</span>
-        </Button>
-        {room.archived && <small>Archived</small>}
-      </div>
+    <div className="channel-header" ref={attachHeader}>
+      {titleHost ? createPortal(heading, titleHost) : heading}
       <Menu
         label="Channel members"
         open={membersOpen}
@@ -1473,22 +1619,26 @@ function CreateChannel() {
 }
 export function ChannelsPage({ subPath }: PluginNavPanelProps) {
   const id = channelId(subPath);
+  const dmBotId = directMessageBotId(subPath);
   useEffect(() => {
     window.dispatchEvent(
-      new CustomEvent("bots:channel-selection", { detail: id }),
+      new CustomEvent("bots:channel-selection", { detail: dmBotId ? `dm:${dmBotId}` : id }),
     );
     return () => {
       window.dispatchEvent(
         new CustomEvent("bots:channel-selection", { detail: null }),
       );
     };
-  }, [id]);
+  }, [id, dmBotId]);
   let messageId: string | undefined;
   try {
     if (subPath.split("/")[1] === "message")
       messageId = decodeURIComponent(subPath.split("/").slice(2, subPath.endsWith("/reply") ? -1 : undefined).join("/"));
   } catch {}
-  return id ? (
+  return dmBotId ? (
+    <BotDirectMessagePage key={dmBotId} botId={dmBotId}
+      selectedThreadId={subPath.split("/")[2]} threadsTab={directThreadsTab} />
+  ) : id ? (
     <ChannelChat key={id} id={id} messageId={messageId} replyToMessage={subPath.endsWith("/reply")} />
   ) : (
     <CreateChannel />
@@ -1513,6 +1663,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
     [insertion, setInsertion] = useState<{
       text: string;
       nonce: number;
+      block?: boolean;
       sendMode?: SendMode;
       reply?: RoomMessage;
     } | null>(null),
@@ -1685,10 +1836,13 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
         setJumpTarget(null);
       });
   }, [jumpTarget, data, loadAround, loadingOlder, replyToMessage]);
+  // The live work rows sit at the end of the transcript, so following the
+  // latest means following their activity text too.
+  const workSignature = channelWorkSignature(channelQueues(data?.jobs ?? []));
   useEffect(() => {
     const el = transcript.current;
     if (el && atBottom.current && !jumpTarget) el.scrollTop = el.scrollHeight;
-  }, [data?.messages.at(-1)?.id, jumpTarget]);
+  }, [data?.messages.at(-1)?.id, workSignature, jumpTarget]);
   useEffect(() => {
     if (
       !data ||
@@ -1791,7 +1945,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
   const handleToBotId = (handle: string) =>
     bots.find((bot) => bot.handle.toLowerCase() === handle.toLowerCase())?.id ??
     null;
-  /** A mention opens that bot's DM for this channel, else its profile. */
+  /** A mention opens that bot's work thread for this channel, else its profile. */
   const openMention = async (event: ReactMouseEvent) => {
     if (
       event.defaultPrevented ||
@@ -1948,7 +2102,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                                 openWorkThread(navigate, m.sourceThreadId!, id)
                               }
                             >
-                              Open DM
+                              Open work thread
                             </button>
                           </>
                         )}
@@ -1964,7 +2118,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
               };
               const workThreadId = job?.threadId ?? m.sourceThreadId;
               const workLabel =
-                job?.threadId || m.botId ? "Open bot DM" : "Open source thread";
+                job?.threadId || m.botId ? "Open work thread" : "Open source thread";
               const followImage = () => {
                 const el = transcript.current;
                 if (el && atBottom.current && !jumpTarget)
@@ -2019,7 +2173,10 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
               const markdown = (
                 <Markdown
                   className="bot-message-markdown"
-                  content={linkifyMentions(m.text, handleToBotId)}
+                  content={linkifyMentions(
+                    displayChannelHandoffText(m.text),
+                    handleToBotId,
+                  )}
                 />
               );
               const reactionRow = grouped.length ? (
@@ -2435,8 +2592,13 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                         onAddSelected={() => {
                           if (contextSelection)
                             setInsertion({
-                              text: contextSelection,
+                              text: `${contextSelection
+                                .replace(/\r\n?/g, "\n")
+                                .split("\n")
+                                .map((line) => `> ${line}`)
+                                .join("\n")}\n\n`,
                               nonce: Date.now(),
+                              block: true,
                             });
                         }}
                         onEmoji={() => {
@@ -2447,7 +2609,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                         onView={() =>
                           openWorkThread(navigate, (job?.threadId ?? m.sourceThreadId)!, id)
                         }
-                        viewLabel={job?.threadId || m.botId ? "Open bot DM" : "Open source thread"}
+                        viewLabel={job?.threadId || m.botId ? "Open work thread" : "Open source thread"}
                       />
                     </ContextMenuContent>
                   </ContextMenu>
@@ -2515,7 +2677,7 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                           size="sm"
                           onClick={() => openWorkThread(navigate, j.threadId!, id)}
                         >
-                          Open DM
+                          Open work thread
                         </Button>
                       )}
                     </div>
@@ -2580,6 +2742,17 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
                   </div>
                 </div>
               ))}
+            <ChannelWorkTrail
+              queues={queues}
+              bots={bots}
+              approvals={data.approvals}
+              messages={messages}
+              onCancel={(jobId) =>
+                void rpc
+                  .call("cancelJob", { id: jobId })
+                  .catch((e) => setFailure(message(e)))
+              }
+            />
             <ChannelApprovalDeck
               roomId={id}
               approvals={data.approvals}
@@ -2613,21 +2786,6 @@ function ChannelChat({ id, messageId, replyToMessage }: { id: string; messageId?
           />
           <GroupComposer
             key={id}
-            stack={
-              queues.length > 0 ? (
-                <ChannelWorkCard
-                  queues={queues}
-                  bots={bots}
-                  approvals={data.approvals}
-                  messages={messages}
-                  onCancel={(jobId) =>
-                    void rpc
-                      .call("cancelJob", { id: jobId })
-                      .catch((e) => setFailure(message(e)))
-                  }
-                />
-              ) : null
-            }
             autoFocus={!messages.length}
             roomId={id}
             roomName={room.name}

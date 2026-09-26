@@ -180,6 +180,74 @@
   padding: 20px;
   box-sizing: border-box;
 }
+.bot-direct-chat {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.bot-direct-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.bot-direct-header-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+.bot-direct-header-title > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; }
+.bot-direct-header-title small { flex-shrink: 0; color: var(--muted-foreground); font-size: var(--text-xs); font-weight: 400; }
+.bot-direct-model-picker { max-width: 220px; }
+.bot-direct-header-error { color: var(--destructive); font-size: var(--text-xs); }
+.direct-messages-sidebar { margin-top: 0; }
+.direct-message-nav-row + .direct-message-nav-row { margin-top: 2px; }
+.direct-message-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  flex: 0 0 16px;
+  line-height: 1;
+}
+.bot-direct-chat [data-bot-direct-native-picker] {
+  display: none;
+}
+.bot-direct-composer-picker-host { display: inline-flex; min-width: 0; }
+.bot-direct-thread { flex: 1; min-height: 0; }
+.bot-direct-empty { margin: auto; color: var(--muted-foreground); font-size: var(--text-sm); }
+.bot-direct-threads-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  height: 100%;
+  overflow: auto;
+  padding: 12px;
+}
+.bot-direct-threads-panel > p { color: var(--muted-foreground); font-size: var(--text-sm); }
+.bot-direct-history-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border-radius: var(--radius);
+  color: inherit;
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+.bot-direct-history-row small { color: var(--muted-foreground); font-size: var(--text-xs); }
+.bot-direct-history-row:hover,
+.bot-direct-history-row[aria-current="page"] { background: var(--state-hover); }
+.bot-direct-history-row:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+@media (max-width: 700px) {
+  .bot-direct-model-picker { max-width: 120px; }
+}
 .bot-create-page {
   padding: 0;
 }
@@ -480,12 +548,12 @@
   text-align: right;
   white-space: nowrap;
 }
-.bot-retire-button:not(:disabled) {
+.bot-archive-button:not(:disabled) {
   border: 1px solid color-mix(in oklab, var(--destructive) 55%, transparent);
   background: transparent;
   color: var(--destructive);
 }
-.bot-retire-button:not(:disabled):hover {
+.bot-archive-button:not(:disabled):hover {
   background: color-mix(in oklab, var(--destructive) 12%, transparent);
 }
 @container (max-width: 520px) {
@@ -1028,7 +1096,7 @@
   font-size: var(--text-sm);
 }
 .channels-navigation-list {
-  max-height: min(36vh, 360px);
+  max-height: min(55vh, 520px);
   overflow-y: auto;
   border-bottom: 1px solid var(--border);
 }
@@ -1237,22 +1305,31 @@
   white-space: nowrap;
   font-weight: 400;
 }
+.channels-sidebar > header .channels-sidebar-collapse {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.channels-sidebar-collapse [data-icon-root] {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+.channels-sidebar-collapse:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
 .channels-sidebar > header button {
   width: 28px;
   height: 28px;
   flex-shrink: 0;
-}
-@media (hover: hover) and (pointer: fine) {
-  .channels-sidebar > header > button {
-    opacity: 0;
-    pointer-events: none;
-  }
-  .channels-sidebar > header:is(:hover, :focus-within) > button,
-  .channels-sidebar > header:has(> button[data-state="open"]) > button,
-  .channels-sidebar > header:has(> button[aria-expanded="true"]) > button {
-    opacity: 1;
-    pointer-events: auto;
-  }
 }
 .channels-sidebar > header button[aria-pressed="true"] {
   background: var(--sidebar-accent);
@@ -1276,7 +1353,6 @@
 }
 .channel-header {
   display: flex;
-  flex: 1;
   align-items: center;
   gap: 4px;
   min-width: 0;
@@ -1296,11 +1372,26 @@
   height: 28px;
   padding: 0 6px;
   min-width: 0;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: 400;
+  line-height: var(--text-sm--line-height);
   max-width: 100%;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  cursor: pointer;
+}
+[data-split-pane-id] .channel-title {
+  height: auto;
+  padding: 0;
+  cursor: grab;
+}
+.channel-title:hover {
+  background: var(--state-hover);
+}
+.channel-title:focus-visible {
+  outline: 1px solid var(--ring);
+  outline-offset: 1px;
 }
 .channel-title-name {
   overflow: hidden;
@@ -1320,13 +1411,8 @@
   justify-content: flex-end;
   gap: 6px;
 }
-/* SDK 0.4.99 provides header actions but no title slot. Expand that slot for
-   channels only, retaining BB's mobile navigation and right-panel controls.
-   These host-header selectors are checked by the live capture assertions. */
-[data-testid="app-page-header-content-row"]:has(.channel-header)
-  > div:first-child {
-  flex: 0 0 auto;
-}
+/* The channel name mounts in BB's native title drag area. Hide the default
+   panel title, leaving its focus tab and pointer handler around the name. */
 [data-testid="app-page-header-content-row"]:has(.channel-header)
   > div:first-child
   div:has(> p):has(> [data-icon-root]) {
@@ -1344,14 +1430,6 @@
   :is(button, a, input, select, textarea, [role="button"], [contenteditable="true"]) {
   app-region: no-drag;
   -webkit-app-region: no-drag;
-}
-[data-testid="app-page-header-content-row"] > div:has(.channel-header),
-[data-testid="app-page-header-content-row"]
-  > div
-  > div:has(> [data-bb-plugin="bot-teams"] > .channel-header),
-[data-bb-plugin="bot-teams"]:has(> .channel-header) {
-  flex: 1;
-  min-width: 0;
 }
 .channel-header > button {
   height: 28px;
@@ -1656,7 +1734,7 @@
   width: 16px;
   justify-content: center;
   flex-shrink: 0;
-  font-size: 16px;
+  font-size: inherit;
   font-weight: 400;
   line-height: 1;
   color: var(--muted-foreground);
@@ -2182,7 +2260,7 @@
   }
 }
 
-/* Approvals forwarded from bot DMs, pinned below the transcript. */
+/* Approvals forwarded from bot work threads, pinned below the transcript. */
 .channel-approvals {
   display: flex;
   flex-direction: column;
@@ -2207,6 +2285,10 @@
   flex-wrap: wrap;
   margin: 0;
 }
+.channel-approval-title span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .channel-approval-detail {
   margin: 0;
   max-height: 9em;
@@ -2226,6 +2308,55 @@
   flex-wrap: wrap;
   gap: 6px;
 }
+.channel-approval-form,
+.channel-approval-question {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.channel-approval-form {
+  align-items: flex-start;
+}
+.channel-approval-question {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+.channel-approval-question legend {
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.channel-approval-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  cursor: pointer;
+}
+.channel-approval-option input {
+  margin-top: 3px;
+}
+.channel-approval-option small {
+  display: block;
+  color: var(--muted-foreground);
+}
+.channel-approval-question textarea {
+  width: min(100%, 540px);
+  min-height: 60px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--foreground);
+  resize: vertical;
+}
+.channel-approval-native {
+  height: min(440px, 55vh);
+  min-height: 220px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+}
 .channel-approval-settled {
   display: flex;
   align-items: center;
@@ -2239,35 +2370,6 @@
   width: 14px;
   height: 14px;
 }
-/* Bot DMs nested under the selected channel. */
-.channel-thread-list {
-  margin: 0 0 2px;
-  padding: 0;
-  list-style: none;
-}
-.channel-thread-row {
-  width: 100%;
-  padding-left: 28px;
-  border-radius: calc(var(--radius, 8px) - 2px);
-}
-.channel-thread-row[aria-current] {
-  background: var(--sidebar-accent);
-  color: var(--sidebar-accent-foreground);
-}
-.channel-thread-avatar {
-  display: inline-flex;
-  flex: 0 0 16px;
-  justify-content: center;
-  font-size: 13px;
-  line-height: 1;
-}
-.channel-thread-empty {
-  margin: 0;
-  padding: 2px 8px 4px 28px;
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
-}
-
 /* Channel rail: ambient state for the open channel, beside the transcript. */
 /*
  * A quiet card floating in the transcript's right gutter. It sits over the
@@ -2679,5 +2781,29 @@
 .bot-message-markdown a[href^="/plugins/bot-teams/mention/"]:hover,
 .bot-message-markdown a[href^="/plugins/bot-teams/mention/"]:focus-visible {
   background: color-mix(in oklch, var(--primary, var(--foreground)) 30%, transparent);
+  text-decoration: none;
+}
+
+.bot-message-markdown a[href^="/threads/"],
+.bot-message-markdown a[href^="/projects/"][href*="/threads/"] {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--surface-recessed, transparent);
+  padding: 1px 7px;
+  color: var(--foreground);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+  text-decoration: none;
+  vertical-align: middle;
+}
+.bot-message-markdown a[href^="/threads/"]:hover,
+.bot-message-markdown a[href^="/threads/"]:focus-visible,
+.bot-message-markdown a[href^="/projects/"][href*="/threads/"]:hover,
+.bot-message-markdown a[href^="/projects/"][href*="/threads/"]:focus-visible {
+  background: var(--state-hover, transparent);
   text-decoration: none;
 }

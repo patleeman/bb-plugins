@@ -47,11 +47,13 @@ import {
   type SendMode,
 } from "./send-mode";
 import { matchingBroadcastMentions, type BroadcastMention } from "./mentions";
+import { channelHandoffPath, channelHandoffText } from "./handoff-draft";
 
 // Layout, spacing, and motion follow BB's PromptBoxInternal and
 // FollowUpPromptBox so a channel composer reads like a thread composer.
 const PROMPTBOX_MIN_HEIGHT = 68;
 const PROMPTBOX_MAX_HEIGHT = "calc(50dvh - 3rem)";
+const MAX_MESSAGE_LENGTH = 16000;
 const VOICE_ACTION_TRANSITION_MS = 180;
 const ACTION_GROUP_TRANSITION_CLASS =
   "transition-[opacity,transform] duration-[180ms] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none";
@@ -68,6 +70,13 @@ const encode = (file: Blob) =>
     reader.onerror = () => reject(new Error("Could not read this file."));
     reader.readAsDataURL(file);
   });
+
+function insertionSeparator(current: string, block = false) {
+  if (!current) return "";
+  if (!block) return current.endsWith(" ") ? "" : " ";
+  if (current.endsWith("\n\n")) return "";
+  return current.endsWith("\n") ? "\n" : "\n\n";
+}
 
 /** Keeps the dictation strip mounted while it fades out, as BB's composer does. */
 function useVoiceActionTransition(active: boolean) {
@@ -113,14 +122,11 @@ export function GroupComposer({
   onCreateBot,
   railStart,
   railEnd,
-  stack,
 }: {
   /** Left side of the row beneath the input, like a thread's environment. */
   railStart?: ReactNode;
   /** Right side of that row, like a thread's permission control. */
   railEnd?: ReactNode;
-  /** Cards tucked behind the top of the input, like a thread's follow-ups. */
-  stack?: ReactNode;
   autoFocus?: boolean;
   bots: Bot[];
   memberIds: string[];
@@ -134,6 +140,7 @@ export function GroupComposer({
   insertion: {
     text: string;
     nonce: number;
+    block?: boolean;
     sendMode?: SendMode;
     reply?: RoomMessage;
   } | null;
@@ -202,9 +209,12 @@ export function GroupComposer({
     const lead = before && !/\s$/.test(before) ? " " : "";
     const trail = after && !/^\s/.test(after) ? " " : "";
     const inserted = `${lead}${text}${trail}`;
+    const source = latestDraft.current.handoffSource;
+    const maxLength = MAX_MESSAGE_LENGTH -
+      (source ? channelHandoffText(source).length + 2 : 0);
     setDraft((d) => ({
       ...d,
-      text: (before + inserted + after).slice(0, 16000),
+      text: (before + inserted + after).slice(0, maxLength),
     }));
     const caret = start + inserted.length;
     requestAnimationFrame(() => {
@@ -297,7 +307,10 @@ export function GroupComposer({
   const blocked = paused || uploading || voiceActive || pending;
   const changeSendMode = (next: SendMode) =>
     setDraft((d) => ({ ...d, sendMode: next, text: parseSendMode(d.text).text }));
-  const hasInput = !!draft.text.trim() || draft.attachments.length > 0;
+  const hasInput =
+    !!draft.text.trim() || draft.attachments.length > 0 || !!draft.handoffSource;
+  const maxTextLength = MAX_MESSAGE_LENGTH -
+    (draft.handoffSource ? channelHandoffText(draft.handoffSource).length + 2 : 0);
   const canSubmit = !blocked && hasInput;
   const showMentionMenu = !!mention && !paused && !voiceActive;
   useEffect(() => {
@@ -316,7 +329,7 @@ export function GroupComposer({
         ...d,
         ...(insertion.sendMode ? { sendMode: insertion.sendMode } : {}),
         ...(insertion.reply ? { reply: insertion.reply } : {}),
-        text: `${d.text}${d.text && !d.text.endsWith(" ") ? " " : ""}${insertion.text}`,
+        text: d.text + insertionSeparator(d.text, insertion.block) + insertion.text,
       }));
       setMention(null);
       onInserted();
@@ -452,12 +465,13 @@ export function GroupComposer({
   return (
     <div className="group-compose-wrap">
       <div data-promptbox-shell="" className="space-y-2">
-        {stack ? <div className="grid gap-2">{stack}</div> : null}
         <div
           ref={composerRef}
           className="relative z-20"
           data-follow-up-composer=""
-          data-follow-up-composer-expanded={expanded ? "" : undefined}
+          data-follow-up-composer-expanded={
+            expanded || draft.handoffSource ? "" : undefined
+          }
           onFocusCapture={() => {
             cancelCollapse();
             setExpanded(true);
@@ -565,6 +579,39 @@ export function GroupComposer({
                 </div>
               ) : null}
               <div data-promptbox-input-region="" className="relative">
+                {draft.handoffSource ? (
+                  <div
+                    data-channel-handoff-source=""
+                    className="flex min-w-0 items-center gap-2 px-4 pt-3 text-sm"
+                  >
+                    <span className="shrink-0 text-muted-foreground">
+                      Continue from
+                    </span>
+                    <span className="inline-flex min-w-0 max-w-full items-center rounded-full border border-border bg-surface-recessed text-xs leading-4">
+                      <a
+                        className="inline-flex min-w-0 items-center gap-1 py-0.5 pl-1 pr-1 text-foreground hover:underline"
+                        href={channelHandoffPath(draft.handoffSource)}
+                        title={`Open thread: ${draft.handoffSource.title}`}
+                      >
+                        <Icon name="UserRound" className="size-4 shrink-0" aria-hidden />
+                        <span className="truncate">{draft.handoffSource.title}</span>
+                      </a>
+                      <button
+                        type="button"
+                        className="mr-0.5 rounded-full p-0.5 text-muted-foreground hover:bg-state-hover hover:text-foreground"
+                        aria-label={`Remove thread: ${draft.handoffSource.title}`}
+                        onClick={() =>
+                          setDraft((current) => ({
+                            ...current,
+                            handoffSource: null,
+                          }))
+                        }
+                      >
+                        <Icon name="X" className="size-3" aria-hidden />
+                      </button>
+                    </span>
+                  </div>
+                ) : null}
                 <textarea
                   ref={editor}
                   data-promptbox-editor-scroll=""
@@ -584,7 +631,7 @@ export function GroupComposer({
                     paused ? "Channel archived" : `Message #${roomName}…`
                   }
                   value={draft.text}
-                  maxLength={16000}
+                  maxLength={maxTextLength}
                   disabled={paused}
                   readOnly={voiceActive}
                   rows={1}

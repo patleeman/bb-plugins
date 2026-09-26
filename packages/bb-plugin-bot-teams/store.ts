@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile, rename, lstat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
@@ -113,6 +113,12 @@ export class Store {
     if (!row) throw new Error("Bot not found");
     return JSON.parse(row.json);
   }
+  findBot(id: string): Bot | null {
+    const row = this.db.prepare("SELECT json FROM bots WHERE id=?").get(id) as
+      | { json: string }
+      | undefined;
+    return row ? JSON.parse(row.json) : null;
+  }
   put(bot: Bot) {
     this.db
       .prepare(
@@ -129,7 +135,7 @@ export class Store {
         .all(id) as { json: string }[]
     ).map((r) => JSON.parse(r.json));
   }
-  /** Each bot's primary DM thread for one channel (forks excluded). */
+  /** Each bot's primary work thread for one channel (forks excluded). */
   roomConversations(roomId: string): Conversation[] {
     return (
       this.db
@@ -149,6 +155,22 @@ export class Store {
     this.db
       .prepare("INSERT INTO conversations VALUES (?,?,?,?,?)")
       .run(c.id, c.botId, c.key, c.threadId, JSON.stringify(c));
+  }
+  archiveConversation(c: Conversation, archivedAt = Date.now()) {
+    if (c.archivedAt) return c;
+    const archived: Conversation = {
+      ...c,
+      key: `history:${randomUUID()}`,
+      originalKey: c.key,
+      archivedAt,
+    };
+    this.db.prepare("UPDATE conversations SET key=?,json=? WHERE id=?")
+      .run(archived.key, JSON.stringify(archived), c.id);
+    return archived;
+  }
+  restoreConversation(c: Conversation) {
+    this.db.prepare("UPDATE conversations SET key=?,json=? WHERE id=?")
+      .run(c.key, JSON.stringify(c), c.id);
   }
   putBotCreateRequest(request: BotCreateRequest) {
     this.db
@@ -476,6 +498,24 @@ export class Store {
         .all(roomId, limit, offset) as { json: string }[]
     ).map((r) => messageSchema.parse(JSON.parse(r.json)));
   }
+  visibleMessagesAfter(roomId: string, after: string, through: string): RoomMessage[] {
+    const row = this.db.prepare(
+      "SELECT rowid FROM room_messages WHERE id=? AND room_id=?",
+    ).get(after, roomId) as { rowid: number } | undefined;
+    if (!row) throw new Error("Message cursor not found in this channel.");
+    const end = this.db.prepare(
+      "SELECT rowid FROM room_messages WHERE id=? AND room_id=?",
+    ).get(through, roomId) as { rowid: number } | undefined;
+    if (!end) throw new Error("End message not found in this channel.");
+    return (this.db.prepare(
+      `SELECT json FROM room_messages WHERE room_id=? AND rowid>? AND rowid<=?
+       AND COALESCE(json_extract(json,'$.internalResult'),0)=0
+       AND NOT (json_extract(json,'$.automationId') IS NOT NULL
+                AND json_extract(json,'$.botId') IS NULL)
+       ORDER BY rowid`,
+    ).all(roomId, row.rowid, end.rowid) as { json: string }[])
+      .map((r) => messageSchema.parse(JSON.parse(r.json)));
+  }
   firstMessage(roomId: string): RoomMessage | null {
     const row = this.db
       .prepare(
@@ -527,6 +567,33 @@ export class Store {
       messages,
       parents: this.parents(messages),
       nextBefore: rows.length > limit ? messages[0]!.id : null,
+      nextAfter: null,
+    };
+  }
+  historyAfter(roomId: string, after: string, through?: string, limit = 50) {
+    this.room(roomId);
+    const cursor = this.db.prepare(
+      "SELECT rowid FROM room_messages WHERE id=? AND room_id=?",
+    ).get(after, roomId) as { rowid: number } | undefined;
+    if (!cursor) throw new Error("Message cursor not found in this channel.");
+    const end = through ? this.db.prepare(
+      "SELECT rowid FROM room_messages WHERE id=? AND room_id=?",
+    ).get(through, roomId) as { rowid: number } | undefined : undefined;
+    if (through && !end) throw new Error("End message not found in this channel.");
+    const rows = (this.db.prepare(
+      `SELECT json FROM room_messages WHERE room_id=? AND rowid>? AND rowid<=?
+       AND COALESCE(json_extract(json,'$.internalResult'),0)=0
+       AND NOT (json_extract(json,'$.automationId') IS NOT NULL
+                AND json_extract(json,'$.botId') IS NULL)
+       ORDER BY rowid LIMIT ?`,
+    ).all(roomId, cursor.rowid, end?.rowid ?? Number.MAX_SAFE_INTEGER, limit + 1) as { json: string }[])
+      .map((r) => messageSchema.parse(JSON.parse(r.json)));
+    const messages = rows.slice(0, limit);
+    return {
+      messages,
+      parents: this.parents(messages),
+      nextBefore: null,
+      nextAfter: rows.length > limit ? messages.at(-1)!.id : null,
     };
   }
   transcript(

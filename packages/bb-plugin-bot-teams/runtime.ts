@@ -75,6 +75,9 @@ export const jobPrompt = (job: Job) => {
     .filter(Boolean)
     .join("\n\n");
 };
+export const legacyBotStartMessage =
+  "Read MISSION.md and MEMORY.md. Introduce yourself in one short sentence based on your mission. Then wait for a message.";
+const emptyDirectStart = "Preparing direct message";
 
 const jobInput = (job: Job) => [
   { type: "text" as const, text: jobPrompt(job), mentions: [] },
@@ -274,6 +277,7 @@ export class Runtime {
       .conversations(bot.id)
       .find((c) => c.key === key);
     if (existing) return existing;
+    const emptyDirectMessage = kind === "admin" && key === "admin" && !prompt && !attachments.length;
     const thread = await this.bb.sdk.threads.spawn({
       projectId: bot.projectId,
       environment: {
@@ -281,12 +285,14 @@ export class Runtime {
         hostId: bot.hostId,
         workspace: { type: "personal" },
       },
-      input: [
+      input: emptyDirectMessage ? [{
+        type: "text",
+        text: emptyDirectStart,
+        mentions: [],
+      }] : [
         {
           type: "text",
-          text:
-            prompt ??
-            "Read MISSION.md and MEMORY.md. Introduce yourself in one short sentence based on your mission. Then wait for a message.",
+          text: prompt ?? legacyBotStartMessage,
           mentions: [],
         },
         ...attachments.map((a) =>
@@ -301,12 +307,12 @@ export class Runtime {
               },
         ),
       ],
-      sendAt: Date.now() + 1500,
+      sendAt: Date.now() + (emptyDirectMessage ? 60_000 : 1500),
       title:
         kind === "group"
-          ? `DM with ${bot.name} · #${title}`
+          ? `${bot.name} work · #${title}`
           : kind === "admin"
-            ? `DM with ${bot.name}`
+            ? `${bot.name} thread`
             : `${bot.name} · ${title}`,
       visibility: "hidden",
       providerId: bot.providerId,
@@ -320,6 +326,33 @@ export class Runtime {
       permissionMode: permissionMode ?? bot.permissionMode,
       pluginMetadata: { botId: bot.id, conversationKey: key },
     });
+    if (emptyDirectMessage) {
+      try {
+        let removed = false;
+        for (let attempt = 0; attempt < 3 && !removed; attempt++) {
+          const queued = await this.bb.sdk.threads.queuedMessages.list({ threadId: thread.id });
+          const start = queued.find((item) =>
+            item.content.length === 1 && item.content[0]?.type === "text" &&
+            item.content[0].text === emptyDirectStart);
+          if (start) {
+            await this.bb.sdk.threads.queuedMessages.delete({
+              threadId: thread.id,
+              queuedMessageId: start.id,
+            });
+            removed = true;
+          } else if (attempt < 2) {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+        }
+        if (!removed) throw new Error("Could not clear the pending direct-message start.");
+      } catch (cause) {
+        await this.bb.sdk.threads.delete({
+          threadId: thread.id,
+          childThreadsConfirmed: true,
+        }).catch(() => {});
+        throw cause;
+      }
+    }
     const c: Conversation = {
       id: randomUUID(),
       botId: bot.id,
@@ -328,11 +361,30 @@ export class Runtime {
       title,
       kind,
       createdAt: Date.now(),
+      providerId: bot.providerId,
+      model: bot.model,
     };
     this.store.putConversation(c);
     if (bot.error) this.store.put({ ...this.store.get(bot.id), error: null });
     this.changed();
     return c;
+  }
+  async renameLegacyWorkThreads() {
+    for (const bot of this.store.all())
+      for (const conversation of this.store.conversations(bot.id)) {
+        if (conversation.kind === "mission") continue;
+        try {
+          const thread = await this.bb.sdk.threads.get({ threadId: conversation.threadId });
+          const previous = thread.title ?? "";
+          const title = conversation.kind === "group"
+            ? previous.replace(/^DM with (.*) · (#.*)$/, "$1 work · $2")
+            : previous.replace(/^DM with (.*)$/, "$1 thread");
+          if (title !== previous)
+            await this.bb.sdk.threads.update({ threadId: conversation.threadId, title });
+        } catch (cause) {
+          this.bb.log.debug(`Could not rename bot work thread: ${errorText(cause)}`);
+        }
+      }
   }
   private async forkConversation(
     bot: Bot,
@@ -344,7 +396,7 @@ export class Runtime {
     const thread = await this.bb.sdk.threads.fork({
       sourceThreadId,
       visibility: "hidden",
-      title: `DM with ${bot.name} · #${this.store.room(job.roomId!).name} · Fork`,
+      title: `${bot.name} work · #${this.store.room(job.roomId!).name} · Fork`,
       permissionMode,
       pluginMetadata: { botId: bot.id, conversationKey: job.conversationKey },
       input: [
@@ -518,7 +570,7 @@ export class Runtime {
       conversationKey: job.conversationKey,
       text: [
         `${bot.name}'s response stopped before its final report.`,
-        "The bot DM and worktree are preserved, and this task is incomplete.",
+        "The bot work thread and workspace are preserved, and this task is incomplete.",
         `Last recorded progress: ${progress}`,
       ].join(" "),
       createdAt: Date.now(),
@@ -626,7 +678,7 @@ export class Runtime {
           mentioned(text, bot.handle),
       )
     )
-      throw new Error("Restore the retired bot before mentioning it.");
+      throw new Error("Restore the archived bot before mentioning it.");
     const invited = this.store
       .all()
       .filter(
@@ -1788,7 +1840,7 @@ export class Runtime {
     const conversation = this.store
       .conversations(bot.id)
       .find((candidate) => candidate.key === job.conversationKey);
-    // The bot DM thread retains earlier inputs. Only replay channel messages it
+    // The bot work thread retains earlier inputs. Only replay channel messages it
     // has not received, while keeping the first turn's bounded history.
     const previous = conversation
       ? this.store.latestDeliveredJob(
@@ -1798,23 +1850,36 @@ export class Runtime {
           job.id,
         )
       : null;
-    const cursor = previous?.contextMessageId
-      ? recent.findIndex((message) => message.id === previous.contextMessageId)
-      : -1;
-    const unseen = cursor < 0 ? recent : recent.slice(cursor + 1);
-    const transcript = unseen
+    const unseen = previous?.contextMessageId && recent.length &&
+      this.store.message(previous.contextMessageId)?.roomId === room.id
+      ? this.store.visibleMessagesAfter(room.id, previous.contextMessageId, recent.at(-1)!.id)
+      : recent;
+    const entries = unseen
       .filter(
         (message) =>
           message.id !== trigger.id &&
           !(previous && message.botId === bot.id &&
             message.conversationKey === job.conversationKey),
       )
-      .map(
-        (m) =>
-          `[${m.id}] ${m.speaker}: ${m.text}${m.attachments.length ? "\nAttachments: " + m.attachments.map((a) => a.name).join(", ") : ""}`,
-      )
-      .join("\n\n")
-      .slice(-48000);
+      .map((message) => ({
+        id: message.id,
+        text: `[${message.id}] ${message.speaker}: ${message.text}${message.attachments.length ? "\nAttachments: " + message.attachments.map((a) => a.name).join(", ") : ""}`,
+      }));
+    const included: typeof entries = [];
+    let transcriptLength = 0;
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const entry = entries[index]!;
+      if (transcriptLength + entry.text.length > 48000) break;
+      included.unshift(entry);
+      transcriptLength += entry.text.length + 2;
+    }
+    const omitted = entries.slice(0, entries.length - included.length);
+    const transcript = included.map((entry) => entry.text).join("\n\n");
+    const omittedRange = omitted.length && previous?.contextMessageId
+      ? [
+          `${omitted.length} earlier channel messages were too large for this prompt. Before answering, read the exact range after ${previous.contextMessageId} through ${omitted.at(-1)!.id} with bots_channel_read {"id":"${room.id}","after":"${previous.contextMessageId}","through":"${omitted.at(-1)!.id}","limit":100}. Repeat with nextAfter until it is null.`,
+        ]
+      : [];
     const roster = room.memberIds
       .map((id) => {
         const b = this.store.get(id);
@@ -1831,7 +1896,7 @@ export class Runtime {
     job.text = [
       ...(!previous || previous.rosterVersion !== rosterVersion
         ? [
-            `You are @${bot.handle} working for channel #${room.name} (channel ID ${room.id}). This BB thread is your DM with the owner and your work log for channel tasks. Other members may be working at the same time.`,
+            `You are @${bot.handle} working for channel #${room.name} (channel ID ${room.id}). This BB thread is your private work record for that channel. The owner and bots converse in the channel; your final answer posts there. Other members may be working at the same time.`,
             "Members:",
             roster,
             "",
@@ -1843,6 +1908,7 @@ export class Runtime {
             transcript,
           ]
         : []),
+      ...omittedRange,
       "",
       `Consider this message from ${trigger.speaker}:`,
       (trigger.sentText ?? trigger.text) ||
@@ -2157,10 +2223,10 @@ export class Runtime {
           if (!!bot.retired === retired) return bot;
           if (retired) {
             for (const job of this.store.work(id))
-              await this.cancel(job, "Bot retired by the owner.", true);
+              await this.cancel(job, "Bot archived by the owner.", true);
             for (const c of this.store
               .conversations(id)
-              .filter((c) => c.kind === "admin")) {
+              .filter((c) => c.kind === "admin" && !c.archivedAt)) {
               try {
                 for (const q of await this.bb.sdk.threads.queuedMessages.list({
                   threadId: c.threadId,
@@ -2529,7 +2595,7 @@ export class Runtime {
     const threadIds = new Set([
       ...this.store
         .conversations(bot.id)
-        .filter((c) => c.kind === "admin")
+        .filter((c) => c.kind === "admin" && !c.archivedAt)
         .map((c) => c.threadId),
       ...work
         .flatMap((j) =>

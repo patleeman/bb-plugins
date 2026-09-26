@@ -5,3 +5,4 @@ allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
   - '@get-bb/plugin-sdk@0.4.6 || 0.4.21 || 0.5.24'
+  - hono@4.13.9
