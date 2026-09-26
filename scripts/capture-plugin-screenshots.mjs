@@ -343,10 +343,11 @@ class CdpClient {
     await sleep(700);
   }
 
-  async capture(outputPath) {
+  async capture(outputPath, clip) {
     const screenshot = await this.command("Page.captureScreenshot", {
       format: "png",
       captureBeyondViewport: false,
+      ...(clip ? { clip: { ...clip, scale: 1 } } : {}),
     });
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(outputPath, Buffer.from(screenshot.data, "base64"));
@@ -1750,6 +1751,35 @@ const captures = [
   {
     id: "smart-queue",
     packageDir: "bb-plugin-smart-queue",
+    // End the frame just below the composer, above the row naming the machine.
+    clip: (client) =>
+      client.evaluate(`(() => {
+        // The composer card is the bordered frame around both the editor and its model picker.
+        const editor = document.querySelector('[contenteditable="true"]');
+        const picker = Array.from(document.querySelectorAll("button"))
+          .find((candidate) => candidate.innerText.includes("Qwen3.8 Flash"));
+        if (!editor || !picker) throw new Error("Composer editor or model picker not found");
+        let composer = picker.parentElement;
+        while (composer && !(composer.contains(editor) && getComputedStyle(composer).borderTopWidth !== "0px")) {
+          composer = composer.parentElement;
+        }
+        if (!composer) throw new Error("Composer frame not found");
+        const frame = composer.getBoundingClientRect();
+        // Whatever sits below the card, such as the machine row, must fall outside the crop.
+        const below = Array.from(document.querySelectorAll("button, span"))
+          .filter((candidate) => !composer.contains(candidate) && candidate.textContent.trim() &&
+            candidate.getBoundingClientRect().top >= frame.bottom &&
+            candidate.getBoundingClientRect().left < frame.right && candidate.getBoundingClientRect().right > frame.left);
+        if (!below.length) throw new Error("Expected the machine row below the composer");
+        const nextTop = Math.min(...below.map((candidate) => candidate.getBoundingClientRect().top));
+        const bottom = Math.min(Math.ceil(frame.bottom) + 12, Math.floor(nextTop) - 1);
+        const inside = below.find((candidate) => candidate.getBoundingClientRect().top < bottom);
+        if (inside) {
+          throw new Error("The crop would include " + JSON.stringify(inside.textContent.trim()) +
+            " at " + Math.round(inside.getBoundingClientRect().top) + "px; the composer ends at " + Math.round(frame.bottom) + "px");
+        }
+        return { x: 0, y: 0, width: window.innerWidth, height: bottom };
+      })()`),
     setup: async (client) => {
       const followup = "Next, write a haiku about message queues.";
       const correction = "Stop, cancel the sleep now and reply with the word cancelled.";
@@ -1894,7 +1924,8 @@ try {
         await client.evaluate(`document.querySelector('button[aria-label^="Toggle sidebar"]')?.click()`);
         await sleep(350);
       }
-      await client.capture(outputPath);
+      // A capture may crop the real frame, such as to leave out machine names.
+      await client.capture(outputPath, capture.clip ? await capture.clip(client) : undefined);
       if (privateSidebar) {
         await client.evaluate(`document.querySelector('button[aria-label^="Toggle sidebar"]')?.click()`);
         await sleep(350);

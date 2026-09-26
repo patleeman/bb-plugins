@@ -121,7 +121,8 @@ composer while it worked. Smart Queue steered the correction ("Stop, cancel
 the sleep now and reply with the word cancelled.") into the running turn,
 shown by BB's **Steer** label. It kept the separate task ("Next, write a haiku
 about message queues.") in the **Queue** as a follow-up. The capture also checks
-both decisions in `bb smart-queue recent`.
+both decisions in `bb smart-queue recent`, and ends the frame at the composer
+so the machine name below it is left out.
 
 ![Smart Queue settings with provider keys, the Jev connection check, and the fallback model picker](assets/settings.png)
 
