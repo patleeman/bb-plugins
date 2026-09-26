@@ -609,12 +609,29 @@ export function ChannelRedirect({ subPath }: { subPath?: string }) {
 export function ChannelsNavigation({
   experimental_Original: Original,
 }: ExperimentalSidebarNavigationProps) {
+  const anchor = useRef<HTMLSpanElement>(null);
+  const [inlineTarget, setInlineTarget] = useState<HTMLElement | null>(null);
+
+  useLayoutEffect(() => {
+    const sidebar = anchor.current?.closest('[data-sidebar="sidebar"]');
+    const content = sidebar?.querySelector<HTMLElement>('[data-sidebar="content"]');
+    if (!content) return;
+
+    const target = document.createElement("div");
+    target.className = "channels-sidebar-inline";
+    content.prepend(target);
+    setInlineTarget(target);
+    return () => target.remove();
+  }, []);
+
+  const sections = <ChannelsSidebar activeThreadId={null} onNavigate={() => {}} />;
   return (
     <>
       <Original />
-      <div className="channels-navigation-list">
-        <ChannelsSidebar activeThreadId={null} onNavigate={() => {}} />
-      </div>
+      <span ref={anchor} hidden />
+      {inlineTarget
+        ? createPortal(sections, inlineTarget)
+        : <div className="channels-navigation-list">{sections}</div>}
     </>
   );
 }
@@ -1637,7 +1654,7 @@ export function ChannelsPage({ subPath }: PluginNavPanelProps) {
   } catch {}
   return dmBotId ? (
     <BotDirectMessagePage key={dmBotId} botId={dmBotId}
-      selectedThreadId={subPath.split("/")[2]} threadsTab={directThreadsTab} />
+      selectedThreadId={subPath.split("/")[2]} />
   ) : id ? (
     <ChannelChat key={id} id={id} messageId={messageId} replyToMessage={subPath.endsWith("/reply")} />
   ) : (

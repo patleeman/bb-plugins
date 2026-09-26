@@ -132,21 +132,11 @@ export function BotDirectMessageHeader({ botId, selectedThreadId, threadsTab }: 
 export function BotDirectMessagePage({
   botId,
   selectedThreadId,
-  threadsTab,
 }: {
   botId: string;
   selectedThreadId?: string;
-  threadsTab: PluginFixedTabRegistration;
 }) {
   const { data, error, load } = useDirectData(botId);
-  const panel = experimental_useAppPanel();
-  const openedFor = useRef<string | null>(null);
-  useEffect(() => {
-    if (!data) return;
-    if (openedFor.current === botId) return;
-    if (panel.openFixedTab({ surface: { kind: "current" }, tab: threadsTab }))
-      openedFor.current = botId;
-  }, [botId, data, panel, threadsTab]);
   if (!data) return (
     <div className="bot-direct-page">
       <ErrorMessage error={error} />

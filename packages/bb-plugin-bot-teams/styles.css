@@ -1099,6 +1099,10 @@
   overflow-y: auto;
   border-bottom: 1px solid var(--border);
 }
+.channels-sidebar-inline {
+  flex: none;
+  padding-top: 4px;
+}
 .channels-sidebar {
   padding: 4px 8px;
   font-size: var(--text-sm);
