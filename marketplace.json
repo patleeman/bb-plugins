@@ -314,7 +314,7 @@
       "id": "smart-queue",
       "displayName": "Smart Queue",
       "description": "Decides whether a message sent to a busy thread steers the current turn or waits as a follow-up.",
-      "icon": "ListOrdered",
+      "icon": "ListEnd",
       "tags": [
         "agents",
         "threads",

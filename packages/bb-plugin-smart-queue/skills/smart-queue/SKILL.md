@@ -18,24 +18,39 @@ bb smart-queue recent [--limit <n>] [--json]
 bb smart-queue classify <thread-id> <message> [--json]
 ```
 
-- `status` shows whether Smart Queue is on, whether Jev has a key, and which
-  fallback model it uses.
+- `status` shows whether Smart Queue is on, the Jev providers it will try in
+  order, configuration problems, and the fallback model.
 - `recent` lists up to 30 decisions with the action, the classifier that
-  decided (`Jev 86%`, `fallback model`, or `no classifier answered`), the
+  decided and through which provider (`Jev 86% via TypeSafe`,
+  `fallback model via pi/…`, or `no classifier answered`), the
   thread, and a message preview.
 - `classify` runs the classifier against a thread's current context and prints
-  the decision. It does not send or queue anything. With no Jev key, it starts
-  and deletes one hidden fallback-model thread.
+  the decision. It does not send or queue anything. With no Jev provider, it
+  starts and deletes one hidden fallback-model thread.
 
 ## Settings
 
-Change settings with `bb plugin config smart-queue set <key> <value>`:
-`enabled`, `zenApiKey` (secret; ask the owner for it), `jevModel`,
-`jevTimeoutMs`, `steerConfidence`, `fallbackProvider`, and `fallbackModel`.
+Change settings with `bb plugin config smart-queue set <key> <value>`.
+
+- `jevProvider`: `auto` (default), `typesafe`, `vercel`, `openrouter`,
+  `opencode-zen`, or `custom`. `auto` tries each configured provider in that
+  order and moves on when one fails.
+- Provider keys are secrets: `typesafeApiKey`, `vercelApiKey`,
+  `openRouterApiKey`, `zenApiKey`, and `customJevApiKey`. Ask the owner for
+  them; never print them. Environment fallbacks are `TYPESAFE_API_KEY`,
+  `AI_GATEWAY_API_KEY`, `OPENROUTER_API_KEY`, and `OPENCODE_API_KEY`.
+- `typesafeModel`: `jev-latest` (default), `jev-preview`, or a pinned version.
+- A custom provider needs `customJevEndpoint` (full HTTPS URL of a System One
+  endpoint, or HTTP on localhost) and `customJevModel`.
+- `jevTimeoutMs`, `steerConfidence`, `fallbackProvider` (empty uses the
+  thread's provider; `none` turns it off), `fallbackModel`, and `enabled`.
+
+Run `bb smart-queue status` after a change. It lists the Jev routes in order
+and any configuration problems.
 
 ## Troubleshooting
 
-- `no classifier answered`: Jev has no key or failed, and the fallback model
+- `no classifier answered`: no Jev provider answered, and the fallback model
   failed too. Read `bb plugin logs smart-queue` for the reason.
 - A queued card that says *Smart Queue: follow-up after the current turn* is
   released when the thread goes idle. The owner can use the card's **Send now**

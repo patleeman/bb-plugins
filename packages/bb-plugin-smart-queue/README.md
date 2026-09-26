@@ -10,19 +10,46 @@ for ordinary threads.
 
 ## How it decides
 
-1. **Jev** answers first. Smart Queue sends Jev the thread title, your recent
-   requests, the latest assistant output, and the new message. Jev returns
-   `steer` or `followup` with a confidence. A steer below the confidence
-   threshold (default 0.7) becomes a follow-up.
-2. **The fallback model** answers when Jev is unavailable: no OpenCode Zen API
-   key, an HTTP error, a timeout, or an invalid answer. It runs the same
+1. **Jev** answers first. Smart Queue sends Jev the thread title, your last
+   three requests, the last 2,000 characters of assistant output, and the new
+   message. Jev returns `steer` or `followup` with a confidence. A steer below
+   the confidence threshold (default 0.7) becomes a follow-up.
+2. **The fallback model** answers when no Jev provider does. It asks the same
    question in a hidden, temporary thread in BB's Personal project, on the
-   thread's machine, and deletes it afterwards. The default is
-   `pi` / `opencode-go/qwen3.8-flash`.
+   thread's machine, and deletes the thread afterwards. By default it uses the
+   thread's own provider and that provider's default model; pick a fast, cheap
+   model in settings, or turn it off.
 3. **Follow-up** is used when neither answers. An unnecessary steer interrupts
    work, so waiting is the safe default.
 
 All conversation text is sent as data, with instructions to treat it as data.
+
+## Jev providers
+
+Every provider serves the same Jev model through TypeSafe's
+[System One API](https://docs.typesafe.ai/api). Add a key for any of them.
+
+| Provider | Key setting | Environment fallback | Model |
+| --- | --- | --- | --- |
+| [TypeSafe](https://typesafe.ai) (canonical) | `typesafeApiKey` | `TYPESAFE_API_KEY` | `typesafeModel`, default `jev-latest` |
+| Vercel AI Gateway | `vercelApiKey` | `AI_GATEWAY_API_KEY` | `typesafe-ai/jev` |
+| OpenRouter | `openRouterApiKey` | `OPENROUTER_API_KEY` | `typesafe/jev-1.13` |
+| OpenCode Zen | `zenApiKey` | `OPENCODE_API_KEY` | `jev-1.13` |
+| Custom | `customJevApiKey` (optional) | — | `customJevModel` |
+
+`jevProvider` chooses where to call Jev. `auto`, the default, tries the
+providers in the order above, uses each one that has a key, and moves to the
+next when one fails. Name one provider to use only that one.
+
+**Bring your own provider.** Set `customJevEndpoint` to the full URL of any
+endpoint that accepts System One requests, such as a company gateway or a
+self-hosted proxy, and set `customJevModel` to the model name it expects. The
+custom key is sent as a bearer token when set. The endpoint must use HTTPS,
+except on `localhost`.
+
+Each provider bills its own usage. TypeSafe charges per input token. A
+Smart Queue decision sends at most about 25,000 characters, and usually far
+less.
 
 ## What it handles
 
@@ -55,17 +82,19 @@ Open **Settings → Plugins → Smart Queue**, or use `bb plugin config smart-qu
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `enabled` | `true` | Turn classification on or off. |
-| `zenApiKey` | — | OpenCode Zen key for Jev (secret). Falls back to the server's `OPENCODE_API_KEY`. |
-| `jevModel` | `jev-1.13` | Jev model. |
-| `jevTimeoutMs` | `5000` | Jev request deadline, 250 to 15000 ms. |
+| `jevProvider` | `auto` | `auto`, `typesafe`, `vercel`, `openrouter`, `opencode-zen`, or `custom`. |
+| `typesafeApiKey`, `vercelApiKey`, `openRouterApiKey`, `zenApiKey` | — | Provider keys (secret). See [Jev providers](#jev-providers). |
+| `typesafeModel` | `jev-latest` | `jev-preview`, or a versioned ID such as `jev-1.13.0` to pin one. |
+| `customJevEndpoint`, `customJevApiKey`, `customJevModel` | — | Your own System One endpoint. |
+| `jevTimeoutMs` | `5000` | Deadline for each provider attempt, 250 to 15000 ms. |
 | `steerConfidence` | `0.7` | Minimum Jev confidence to steer. |
-| `fallbackProvider` | `pi` | Provider for the fallback model. Leave empty to skip it. |
-| `fallbackModel` | `opencode-go/qwen3.8-flash` | Fallback model ID from your provider catalog. |
+| `fallbackProvider` | the thread's provider | Provider for the fallback model. Enter `none` to turn it off. |
+| `fallbackModel` | the provider's default | A fast, cheap model from that provider's catalog. |
 
 ## Commands
 
 ```sh
-bb smart-queue status              # Which classifiers are available
+bb smart-queue status              # Jev routes, problems, and the fallback model
 bb smart-queue recent [--limit n]  # Recent decisions, newest first
 bb smart-queue classify <thread-id> <message>  # Dry run; sends nothing
 ```
@@ -78,11 +107,17 @@ Every command accepts `--json`.
 
 This screenshot is captured from BB's rendered thread UI. A seeded thread is
 busy running `sleep 150` in its shell. Two messages were typed into the real
-composer while it worked. Smart Queue steered the correction ("Wait, when the
-sleep ends, reply with the word finished instead.") into the running turn,
+composer while it worked. Smart Queue steered the correction ("Stop, cancel
+the sleep now and reply with the word cancelled.") into the running turn,
 shown by BB's **Steer** label. It kept the separate task ("Next, write a haiku
 about message queues.") in the **Queue** as a follow-up. The capture also checks
 both decisions in `bb smart-queue recent`.
+
+![Smart Queue settings with the Jev provider picker, provider keys, and a custom endpoint](assets/settings.png)
+
+The second screenshot is the plugin's real settings page: the Jev provider
+picker, a key field for each provider, the custom endpoint fields, and the
+fallback model settings. The only key set is OpenCode Zen's, shown masked.
 
 ## Install
 

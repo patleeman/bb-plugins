@@ -9,6 +9,7 @@ import {
   type ClassifierSettings,
   type Situation,
 } from "./classifier";
+import { jevProviderChoices, jevRoutes } from "./jev-providers";
 import { SmartQueue, describeVerdict, rowText, type DecisionRecord, type ThreadInfo } from "./queue";
 
 const recentKey = "recent-decisions";
@@ -24,14 +25,62 @@ export default async function plugin(bb: BbPluginApi) {
       description:
         "Hold an owner message sent while a thread is working, then steer the current turn or queue it as a follow-up.",
     },
+    jevProvider: {
+      type: "select",
+      label: "Jev provider",
+      options: [...jevProviderChoices],
+      default: "auto",
+      description:
+        "Where Smart Queue calls Jev. Auto tries TypeSafe, Vercel AI Gateway, OpenRouter, OpenCode Zen, then Custom, using each one that has a key, and moves on when one fails.",
+    },
+    typesafeApiKey: {
+      type: "string",
+      label: "TypeSafe API key",
+      secret: true,
+      description:
+        "TypeSafe serves Jev directly. Create a key at https://console.typesafe.ai/keys. Falls back to the server's TYPESAFE_API_KEY environment variable.",
+    },
+    typesafeModel: {
+      type: "string",
+      label: "TypeSafe model",
+      default: "jev-latest",
+      description: "jev-latest follows each stable release, jev-preview tries previews, and a versioned ID such as jev-1.13.0 pins one.",
+    },
+    vercelApiKey: {
+      type: "string",
+      label: "Vercel AI Gateway API key",
+      secret: true,
+      description: "Calls Jev through Vercel AI Gateway. Falls back to AI_GATEWAY_API_KEY.",
+    },
+    openRouterApiKey: {
+      type: "string",
+      label: "OpenRouter API key",
+      secret: true,
+      description: "Calls Jev through OpenRouter. Falls back to OPENROUTER_API_KEY.",
+    },
     zenApiKey: {
       type: "string",
       label: "OpenCode Zen API key",
       secret: true,
-      description:
-        "Used for Jev. Falls back to the server's OPENCODE_API_KEY environment variable. Without a key, Smart Queue uses the fallback model.",
+      description: "Calls Jev through OpenCode Zen. Falls back to OPENCODE_API_KEY.",
     },
-    jevModel: { type: "string", label: "Jev model", default: "jev-1.13" },
+    customJevEndpoint: {
+      type: "string",
+      label: "Custom Jev endpoint",
+      description:
+        "Bring your own provider: the full URL of any endpoint that speaks TypeSafe's System One API, such as https://gateway.example.com/v1/systemone. HTTPS is required except on localhost.",
+    },
+    customJevApiKey: {
+      type: "string",
+      label: "Custom Jev API key",
+      secret: true,
+      description: "Sent as a bearer token to the custom endpoint. Leave empty if it needs none.",
+    },
+    customJevModel: {
+      type: "string",
+      label: "Custom Jev model",
+      description: "The model name the custom endpoint expects, such as jev-latest.",
+    },
     jevTimeoutMs: {
       type: "number",
       label: "Jev timeout (milliseconds)",
@@ -49,14 +98,16 @@ export default async function plugin(bb: BbPluginApi) {
     fallbackProvider: {
       type: "string",
       label: "Fallback provider",
-      default: "pi",
-      description: "Used when Jev is unavailable or fails. Leave empty to fall back straight to follow-up.",
+      default: "",
+      description:
+        "Used when no Jev provider answers. Empty uses the thread's own provider. Enter none to skip straight to follow-up.",
     },
     fallbackModel: {
       type: "string",
       label: "Fallback model",
-      default: "opencode-go/qwen3.8-flash",
-      description: "A fast model from your BB provider catalog. It runs in a hidden, temporary thread.",
+      default: "",
+      description:
+        "A fast, cheap model from that provider's catalog. Empty uses the provider's default model. It runs in a hidden, temporary thread.",
     },
   });
   const config = async (): Promise<ClassifierSettings & { enabled: boolean }> => settings.get();
@@ -87,7 +138,7 @@ export default async function plugin(bb: BbPluginApi) {
     ]);
     const personal = projects.find((project) => project.kind === "personal");
     if (!personal) throw new Error("BB's Personal project is unavailable.");
-    return { projectId: personal.id, hostId: environment.hostId, queuedMessageId };
+    return { projectId: personal.id, hostId: environment.hostId, queuedMessageId, threadProviderId: thread.providerId };
   }
 
   async function record(entry: DecisionRecord) {
@@ -214,23 +265,31 @@ export default async function plugin(bb: BbPluginApi) {
           return { exitCode: 0, stdout: usage };
         case "status": {
           const current = await config();
-          const jevKey = Boolean(current.zenApiKey?.trim() || process.env.OPENCODE_API_KEY?.trim());
-          const fallback =
-            current.fallbackProvider && current.fallbackModel
-              ? `${current.fallbackProvider}/${current.fallbackModel}`
-              : null;
+          const { routes, problems } = jevRoutes(current);
+          const fallbackProvider = current.fallbackProvider?.trim() ?? "";
+          const fallbackModel = current.fallbackModel?.trim() ?? "";
           const status = {
             enabled: current.enabled,
-            jev: jevKey ? current.jevModel : null,
-            fallback,
+            jevProvider: current.jevProvider ?? "auto",
+            // Names, endpoints, and models only; keys never leave the server.
+            jev: routes.map(({ name, endpoint, model }) => ({ name, endpoint, model })),
+            problems,
+            fallback:
+              fallbackProvider.toLowerCase() === "none"
+                ? null
+                : `${fallbackProvider || "the thread's provider"}${fallbackModel ? `/${fallbackModel}` : " (default model)"}`,
             holding: [...queue.entries.values()].filter((entry) => entry.state === "pending").length,
           };
           return reply(
             status,
             [
               `Smart Queue: ${status.enabled ? "on" : "off"}`,
-              `Jev: ${status.jev ?? "unavailable (no OpenCode Zen API key)"}`,
-              `Fallback model: ${status.fallback ?? "none (follow-up)"}`,
+              `Jev provider: ${status.jevProvider}`,
+              status.jev.length
+                ? `Jev routes: ${status.jev.map((route) => `${route.name} (${route.model})`).join(" → ")}`
+                : "Jev routes: none (add a TypeSafe key, another provider key, or a custom endpoint)",
+              ...problems.map((problem) => `Problem: ${problem}`),
+              `Fallback model: ${status.fallback ?? "off (follow-up)"}`,
               `Deciding now: ${status.holding}`,
             ].join("\n"),
           );

@@ -51,9 +51,10 @@ export const maxDecideMs = 90_000;
 export const decidingReason = "Smart Queue is deciding whether to steer or follow up.";
 
 export function describeVerdict(verdict: Verdict) {
+  const via = verdict.via ? ` via ${verdict.via}` : "";
   if (verdict.source === "jev")
-    return verdict.confidence === null ? "Jev" : `Jev ${Math.round(verdict.confidence * 100)}%`;
-  return verdict.source === "model" ? "fallback model" : "no classifier answered";
+    return `Jev${verdict.confidence === null ? "" : ` ${Math.round(verdict.confidence * 100)}%`}${via}`;
+  return verdict.source === "model" ? `fallback model${via}` : "no classifier answered";
 }
 export const followupReason = (verdict: Verdict) =>
   `Smart Queue: follow-up after the current turn (${describeVerdict(verdict)}).`;

@@ -1752,7 +1752,7 @@ const captures = [
     packageDir: "bb-plugin-smart-queue",
     setup: async (client) => {
       const followup = "Next, write a haiku about message queues.";
-      const correction = "Wait, when the sleep ends, reply with the word finished instead.";
+      const correction = "Stop, cancel the sleep now and reply with the word cancelled.";
       // A real busy turn: a cheap provider session that sleeps in its shell.
       const spawned = JSON.parse(await bbCli([
         "thread", "spawn", "--json",
@@ -1808,6 +1808,21 @@ const captures = [
         throw error;
       }
       return cleanup;
+    },
+  },
+  {
+    id: "smart-queue-settings",
+    packageDir: "bb-plugin-smart-queue",
+    fileName: "settings.png",
+    setup: async (client) => {
+      await client.navigate("/settings/plugins/smart-queue");
+      await client.waitForText("Smart Queue");
+      await client.waitForText("Jev provider");
+      await client.waitForText("TypeSafe API key");
+      await client.waitForText("Vercel AI Gateway API key");
+      await client.waitForText("OpenRouter API key");
+      await client.waitForText("Custom Jev endpoint");
+      await client.waitForText("Fallback provider");
     },
   },
   {

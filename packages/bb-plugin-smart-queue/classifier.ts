@@ -1,5 +1,6 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { describeHttpFailure, jevRoutes, type JevProviderSettings, type JevRoute } from "./jev-providers";
 
 export type Action = "steer" | "followup";
 export type Verdict = {
@@ -8,6 +9,8 @@ export type Verdict = {
   source: "jev" | "model" | "default";
   confidence: number | null;
   note: string | null;
+  /** Which Jev provider or model provider answered. */
+  via?: string;
 };
 /** What the classifier sees. All text is untrusted conversation data. */
 export type Situation = {
@@ -17,9 +20,7 @@ export type Situation = {
   latestOutput: string | null;
   message: string;
 };
-export type ClassifierSettings = {
-  zenApiKey?: string;
-  jevModel?: string;
+export type ClassifierSettings = JevProviderSettings & {
   jevTimeoutMs?: number;
   steerConfidence?: number;
   fallbackProvider?: string;
@@ -28,8 +29,6 @@ export type ClassifierSettings = {
 
 const probability = z.number().min(0).max(1);
 const settingsSchema = z.object({
-  zenApiKey: z.string().optional(),
-  jevModel: z.string().trim().min(1).max(100).default("jev-1.13"),
   jevTimeoutMs: z.number().int().min(250).max(15000).default(5000),
   steerConfidence: probability.default(0.7),
   fallbackProvider: z.string().trim().default(""),
@@ -56,7 +55,9 @@ const criteria = {
     "The message is a separate or next task, depends on the current task finishing, asks about something else, is an acknowledgment, or is ambiguous. Deliver it after the current turn finishes.",
 };
 
-export class JevUnavailableError extends Error {}
+/** A classifier that is not configured. Expected, so it is not logged as a failure. */
+export class UnavailableError extends Error {}
+export class JevUnavailableError extends UnavailableError {}
 
 /** Bounded, JSON-serializable state shared by both classifiers. */
 export function situationState(situation: Situation) {
@@ -69,44 +70,90 @@ export function situationState(situation: Situation) {
   };
 }
 
+/** Jev answers are small; a larger body from a custom endpoint is refused. */
+const maxResponseBytes = 64 * 1024;
+
+async function boundedJson(response: Response): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("The response had no body.");
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxResponseBytes) {
+      await reader.cancel();
+      throw new Error("The response was too large.");
+    }
+    chunks.push(value);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function askRoute(route: JevRoute, situation: Situation, timeoutMs: number, signal: AbortSignal) {
+  const response = await fetch(route.endpoint, {
+    method: "POST",
+    redirect: "error",
+    headers: {
+      ...(route.apiKey ? { Authorization: `Bearer ${route.apiKey}` } : {}),
+      "Content-Type": "application/json",
+      ...(route.id === "openrouter"
+        ? { "HTTP-Referer": "https://github.com/patleeman/bb-plugins", "X-OpenRouter-Title": "BB Smart Queue" }
+        : {}),
+    },
+    body: JSON.stringify({
+      model: route.model,
+      state: JSON.stringify(situationState(situation)),
+      questions: { action: { type: "choice", instructions, criteria } },
+    }),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(describeHttpFailure(route, response.status));
+  }
+  const parsed = jevResponseSchema.safeParse(await boundedJson(response));
+  if (!parsed.success) throw new Error(`${route.name} returned an invalid decision response.`);
+  const answer = parsed.data.answers.action;
+  if (!Object.hasOwn(criteria, answer.choice)) throw new Error(`${route.name} returned an unknown decision option.`);
+  return answer;
+}
+
+/** Tries each configured Jev provider in order until one answers. */
 export async function askJev(
   settings: ClassifierSettings,
   situation: Situation,
   signal: AbortSignal,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<Verdict> {
   signal.throwIfAborted();
   const config = settingsSchema.parse(settings);
-  const key = config.zenApiKey?.trim() || process.env.OPENCODE_API_KEY?.trim();
-  if (!key) throw new JevUnavailableError("No OpenCode Zen API key is configured.");
-  const response = await fetch("https://opencode.ai/zen/v1/systemone", {
-    method: "POST",
-    redirect: "error",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: config.jevModel,
-      state: JSON.stringify(situationState(situation)),
-      questions: { action: { type: "choice", instructions, criteria } },
-    }),
-    signal: AbortSignal.any([signal, AbortSignal.timeout(config.jevTimeoutMs)]),
-  });
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new Error(`Jev classification failed (HTTP ${response.status}).`);
+  const { routes, problems } = jevRoutes(settings, env);
+  if (!routes.length)
+    throw new JevUnavailableError(problems.join(" ") || "No Jev provider is configured.");
+  const failures = [...problems];
+  for (const route of routes) {
+    let answer;
+    try {
+      answer = await askRoute(route, situation, config.jevTimeoutMs, signal);
+    } catch (error) {
+      signal.throwIfAborted();
+      failures.push(error instanceof Error ? error.message : String(error));
+      continue;
+    }
+    // An uncertain steer interrupts work for nothing; wait instead.
+    const action: Action =
+      answer.choice === "steer" && answer.confidence >= config.steerConfidence ? "steer" : "followup";
+    return {
+      action,
+      source: "jev",
+      confidence: answer.confidence,
+      note: answer.choice === "steer" && action === "followup" ? "Jev was unsure, so the message waits." : null,
+      via: route.name,
+    };
   }
-  const parsed = jevResponseSchema.safeParse(await response.json());
-  if (!parsed.success) throw new Error("Jev returned an invalid decision response.");
-  const answer = parsed.data.answers.action;
-  if (!Object.hasOwn(criteria, answer.choice)) throw new Error("Jev returned an unknown decision option.");
-  signal.throwIfAborted();
-  // An uncertain steer interrupts work for nothing; wait instead.
-  const action: Action =
-    answer.choice === "steer" && answer.confidence >= config.steerConfidence ? "steer" : "followup";
-  return {
-    action,
-    source: "jev",
-    confidence: answer.confidence,
-    note: answer.choice === "steer" && action === "followup" ? "Jev was unsure, so the message waits." : null,
-  };
+  throw new Error(failures.join(" "));
 }
 
 export function modelPrompt(situation: Situation) {
@@ -133,25 +180,28 @@ export function parseModelVerdict(text: string | null): Verdict {
 }
 
 /**
- * Runs the prompt in a hidden, temporary thread with the configured provider
- * model, the same way Bot Teams runs its provider classifier.
+ * Runs the prompt in a hidden, temporary thread, the same way Bot Teams runs
+ * its provider classifier. With no fallback provider configured it uses the
+ * thread's own provider, so it works with whatever the user has installed;
+ * `none` turns the fallback off.
  */
 export async function askModel(
   bb: BbPluginApi,
   settings: ClassifierSettings,
-  target: { projectId: string; hostId: string; queuedMessageId: string },
+  target: { projectId: string; hostId: string; queuedMessageId: string; threadProviderId: string },
   situation: Situation,
   signal: AbortSignal,
   sessions: Set<string>,
 ): Promise<Verdict> {
   const config = settingsSchema.parse(settings);
-  if (!config.fallbackProvider || !config.fallbackModel)
-    throw new Error("No fallback provider and model are configured.");
+  if (config.fallbackProvider.toLowerCase() === "none") throw new UnavailableError("The fallback model is turned off.");
+  const providerId = config.fallbackProvider || target.threadProviderId;
+  const model = config.fallbackModel || undefined;
   signal.throwIfAborted();
   const provider = (await bb.sdk.providers.list({ hostId: target.hostId })).find(
-    (candidate) => candidate.id === config.fallbackProvider,
+    (candidate) => candidate.id === providerId,
   );
-  if (!provider?.available) throw new Error(`Fallback provider ${config.fallbackProvider} is unavailable.`);
+  if (!provider?.available) throw new Error(`Fallback provider ${providerId} is unavailable.`);
   const levels = (provider.reasoningLevels ?? []).map((level) => level.id);
   const modes = provider.capabilities.permissionModes;
   let threadId: string | undefined;
@@ -162,13 +212,13 @@ export async function askModel(
       title: `${classifierTitlePrefix}${target.queuedMessageId}`,
       environment: { type: "host", hostId: target.hostId, workspace: { type: "personal" } },
       input: [{ type: "text", text: modelPrompt(situation), mentions: [] }],
-      providerId: config.fallbackProvider,
-      model: config.fallbackModel,
+      providerId,
+      model,
       reasoningLevel: levels.includes("none") ? "none" : levels.includes("low") ? "low" : undefined,
       permissionMode: modes.includes("accept-edits") ? "accept-edits" : modes.includes("auto") ? "auto" : "full",
       executionInputSources: {
         providerId: "explicit",
-        model: "explicit",
+        ...(model ? { model: "explicit" as const } : {}),
         reasoningLevel: "explicit",
         permissionMode: "explicit",
       },
@@ -178,7 +228,10 @@ export async function askModel(
     // Wait for the final event: an initial idle status can precede dispatch.
     await bb.sdk.threads.wait({ threadId, event: "turn/completed", timeoutMs: 30000, signal });
     signal.throwIfAborted();
-    return parseModelVerdict((await bb.sdk.threads.output({ threadId })).output);
+    return {
+      ...parseModelVerdict((await bb.sdk.threads.output({ threadId })).output),
+      via: model ? `${providerId}/${model}` : providerId,
+    };
   } finally {
     if (threadId) await discardSession(bb, threadId, sessions);
   }
@@ -214,7 +267,7 @@ export async function classify(
     } catch (error) {
       signal.throwIfAborted();
       const message = error instanceof Error ? error.message : String(error);
-      if (!(error instanceof JevUnavailableError)) deps.warn(`${name} could not classify: ${message}`);
+      if (!(error instanceof UnavailableError)) deps.warn(`${name} could not classify: ${message}`);
       failures.push(`${name}: ${message}`);
     }
   }
