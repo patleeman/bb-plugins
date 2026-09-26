@@ -1,7 +1,7 @@
 // BB's Plannotator integration is intentionally a bridge, not a second
 // review product. The released upstream binary owns the plan renderer,
-// annotations, history, and feedback formatting. BB only supplies the agent
-// tool, embeds the upstream session, and keeps the provider tool call alive.
+// annotations, history, and feedback formatting. BB supplies the agent tool,
+// embeds the upstream session, and delivers decisions in a later thread message.
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
@@ -123,7 +123,7 @@ const DELIVERY_RETRY_MS = 30_000;
 /**
  * Map BB's provider ids to the identities the upstream UI knows how to name.
  * The child must not infer this from ambient OPENCODE/CODEX_* environment
- * variables: BB is the owner of the waiting tool call.
+ * variables: BB owns the review session and its follow-up message.
  */
 export function upstreamOriginForProvider(
   providerId: string | null | undefined,
