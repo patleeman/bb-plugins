@@ -1,0 +1,31 @@
+{
+  "name": "bb-plugin-smart-queue",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "bb": ">=0.43",
+    "bbPluginSdk": ">=0.5.24"
+  },
+  "bb": {
+    "name": "Smart Queue",
+    "description": "Decides whether a message sent to a busy thread steers the current turn or waits as a follow-up.",
+    "branding": {
+      "icon": "ListOrdered"
+    },
+    "server": "./server.ts"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.5.24",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "bb plugin build .",
+    "test": "node --import tsx --test test/*.test.ts"
+  }
+}

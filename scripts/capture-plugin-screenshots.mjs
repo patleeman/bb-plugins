@@ -373,6 +373,20 @@ async function pluginRpc(pluginId, method, input) {
   return payload.result;
 }
 
+/** Run the bb CLI as the owner, not as the thread this script may run inside. */
+async function bbCli(args) {
+  const env = { ...process.env };
+  delete env.BB_THREAD_ID;
+  const child = spawn("bb", args, { env, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => (stdout += chunk));
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  const code = await new Promise((resolvePromise) => child.on("close", resolvePromise));
+  if (code !== 0) throw new Error(`bb ${args.join(" ")} failed: ${stderr || stdout}`);
+  return stdout;
+}
+
 async function ensureChrome() {
   try {
     return { webSocketUrl: await findPageTarget(), process: null };
@@ -1734,6 +1748,69 @@ const captures = [
     },
   },
   {
+    id: "smart-queue",
+    packageDir: "bb-plugin-smart-queue",
+    setup: async (client) => {
+      const followup = "Next, write a haiku about message queues.";
+      const correction = "Wait, when the sleep ends, reply with the word finished instead.";
+      // A real busy turn: a cheap provider session that sleeps in its shell.
+      const spawned = JSON.parse(await bbCli([
+        "thread", "spawn", "--json",
+        "--project", "proj_personal",
+        "--new-environment", "personal",
+        "--provider", "pi",
+        "--model", "opencode-go/qwen3.8-flash",
+        "--permission-mode", "full",
+        "--title", "Smart Queue demo",
+        "--prompt", "Use your shell tool to run exactly: sleep 150. When it ends, reply with the single word: done.",
+      ]));
+      const demoThreadId = spawned.id;
+      const cleanup = async () => {
+        await bbCli(["thread", "stop", demoThreadId]).catch(() => {});
+        await bbCli(["thread", "delete", demoThreadId, "--yes"]).catch(() => {});
+      };
+      try {
+        const started = Date.now();
+        while (!(await bbCli(["thread", "log", demoThreadId])).includes("sleep 150")) {
+          if (Date.now() - started > 60000) throw new Error("The demo turn never started its shell command");
+          await sleep(1000);
+        }
+        // Personal-project threads have no project segment in their route.
+        await client.navigate(`/threads/${demoThreadId}`);
+        await client.waitForText("sleep 150");
+        await client.waitForSelector('[contenteditable="true"]');
+        // Both messages go through the real composer while the turn is busy.
+        for (const text of [followup, correction]) {
+          await client.evaluate(`(() => {
+            // An unknown route falls back to the new-thread composer; never type there.
+            if (location.pathname !== ${JSON.stringify(`/threads/${demoThreadId}`)}) {
+              throw new Error("Expected the demo thread, found " + location.pathname);
+            }
+            document.querySelector('[contenteditable="true"]').focus();
+            return true;
+          })()`);
+          await client.command("Input.insertText", { text });
+          await client.command("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+          await client.command("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+          await sleep(1500);
+        }
+        // The correction joins the running turn; the separate task waits in the queue.
+        await client.waitForText(`Steer\n\n${correction}`, 60000);
+        await client.waitForText(`Queue\n1\n${followup}`);
+        await client.waitForText("sleep 150");
+        const recent = JSON.parse(await bbCli(["smart-queue", "recent", "--limit", "5", "--json"]));
+        const decided = (text) => recent.find((entry) => entry.threadId === demoThreadId && entry.preview === text)?.verdict.action;
+        if (decided(correction) !== "steer" || decided(followup) !== "followup") {
+          throw new Error(`Smart Queue did not record the expected decisions: ${JSON.stringify(recent)}`);
+        }
+      } catch (error) {
+        await cleanup();
+        throw error;
+      }
+      return cleanup;
+    },
+  },
+  {
     id: "ua-fetch",
     packageDir: "bb-plugin-ua-fetch",
     setup: async (client) => {
@@ -1764,7 +1841,7 @@ try {
       const outputPath = join(repoRoot, "packages", capture.packageDir, "assets", capture.fileName ?? "staged-preview.png");
       // Use BB's real collapsed-sidebar state so publication does not expose
       // unrelated local projects/threads alongside the deterministic fixtures.
-      const privateSidebar = !capture.showSidebar && ((capture.packageDir === "bb-plugin-bot-teams" && capture.id !== "bots-forks") || capture.id === "spool" || capture.id === "automation-calendar");
+      const privateSidebar = !capture.showSidebar && ((capture.packageDir === "bb-plugin-bot-teams" && capture.id !== "bots-forks") || capture.id === "spool" || capture.id === "automation-calendar" || capture.id === "smart-queue");
       if (privateSidebar) {
         await client.evaluate(`document.querySelector('button[aria-label^="Toggle sidebar"]')?.click()`);
         await sleep(350);

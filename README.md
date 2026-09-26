@@ -32,7 +32,7 @@ For a local checkout, run this from the repository root:
 bb marketplace add path:.
 ```
 
-The root [`marketplace.json`](marketplace.json) lists all 18 plugins. Each
+The root [`marketplace.json`](marketplace.json) lists all 19 plugins. Each
 entry installs its package from this repository's `main` branch, including
 when the catalog is added from a local checkout. Refresh the catalog with:
 
@@ -56,6 +56,9 @@ description, and icon aligned with its package manifest.
   and continue incomplete work automatically.
 - [`bb-plugin-agent-plugins`](packages/bb-plugin-agent-plugins/) — install Agent
   Plugins once in BB and flow their skills and approved MCP tools to providers.
+- [`bb-plugin-smart-queue`](packages/bb-plugin-smart-queue/) — decide whether a
+  message sent to a busy thread steers the running turn or waits as a
+  follow-up, using Jev with a provider-model fallback.
 - [`bb-plugin-spool`](packages/bb-plugin-spool/) — connect BB agents to Spool's
   read-only, audited context MCP and bundled usage skill.
 - [`bb-plugin-gtd-sidebar`](packages/bb-plugin-gtd-sidebar/) — replace the thread

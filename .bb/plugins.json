@@ -17,6 +17,7 @@
     { "name": "omp", "source": "./packages/bb-plugin-omp" },
     { "name": "plannotator", "source": "./packages/bb-plugin-plannotator" },
     { "name": "prime-agent", "source": "./packages/bb-plugin-prime-agent" },
+    { "name": "smart-queue", "source": "./packages/bb-plugin-smart-queue" },
     { "name": "spool", "source": "./packages/bb-plugin-spool" },
     { "name": "tok-speed", "source": "./packages/bb-plugin-tok-speed" },
     { "name": "traces", "source": "./packages/bb-plugin-traces" },

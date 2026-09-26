@@ -311,6 +311,28 @@
       }
     },
     {
+      "id": "smart-queue",
+      "displayName": "Smart Queue",
+      "description": "Decides whether a message sent to a busy thread steers the current turn or waits as a follow-up.",
+      "icon": "ListOrdered",
+      "tags": [
+        "agents",
+        "threads",
+        "productivity"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/bb-plugin-smart-queue",
+          "ref": "main"
+        }
+      }
+    },
+    {
       "id": "spool",
       "displayName": "Spool",
       "description": "Give BB agents a read-only, audited Spool context connection and usage skill.",

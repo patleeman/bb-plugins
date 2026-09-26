@@ -634,6 +634,25 @@ importers:
         specifier: ^4.3.6
         version: 4.4.3
 
+  packages/bb-plugin-smart-queue:
+    dependencies:
+      zod:
+        specifier: ^4.3.6
+        version: 4.4.3
+    devDependencies:
+      '@get-bb/plugin-sdk':
+        specifier: 0.5.24
+        version: 0.5.24(@testing-library/react@16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@types/better-sqlite3@7.6.13)(@types/react@19.2.18)(better-sqlite3@12.11.1)(cron-parser@5.10.1)(hono@4.13.9)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      tsx:
+        specifier: ^4.20.0
+        version: 4.23.11
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
   packages/bb-plugin-spool:
     devDependencies:
       '@get-bb/plugin-sdk':
@@ -4466,6 +4485,20 @@ snapshots:
       better-sqlite3: 12.11.1
       cron-parser: 5.10.0
       hono: 4.13.5
+      react: 19.2.8
+      react-dom: 19.2.8(react@19.2.8)
+
+  '@get-bb/plugin-sdk@0.5.24(@testing-library/react@16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@types/better-sqlite3@7.6.13)(@types/react@19.2.18)(better-sqlite3@12.11.1)(cron-parser@5.10.1)(hono@4.13.9)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+    dependencies:
+      cross-spawn: 7.0.6
+      zod: 4.4.3
+    optionalDependencies:
+      '@testing-library/react': 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@types/better-sqlite3': 7.6.13
+      '@types/react': 19.2.18
+      better-sqlite3: 12.11.1
+      cron-parser: 5.10.1
+      hono: 4.13.9
       react: 19.2.8
       react-dom: 19.2.8(react@19.2.8)
 
