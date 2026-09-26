@@ -1300,8 +1300,14 @@
   font-size: var(--text-xs);
   line-height: 20px;
 }
-.channels-sidebar-heading {
+.channels-sidebar-title {
+  display: flex;
   flex: 1;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.channels-sidebar-heading {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1309,21 +1315,40 @@
   font-weight: 400;
 }
 .channels-sidebar > header .channels-sidebar-collapse {
-  display: flex;
-  flex: 1;
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
-  width: auto;
-  min-width: 0;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
   padding: 0;
-  color: inherit;
-  text-align: left;
+  border-radius: calc(var(--radius, 8px) - 2px);
+  color: var(--subtle-foreground, var(--muted-foreground));
+  opacity: 0;
   cursor: pointer;
 }
 .channels-sidebar-collapse [data-icon-root] {
   width: 12px;
   height: 12px;
   flex-shrink: 0;
+  transition: transform 150ms;
+}
+.channels-sidebar-collapse[aria-expanded="true"] [data-icon-root] {
+  transform: rotate(90deg);
+}
+.channels-sidebar > header .channels-sidebar-collapse[aria-expanded="false"],
+.channels-sidebar > header:hover .channels-sidebar-collapse,
+.channels-sidebar > header:focus-within .channels-sidebar-collapse {
+  opacity: 1;
+}
+.channels-sidebar-collapse:hover {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+}
+@media (hover: none), (pointer: coarse) {
+  .channels-sidebar > header .channels-sidebar-collapse {
+    opacity: 1;
+  }
 }
 .channels-sidebar-collapse:focus-visible {
   outline: 2px solid var(--ring);

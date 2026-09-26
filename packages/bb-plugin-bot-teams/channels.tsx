@@ -837,14 +837,17 @@ export function ChannelsSidebar({
     <>
       <section className="channels-sidebar" aria-label="Channels">
         <header>
-          <button type="button" className="channels-sidebar-collapse"
-            aria-expanded={!channelsCollapsed} aria-controls={channelListId}
-            onClick={() => setChannelsCollapsed(!channelsCollapsed)}>
-            <Icon name={channelsCollapsed ? "ChevronRight" : "ChevronDown"} />
+          <div className="channels-sidebar-title">
             <span className="channels-sidebar-heading">
               {archived ? "Archived channels" : "Channels"}
             </span>
-          </button>
+            <button type="button" className="channels-sidebar-collapse"
+              aria-label={channelsCollapsed ? "Expand Channels section" : "Collapse Channels section"}
+              aria-expanded={!channelsCollapsed} aria-controls={channelListId}
+              onClick={() => setChannelsCollapsed(!channelsCollapsed)}>
+              <Icon name="ChevronRight" aria-hidden="true" />
+            </button>
+          </div>
           <Button
             variant="ghost"
             size="icon"
@@ -1010,12 +1013,15 @@ export function ChannelsSidebar({
       </section>
       <section className="channels-sidebar direct-messages-sidebar" aria-label="Direct messages">
         <header>
-          <button type="button" className="channels-sidebar-collapse"
-            aria-expanded={!directCollapsed} aria-controls={directListId}
-            onClick={() => setDirectCollapsed(!directCollapsed)}>
-            <Icon name={directCollapsed ? "ChevronRight" : "ChevronDown"} />
+          <div className="channels-sidebar-title">
             <span className="channels-sidebar-heading">Direct messages</span>
-          </button>
+            <button type="button" className="channels-sidebar-collapse"
+              aria-label={directCollapsed ? "Expand Direct messages section" : "Collapse Direct messages section"}
+              aria-expanded={!directCollapsed} aria-controls={directListId}
+              onClick={() => setDirectCollapsed(!directCollapsed)}>
+              <Icon name="ChevronRight" aria-hidden="true" />
+            </button>
+          </div>
           <Button variant="ghost" size="icon"
             aria-label="Search direct messages" aria-expanded={directSearching}
             onClick={() => {
