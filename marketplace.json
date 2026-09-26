@@ -272,7 +272,7 @@
     {
       "id": "plannotator",
       "displayName": "Plannotator",
-      "description": "Embed the upstream Plannotator plan-review app in BB and bridge its decisions back to agents.",
+      "description": "Review plans in Plannotator inside BB and send decisions to agents as new thread messages.",
       "icon": "ClipboardCheck",
       "tags": [
         "planning",

@@ -18,8 +18,12 @@ complete Markdown plan. A review is informational and collaborative; its
 approval is not a permission grant, and cancellation or omission never blocks
 implementation.
 
-The tool opens the upstream Plannotator app in BB's right panel and waits for
-the user's decision:
+The tool opens the upstream Plannotator app in BB's right panel and returns a
+pending review ID. End the turn and wait for BB to send the decision as a new
+message in the same thread. Do not poll for the decision. Use
+`plannotator_review_status` with the review ID only to recover a missing result.
+
+The decision message has one of these results:
 
 - `decision=approved`: report the approval and continue as appropriate.
 - `decision=changes_requested`: report the feedback and revise only if the
@@ -27,6 +31,6 @@ the user's decision:
 - `decision=cancelled`: report the cancellation, then continue normally unless
   the user specifically asked to stop.
 
-Do not claim a review decision from the presence of a panel alone. Only the
-returned tool decision describes what happened in Plannotator; it does not
-authorize or prohibit file changes.
+Do not claim a review decision from the presence of a panel or the pending
+tool result alone. Only the later decision message describes what happened in
+Plannotator; it does not authorize or prohibit file changes.

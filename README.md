@@ -64,8 +64,8 @@ description, and icon aligned with its package manifest.
 - [`bb-plugin-gtd-sidebar`](packages/bb-plugin-gtd-sidebar/) — replace the thread
   list with a GTD-style inbox organized by workflow state.
 - [`bb-plugin-plannotator`](packages/bb-plugin-plannotator/) — embed the upstream
-  Plannotator plan-review app in BB's right panel and bridge its decisions back
-  to agents.
+  Plannotator plan-review app in BB's right panel and send decisions to agents
+  as new thread messages.
 - [`bb-plugin-cobalt2`](packages/bb-plugin-cobalt2/) — contribute the Cobalt2
   color palette to bb.
 - [`bb-plugin-ds4`](packages/bb-plugin-ds4/) — run and administer a local

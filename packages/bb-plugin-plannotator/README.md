@@ -1,6 +1,6 @@
 # bb-plugin-plannotator
 
-This is a thin BB adapter around the official [Plannotator](https://github.com/backnotprop/plannotator) runtime. Plannotator owns the review experience; BB only launches its plan-review bridge, embeds the real app in the thread's right panel, and returns the upstream approval or feedback to the agent.
+This is a thin BB adapter around the official [Plannotator](https://github.com/backnotprop/plannotator) runtime. Plannotator owns the review experience; BB launches it in the thread's right panel and sends the decision to the agent as a new thread message.
 
 ## Staged preview
 
@@ -19,7 +19,9 @@ There is no separate Plannotator installation. On the first review, the plugin d
 
 For development, offline use, or an independently updated upstream build, set **Plannotator binary** under BB → Extensions → Plannotator or set `PLANNOTATOR_BIN` for the BB server. Use `bundled` to restore the default.
 
-Start a new agent session after installing or reloading. When the agent explicitly calls `plannotator_review_plan`, BB opens the upstream UI as a persistent right-panel tab. Approve or annotate there; BB closes that tab, stops the upstream session, and bridges the decision back to the waiting tool call so the provider can resume. There is no BB review deadline or hidden interaction countdown: the review remains open until Plannotator returns a decision, the provider cancels the call, or you use **Cancel review** in the tab. Plannotator is optional: agents can continue ordinary work without opening it, and cancelling or skipping a review never blocks edits. The child receives the current BB provider identity explicitly, rather than inferring it from unrelated host environment variables.
+Start a new agent session after installing or reloading. When the agent explicitly calls `plannotator_review_plan`, BB opens the upstream UI as a persistent right-panel tab. The tool returns a review ID promptly, and the agent ends its turn. Approve or annotate in the tab. BB then closes it and sends the decision as a new message in the same thread, which wakes the agent. The message is queued if the agent is still working. There is no BB review deadline or hidden interaction countdown: the review remains open until Plannotator returns a decision or you use **Cancel review** in the tab. Plannotator is optional, and its approval is not a permission grant. The child receives the current BB provider identity explicitly, rather than inferring it from unrelated host environment variables.
+
+BB stores the review state until it delivers the decision. If the plugin restarts during a review, it sends a cancellation message after restarting. If delivery fails temporarily, it retries. The agent can call `plannotator_review_status` with the review ID to recover a missing result; it does not need to poll during a normal review.
 
 Plannotator's plan history and configuration are stored under the plugin's BB data directory. Local child sessions use BB's session-scoped same-origin relay, and BB acknowledges the current upstream look-and-feel announcement before mounting the iframe, so the standalone setup wizard does not interrupt each review. The upstream plan UI remains otherwise unmodified. **Open externally** is available as a fallback, but external browser tabs may have a separate cookie jar from the BB panel.
 

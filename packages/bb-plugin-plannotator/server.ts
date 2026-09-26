@@ -84,7 +84,41 @@ type ActiveReview = {
   sessionId: string;
   payload: ReviewPanelPayload;
   review: RunningUpstreamReview;
+  controller: AbortController;
+  cancelledByUser: boolean;
+  deleted: boolean;
+  settled?: Promise<void>;
 };
+
+type ReviewResult = {
+  reviewId: string;
+  source: "plannotator";
+  decision: "approved" | "changes_requested" | "cancelled";
+  feedback?: string;
+  savedPath?: string;
+  agentSwitch?: string;
+  error?: string;
+};
+
+const storedReviewSchema = z.object({
+  id: z.string().uuid(),
+  threadId: z.string().min(1),
+  status: z.enum(["pending", "ready", "delivered"]),
+  result: z.object({
+    reviewId: z.string().uuid(),
+    source: z.literal("plannotator"),
+    decision: z.enum(["approved", "changes_requested", "cancelled"]),
+    feedback: z.string().optional(),
+    savedPath: z.string().optional(),
+    agentSwitch: z.string().optional(),
+    error: z.string().optional(),
+  }).optional(),
+  updatedAt: z.number(),
+});
+type StoredReview = z.infer<typeof storedReviewSchema>;
+const REVIEW_KEY_PREFIX = "review:";
+const DELIVERED_REVIEW_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const DELIVERY_RETRY_MS = 30_000;
 
 /**
  * Map BB's provider ids to the identities the upstream UI knows how to name.
@@ -276,14 +310,23 @@ function decisionLabel(decision: UpstreamDecision): "approved" | "changes_reques
   return decision.feedback?.trim() ? "changes_requested" : "cancelled";
 }
 
-function toolResponse(decision: UpstreamDecision): string {
-  return JSON.stringify({
-    decision: decisionLabel(decision),
+function reviewResult(reviewId: string, decision: UpstreamDecision): ReviewResult {
+  return {
+    reviewId,
     source: "plannotator",
+    decision: decisionLabel(decision),
     ...(decision.feedback ? { feedback: decision.feedback } : {}),
     ...(decision.savedPath ? { savedPath: decision.savedPath } : {}),
     ...(decision.agentSwitch ? { agentSwitch: decision.agentSwitch } : {}),
-  });
+  };
+}
+
+function reviewMessage(result: ReviewResult): string {
+  return [
+    `Plannotator review ${result.reviewId} has finished.`,
+    JSON.stringify(result),
+    "This answers the earlier plannotator_review_plan call. Continue the original task if approved; revise the plan if changes were requested. Cancellation is not approval. Do not repeat this review unless asked.",
+  ].join("\n\n");
 }
 
 function errorResponse(message: string) {
@@ -350,7 +393,128 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   const activeReviews = new Map<string, ActiveReview>();
+  const startingReviews = new Set<string>();
   const relaySessions = new Map<string, string>();
+  const delivering = new Set<string>();
+  let disposing = false;
+
+  const reviewKey = (id: string) => `${REVIEW_KEY_PREFIX}${id}`;
+  async function loadReview(id: string): Promise<StoredReview | null> {
+    const parsed = storedReviewSchema.safeParse(await bb.storage.kv.get(reviewKey(id)));
+    return parsed.success ? parsed.data : null;
+  }
+
+  async function deliverReview(record: StoredReview): Promise<void> {
+    if (disposing || record.status !== "ready" || !record.result || delivering.has(record.id)) return;
+    delivering.add(record.id);
+    try {
+      // A queued send waits for the current agent turn to finish. An idle
+      // thread starts a new turn immediately. Both paths avoid a long tool call.
+      await bb.sdk.threads.send({
+        threadId: record.threadId,
+        mode: "queue-if-active",
+        input: [{ type: "text", text: reviewMessage(record.result), mentions: [] }],
+      });
+      await bb.storage.kv.set(reviewKey(record.id), {
+        ...record,
+        status: "delivered",
+        updatedAt: Date.now(),
+      } satisfies StoredReview);
+    } catch (error) {
+      bb.log.warn(`Could not deliver Plannotator review ${record.id}: ${String(error)}`);
+    } finally {
+      delivering.delete(record.id);
+    }
+  }
+
+  async function recoverReviews(): Promise<void> {
+    for (const key of await bb.storage.kv.list(REVIEW_KEY_PREFIX)) {
+      if (disposing) return;
+      const parsed = storedReviewSchema.safeParse(await bb.storage.kv.get(key));
+      if (!parsed.success) {
+        bb.log.warn(`Ignoring invalid Plannotator review record ${key}`);
+        continue;
+      }
+      let record = parsed.data;
+      if (record.status === "delivered") {
+        if (Date.now() - record.updatedAt > DELIVERED_REVIEW_RETENTION_MS) {
+          await bb.storage.kv.delete(key);
+        }
+        continue;
+      }
+      if (record.status === "pending") {
+        if (activeReviews.get(record.threadId)?.sessionId === record.id) continue;
+        await closeReviewPanel(bb, record.threadId, record.id);
+        record = {
+          ...record,
+          status: "ready",
+          result: {
+            reviewId: record.id,
+            source: "plannotator",
+            decision: "cancelled",
+            error: "The review ended when the Plannotator plugin restarted.",
+          },
+          updatedAt: Date.now(),
+        };
+        await bb.storage.kv.set(key, record);
+      }
+      await deliverReview(record);
+    }
+  }
+
+  bb.background.service("review-delivery", {
+    async start(signal) {
+      while (!signal.aborted) {
+        try {
+          await recoverReviews();
+        } catch (error) {
+          if (!signal.aborted) bb.log.warn(`Could not recover Plannotator reviews: ${String(error)}`);
+        }
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, DELIVERY_RETRY_MS);
+          signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+        });
+      }
+    },
+  });
+
+  async function settleReview(threadId: string, active: ActiveReview): Promise<void> {
+    let result: ReviewResult;
+    try {
+      result = reviewResult(active.sessionId, await active.review.result);
+    } catch (error) {
+      result = {
+        reviewId: active.sessionId,
+        source: "plannotator",
+        decision: "cancelled",
+        ...(!active.cancelledByUser
+          ? { error: error instanceof Error ? error.message : String(error) }
+          : {}),
+      };
+    }
+    relaySessions.delete(active.sessionId);
+    await closeReviewPanel(bb, threadId, active.sessionId);
+    try {
+      await active.review.stop();
+    } catch (error) {
+      bb.log.warn(`Could not stop Plannotator review ${active.sessionId}: ${String(error)}`);
+    }
+    if (disposing || active.deleted) return;
+    const record: StoredReview = {
+      id: active.sessionId,
+      threadId,
+      status: "ready",
+      result,
+      updatedAt: Date.now(),
+    };
+    try {
+      await bb.storage.kv.set(reviewKey(record.id), record);
+    } catch (error) {
+      bb.log.warn(`Could not save Plannotator decision ${record.id}: ${String(error)}`);
+    }
+    await deliverReview(record);
+    if (activeReviews.get(threadId) === active) activeReviews.delete(threadId);
+  }
 
   registerPlannotatorRelayRoutes(bb, relaySessions);
 
@@ -373,6 +537,7 @@ export default async function plugin(bb: BbPluginApi) {
       if (!active || active.sessionId !== sessionId) {
         return { cancelled: false };
       }
+      active.cancelledByUser = true;
       await active.review.stop();
       return { cancelled: true };
     },
@@ -381,49 +546,65 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "plannotator_review_plan",
     description:
-      "Optionally open the upstream Plannotator plan-review UI in BB and return its decision or feedback.",
+      "Optionally open the upstream Plannotator plan-review UI in BB. Return a review ID; the decision arrives in a later thread message.",
     instructions:
-      "This is an optional tool, not an authorization gate. Use it only when the user explicitly asks for Plannotator or a plan review; never require it before editing, and proceed normally when it is not used. Native Plan mode is separate and remains provider-controlled. When invoked, pass the complete Markdown plan and report the returned decision or feedback; a cancelled review does not block implementation.",
+      "Use this optional tool only when the user explicitly asks for Plannotator or a plan review. Pass the complete Markdown plan. The tool returns a pending review ID promptly: end your turn and wait for the Plannotator decision in a new message on this thread. Do not poll or claim approval while the review is pending. On approval, continue the original task. On requested changes, revise the plan. Cancellation is not approval. Native Plan mode remains separate and provider-controlled.",
     presentation: {
       label: {
         pending: "Waiting for Plannotator",
-        completed: "Plannotator review completed",
+        completed: "Plannotator review opened",
       },
     },
     parameters: reviewToolParametersSchema,
     async execute(params, context) {
-      if (activeReviews.has(context.threadId)) {
+      if (activeReviews.has(context.threadId) || startingReviews.has(context.threadId)) {
         return errorResponse("A Plannotator review is already active in this thread.");
       }
+      startingReviews.add(context.threadId);
 
-      const configuredPath = await getConfiguredPath(settings);
+      let configuredPath: string;
+      try {
+        configuredPath = await getConfiguredPath(settings);
+      } catch (error) {
+        startingReviews.delete(context.threadId);
+        return errorResponse(error instanceof Error ? error.message : String(error));
+      }
       let binaryPath: string;
       try {
         binaryPath = await resolveRuntimeBinary(bb, configuredPath, context.signal);
       } catch (error) {
+        startingReviews.delete(context.threadId);
         return errorResponse(error instanceof Error ? error.message : String(error));
       }
 
       const sessionId = randomUUID();
+      const controller = new AbortController();
+      const abortStartup = () => controller.abort();
+      context.signal.addEventListener("abort", abortStartup, { once: true });
       let upstream: RunningUpstreamReview;
       try {
         const [origin, runtimeConfig] = await Promise.all([
-          resolveUpstreamOrigin(bb, context.threadId, context.signal),
-          resolveUpstreamRuntimeConfig(bb, context.signal),
+          resolveUpstreamOrigin(bb, context.threadId, controller.signal),
+          resolveUpstreamRuntimeConfig(bb, controller.signal),
         ]);
         upstream = await startUpstreamPlanReview({
           binaryPath,
           planMarkdown: params.planMarkdown,
           timeoutSeconds: null,
-          signal: context.signal,
+          signal: controller.signal,
           origin,
           dataDir: runtimeConfig.dataDir,
           remote: runtimeConfig.remote,
           embedHost: resolveEmbedHost(bb),
         });
       } catch (error) {
+        context.signal.removeEventListener("abort", abortStartup);
+        startingReviews.delete(context.threadId);
         return errorResponse(error instanceof Error ? error.message : String(error));
       }
+      // The process can exit while the panel and stored review are opening.
+      // Attach a rejection handler before any further awaits.
+      void upstream.result.catch(() => undefined);
 
       const title = params.title?.trim() || "Plannotator review";
       const payload = interactionPayloadSchema.parse({
@@ -435,56 +616,112 @@ export default async function plugin(bb: BbPluginApi) {
         title,
       });
       relaySessions.set(sessionId, upstream.url);
-      activeReviews.set(context.threadId, { sessionId, payload, review: upstream });
+      const active: ActiveReview = {
+        sessionId, payload, review: upstream, controller,
+        cancelledByUser: false, deleted: false,
+      };
+      activeReviews.set(context.threadId, active);
+      startingReviews.delete(context.threadId);
 
       try {
         await openReviewPanel(bb, context.threadId, payload);
+        if (context.signal.aborted || active.deleted || controller.signal.aborted) {
+          throw new Error("Plannotator review was cancelled before opening");
+        }
+        await bb.storage.kv.set(reviewKey(sessionId), {
+          id: sessionId,
+          threadId: context.threadId,
+          status: "pending",
+          updatedAt: Date.now(),
+        } satisfies StoredReview);
         bb.realtime.publish(PLANNOTATOR_REALTIME_CHANNEL, {
           kind: "review-opened",
           payload,
         });
-        return toolResponse(await upstream.result);
+        context.signal.removeEventListener("abort", abortStartup);
+        active.settled = settleReview(context.threadId, active).catch((error) => {
+          bb.log.error(`Could not settle Plannotator review ${sessionId}: ${String(error)}`);
+        });
+        return JSON.stringify({
+          status: "pending",
+          reviewId: sessionId,
+          source: "plannotator",
+          message: "End this turn. The review decision will arrive as a new message in this thread.",
+        });
       } catch (error) {
-        return errorResponse(error instanceof Error ? error.message : String(error));
-      } finally {
+        context.signal.removeEventListener("abort", abortStartup);
         activeReviews.delete(context.threadId);
         relaySessions.delete(sessionId);
-        await closeReviewPanel(bb, context.threadId, sessionId);
-        await upstream.stop();
+        await Promise.allSettled([
+          bb.storage.kv.delete(reviewKey(sessionId)),
+          closeReviewPanel(bb, context.threadId, sessionId),
+          upstream.stop(),
+        ]);
+        return errorResponse(error instanceof Error ? error.message : String(error));
       }
     },
   });
 
+  bb.agents.registerTool({
+    name: "plannotator_review_status",
+    description: "Recover the status or decision of a Plannotator review in this thread. Do not poll while a review is pending.",
+    parameters: z.object({ reviewId: z.string().uuid() }).strict(),
+    async execute({ reviewId }, context) {
+      const record = await loadReview(reviewId);
+      if (!record || record.threadId !== context.threadId) {
+        return JSON.stringify({ reviewId, status: "not_found" });
+      }
+      return JSON.stringify({
+        reviewId,
+        status: record.status,
+        ...(record.result ? { result: record.result } : {}),
+      });
+    },
+  });
+
   bb.agents.configure(() => ({
-    tools: ["plannotator_review_plan"],
+    tools: ["plannotator_review_plan", "plannotator_review_status"],
     skills: [],
   }));
 
-  bb.events.on("thread.deleted", ({ thread }) => {
+  bb.events.on("thread.deleted", async ({ thread }) => {
     const active = activeReviews.get(thread.id);
     if (active) {
       // Remove the lookup before asynchronous cleanup starts. A deleted
       // thread must not be eligible for panel reconciliation while the
       // upstream process is winding down.
       activeReviews.delete(thread.id);
-      void Promise.all([
+      active.deleted = true;
+      active.controller.abort();
+      await Promise.allSettled([
         closeReviewPanel(bb, thread.id, active.sessionId),
         active.review.stop(),
       ]);
       relaySessions.delete(active.sessionId);
+      await bb.storage.kv.delete(reviewKey(active.sessionId));
+    }
+    for (const key of await bb.storage.kv.list(REVIEW_KEY_PREFIX)) {
+      const parsed = storedReviewSchema.safeParse(await bb.storage.kv.get(key));
+      if (parsed.success && parsed.data.threadId === thread.id) {
+        await bb.storage.kv.delete(key);
+      }
     }
   });
 
   bb.onDispose(async () => {
-    await Promise.all(
-      [...activeReviews.entries()].map(([threadId, { sessionId, review }]) =>
-        Promise.all([
+    disposing = true;
+    await Promise.allSettled(
+      [...activeReviews.entries()].map(async ([threadId, { sessionId, review, controller, settled }]) => {
+        controller.abort();
+        await Promise.allSettled([
           closeReviewPanel(bb, threadId, sessionId),
           review.stop(),
-        ]),
-      ),
+        ]);
+        if (settled) await settled;
+      }),
     );
     activeReviews.clear();
+    startingReviews.clear();
     relaySessions.clear();
   });
 

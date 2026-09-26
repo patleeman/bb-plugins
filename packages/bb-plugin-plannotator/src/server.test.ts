@@ -28,7 +28,10 @@ afterEach(async () => {
   );
 });
 
-async function fakePlannotatorBinary(): Promise<string> {
+async function fakePlannotatorBinary(
+  options: { approveAfterMs?: number | null } = {},
+): Promise<string> {
+  const approveAfterMs = options.approveAfterMs === undefined ? 150 : options.approveAfterMs;
   const directory = await mkdtemp(join(tmpdir(), "bb-plannotator-fake-"));
   temporaryDirectories.push(directory);
   const binary = join(directory, "plannotator");
@@ -40,7 +43,9 @@ const path = require("node:path");
 const ready = process.env.PLANNOTATOR_READY_FILE;
 fs.mkdirSync(path.dirname(ready), { recursive: true });
 fs.appendFileSync(ready, JSON.stringify({ url: "http://127.0.0.1:43210", isRemote: false, port: 43210 }) + "\\n");
-setTimeout(() => process.stdout.write(JSON.stringify({ approved: true }) + "\\n"), 150);
+${approveAfterMs === null
+  ? "setInterval(() => undefined, 1000);"
+  : `setTimeout(() => process.stdout.write(JSON.stringify({ approved: true }) + "\\n"), ${approveAfterMs});`}
 process.stdin.resume();
 `,
     "utf8",
@@ -93,6 +98,16 @@ function wireInteractionSdk(
     revision += 1;
     return { revision, tabs };
   });
+  host.harness.sdk.stub("threads.send", () => ({ ok: true, delivery: "queued" }));
+}
+
+async function sentReview(host: FakePluginHost) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const sent = host.harness.sdk.callsTo("threads.send")[0];
+    if (sent) return sent;
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("Expected a Plannotator decision message");
 }
 
 describe("BB upstream Plannotator bridge", () => {
@@ -138,12 +153,13 @@ describe("BB upstream Plannotator bridge", () => {
     ).toEqual(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]);
     expect(host.harness.inspection.registrations.agentTools.map((tool) => tool.name)).toEqual([
       "plannotator_review_plan",
+      "plannotator_review_status",
     ]);
     expect(host.harness.inspection.registrations.agentTools[0]?.instructions).toContain(
-      "Native Plan mode is separate",
+      "Native Plan mode remains separate",
     );
     expect(host.harness.inspection.registrations.agentTools[0]?.instructions).toContain(
-      "optional tool, not an authorization gate",
+      "The tool returns a pending review ID promptly",
     );
     expect(host.harness.inspection.registrations.cli).toBeNull();
 
@@ -174,8 +190,8 @@ describe("BB upstream Plannotator bridge", () => {
     expect(resolved.skills).toEqual([]);
   });
 
-  it("embeds the upstream session payload and bridges its approval back to BB", async () => {
-    const binary = await fakePlannotatorBinary();
+  it("returns a review ID promptly and sends approval in a new thread message", async () => {
+    const binary = await fakePlannotatorBinary({ approveAfterMs: 500 });
     const host = createFakePluginHost({
       pluginId: "plannotator",
       settings: { binaryPath: binary },
@@ -219,8 +235,26 @@ describe("BB upstream Plannotator bridge", () => {
       },
     });
 
-    const result = await toolCall;
-    expect(result).toBe(JSON.stringify({ decision: "approved", source: "plannotator" }));
+    const result = JSON.parse(String(await toolCall)) as { status: string; reviewId: string };
+    expect(result).toMatchObject({ status: "pending", reviewId: expect.any(String) });
+    expect(host.harness.sdk.callsTo("threads.send")).toHaveLength(0);
+    expect(await host.harness.behavior.callAgentTool(
+      "plannotator_review_status",
+      { reviewId: result.reviewId },
+      { threadId: "thread-1", projectId: "project-1" },
+    )).toContain('"status":"pending"');
+    const sent = await sentReview(host);
+    expect(sent[0]).toMatchObject({
+      threadId: "thread-1",
+      mode: "queue-if-active",
+      input: [{ type: "text", text: expect.stringContaining('"decision":"approved"') }],
+    });
+    expect(String((sent[0] as { input: Array<{ text: string }> }).input[0]!.text)).toContain(result.reviewId);
+    expect(await host.harness.behavior.callAgentTool(
+      "plannotator_review_status",
+      { reviewId: result.reviewId },
+      { threadId: "thread-1", projectId: "project-1" },
+    )).toContain('"decision":"approved"');
     expect(host.harness.inspection.pendingInteractions).toHaveLength(0);
     expect(host.harness.sdk.callsTo("threads.interactions.respond")).toHaveLength(0);
     const finalTabUpdateCall = [...host.harness.sdk.calls]
@@ -233,7 +267,7 @@ describe("BB upstream Plannotator bridge", () => {
   });
 
   it("cancels the upstream process through the thread-owned panel RPC", async () => {
-    const binary = await fakePlannotatorBinary();
+    const binary = await fakePlannotatorBinary({ approveAfterMs: null });
     const host = createFakePluginHost({
       pluginId: "plannotator",
       settings: { binaryPath: binary },
@@ -256,8 +290,11 @@ describe("BB upstream Plannotator bridge", () => {
       }),
     ).resolves.toEqual({ cancelled: true });
 
-    const result = await toolCall;
-    expect(result).toMatchObject({ isError: true });
+    const result = JSON.parse(String(await toolCall)) as { status: string };
+    expect(result.status).toBe("pending");
+    expect((await sentReview(host))[0]).toMatchObject({
+      input: [{ text: expect.stringContaining('"decision":"cancelled"') }],
+    });
     expect(host.harness.inspection.pendingInteractions).toHaveLength(0);
     const finalTabUpdateCall = [...host.harness.sdk.calls]
       .reverse()
@@ -285,7 +322,7 @@ describe("BB upstream Plannotator bridge", () => {
   });
 
   it("removes deleted reviews before asynchronous cleanup", async () => {
-    const binary = await fakePlannotatorBinary();
+    const binary = await fakePlannotatorBinary({ approveAfterMs: null });
     const host = createFakePluginHost({
       pluginId: "plannotator",
       settings: { binaryPath: binary },
@@ -315,6 +352,48 @@ describe("BB upstream Plannotator bridge", () => {
     ).resolves.toBeNull();
 
     await toolCall;
+    expect(host.harness.sdk.callsTo("threads.send")).toHaveLength(0);
+  });
+
+  it("recovers an interrupted review and retries a failed decision send", async () => {
+    const host = createFakePluginHost({ pluginId: "plannotator" });
+    hosts.push(host);
+    await plugin(host.bb);
+    wireInteractionSdk(host);
+    const reviewId = "bb883ad4-4ff7-4183-96eb-6250ae380c3a";
+    const key = `review:${reviewId}`;
+    await host.bb.storage.kv.set(key, {
+      id: reviewId,
+      threadId: "thread-1",
+      status: "pending",
+      updatedAt: Date.now(),
+    });
+    let failSend = true;
+    host.harness.sdk.stub("threads.send", () => {
+      if (failSend) throw new Error("temporary send failure");
+      return { ok: true, delivery: "queued" };
+    });
+
+    const first = host.harness.behavior.runService("review-delivery");
+    await sentReview(host);
+    first.controller.abort();
+    await first.done;
+    expect(await host.bb.storage.kv.get<{ status: string }>(key)).toMatchObject({
+      status: "ready",
+      result: { decision: "cancelled", error: expect.stringContaining("restarted") },
+    });
+
+    failSend = false;
+    const second = host.harness.behavior.runService("review-delivery");
+    for (let attempt = 0; attempt < 100 && host.harness.sdk.callsTo("threads.send").length < 2; attempt += 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+    expect(host.harness.sdk.callsTo("threads.send")).toHaveLength(2);
+    second.controller.abort();
+    await second.done;
+    expect(await host.bb.storage.kv.get<{ status: string }>(key)).toMatchObject({
+      status: "delivered",
+    });
   });
 
   it("returns an actionable error when the official binary is missing", async () => {
