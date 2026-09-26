@@ -1129,8 +1129,8 @@ const captures = [
     setup: async (client) => {
       const { bots } = await pluginRpc("bot-teams", "list", null);
       const atlas = bots.find((bot) => bot.name === "Atlas" && bot.description === "Research and verify the facts");
-      if (!atlas || !atlas.paused || atlas.intervalMinutes !== 0) {
-        throw new Error("Seed the paused Atlas demonstration bot with mission schedules off before capturing Bot Teams.");
+      if (!atlas || atlas.intervalMinutes !== 0) {
+        throw new Error("Seed the Atlas demonstration bot with mission schedules off before capturing Bot Teams.");
       }
       const cleanup = async () => {
         if (atlas.retired) await pluginRpc("bot-teams", "retire", { id: atlas.id, retired: true });

@@ -21,7 +21,6 @@ const bot = (n: number, overrides: Record<string, unknown> = {}): Bot =>
     home: "/tmp",
     projectId: "proj",
     hostId: "host",
-    paused: false,
     createdAt: 0,
     updatedAt: 0,
     lastWakeAt: 0,
@@ -118,7 +117,6 @@ test("members sort by what they are doing, and retired bots drop out", () => {
     bot(2, { name: "Working" }),
     bot(3, { name: "Broken", error: "Provider down" }),
     bot(4, { name: "Gone", retired: true }),
-    bot(5, { name: "Resting", paused: true }),
   ];
   const members = railMembers(
     bots,
@@ -130,7 +128,6 @@ test("members sort by what they are doing, and retired bots drop out", () => {
     [
       ["Working", "working"],
       ["Broken", "attention"],
-      ["Resting", "paused"],
       ["Idle", "idle"],
     ],
   );

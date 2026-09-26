@@ -15,7 +15,7 @@ const personal = {
   updatedAt: 1,
 };
 
-test("repairs deleted-project profiles without replacing bot homes, history, or pause settings", async () => {
+test("repairs deleted-project profiles without replacing bot homes, history, or schedule settings", async () => {
   const { bb, harness } = createFakePluginHost({
     pluginId: "bot-teams",
     sdk: { projects: { list: async () => [personal] } },
@@ -28,7 +28,6 @@ test("repairs deleted-project profiles without replacing bot homes, history, or 
     home: "/old/bot/home",
     hostId: "host_old",
     projectId: "deleted_project",
-    paused: true,
     createdAt: 1,
     updatedAt: 1,
     lastWakeAt: 1,
@@ -88,6 +87,41 @@ test("repairs deleted-project profiles without replacing bot homes, history, or 
       usePersonalProject(bb, store),
       /Personal project is unavailable/,
     );
+  } finally {
+    await harness.lifecycle.dispose();
+  }
+});
+
+test("paused bots from before pause was removed keep their schedules off", async () => {
+  const { bb, harness } = createFakePluginHost({ pluginId: "bot-teams" });
+  try {
+    const db = bb.storage.database();
+    new Store(db);
+    const legacy = (id: string, paused: boolean) =>
+      JSON.stringify({
+        ...botSchema.parse({
+          id,
+          name: id,
+          handle: id,
+          home: `/homes/${id}`,
+          hostId: "host",
+          projectId: "project",
+          intervalMinutes: 30,
+          createdAt: 1,
+          updatedAt: 1,
+          lastWakeAt: 1,
+          error: null,
+        }),
+        paused,
+      });
+    const insert = db.prepare("INSERT INTO bots VALUES (?,?)");
+    insert.run("bot_0000000000000001", legacy("bot_0000000000000001", true));
+    insert.run("bot_0000000000000002", legacy("bot_0000000000000002", false));
+    const store = new Store(db);
+    const [paused, running] = store.all();
+    assert.equal(paused!.intervalMinutes, 0);
+    assert.equal(running!.intervalMinutes, 30);
+    assert.ok(!("paused" in paused!) && !("paused" in running!));
   } finally {
     await harness.lifecycle.dispose();
   }

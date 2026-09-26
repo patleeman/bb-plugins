@@ -26,7 +26,6 @@ function setup() {
     home: "/tmp/attention-qa",
     projectId: "p",
     hostId: "h",
-    paused: false,
     createdAt: 1,
     updatedAt: 1,
     lastWakeAt: 0,

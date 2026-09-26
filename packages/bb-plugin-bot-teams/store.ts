@@ -64,6 +64,12 @@ export class Store {
       CREATE INDEX IF NOT EXISTS messages_by_source_job ON room_messages(room_id,json_extract(json,'$.sourceJobId'));
       CREATE INDEX IF NOT EXISTS messages_by_source ON room_messages(json_extract(json,'$.sourceThreadId'));
       CREATE INDEX IF NOT EXISTS attachments_by_room ON attachments(json_extract(json,'$.roomId'));`);
+    // Bots no longer pause. A paused bot keeps its schedule off rather than
+    // starting scheduled work it was never running.
+    db.exec(`UPDATE bots SET json=json_remove(
+        CASE WHEN json_extract(json,'$.paused') THEN json_set(json,'$.intervalMinutes',0) ELSE json END,
+        '$.paused')
+      WHERE json_extract(json,'$.paused') IS NOT NULL`);
     this.attention = new AttentionStore(this);
   }
   all(): Bot[] {

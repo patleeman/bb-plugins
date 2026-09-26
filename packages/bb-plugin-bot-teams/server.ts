@@ -360,7 +360,6 @@ export default async function plugin(bb: BbPluginApi) {
         home: join(store.root, id),
         hostId: config.primaryHostId,
         projectId: "",
-        paused: !roomId,
         createdAt: now,
         updatedAt: now,
         lastWakeAt: now,
@@ -873,25 +872,6 @@ export default async function plugin(bb: BbPluginApi) {
             }
           store.put(bot);
         }
-        runtime.changed();
-        return bot;
-      }),
-    pause: ({ id, paused }) =>
-      runtime.locked(id, async () => {
-        if (store.get(id).retired && !paused)
-          throw new Error("Restore this bot before resuming its mission.");
-        const bot = { ...store.get(id), paused, updatedAt: Date.now() };
-        store.put(bot);
-        if (paused) {
-          for (const job of store.work(id).filter((j) => !j.roomId))
-            await runtime.cancel(job, "Bot paused by the owner.");
-          for (const c of store
-            .conversations(id)
-            .filter((c) => c.kind !== "group" && !c.archivedAt))
-            await bb.sdk.threads.stop({ threadId: c.threadId });
-          runtime.busy.delete(id);
-        }
-        if (!paused) await bb.experimental_hooks.recheck("message.dispatch");
         runtime.changed();
         return bot;
       }),
@@ -1457,11 +1437,6 @@ export default async function plugin(bb: BbPluginApi) {
         action: "reject",
         message: "This bot is archived. Restore it from the Bot Teams page.",
       };
-    if (bot.paused && c.kind === "admin")
-      return {
-        action: "wait",
-        reason: "This bot is paused. Resume it from the Bot Teams page.",
-      };
     // Native owner replies to setup and mission threads remain direct.
     if (context.initiator === "user" && context.originPluginId !== "bot-teams")
       return { action: "proceed" };
@@ -1469,11 +1444,6 @@ export default async function plugin(bb: BbPluginApi) {
       return {
         action: "reject",
         message: "This bot is archived. Restore it from the Bot Teams page.",
-      };
-    if (bot.paused && c.kind !== "group")
-      return {
-        action: "wait",
-        reason: "This bot is paused. Resume it from the Bot Teams page.",
       };
     if (c.kind !== "admin") {
       const job = store
@@ -1613,6 +1583,8 @@ export default async function plugin(bb: BbPluginApi) {
       await runtime.recoverRoomTitles();
       await recoverRoutingSessions(bb, store);
       await recoverApprovedBotCreates(signal);
+      // Direct chats held by the retired bot-level pause can proceed now.
+      await bb.experimental_hooks.recheck("message.dispatch");
       let cleanupAt = 0,
         botCreateRecoveryAt = Date.now() + 30_000;
       while (!signal.aborted) {

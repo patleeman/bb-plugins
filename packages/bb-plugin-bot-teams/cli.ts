@@ -104,7 +104,7 @@ const commands = [
     "Archive a bot, stop its work and leave its channels; keep files and history",
     "<bot>",
   ],
-  ["restore", "Restore an archived bot with mission work paused", "<bot>"],
+  ["restore", "Restore an archived bot with its mission schedule off", "<bot>"],
   ["retry", "Retry one failed or stopped channel response", "<job-id>"],
   [
     "channel search",
@@ -128,12 +128,6 @@ const commands = [
     "Read or update MEMORY.md",
     "<bot> [--text TEXT | --file PATH] [--version HASH]",
   ],
-  [
-    "pause",
-    "Pause standalone mission work; channel replies remain available",
-    "<bot>",
-  ],
-  ["resume", "Resume standalone mission work", "<bot>"],
   ["wake", "Request one step toward a bot's mission", "<bot>"],
   [
     "activity",
@@ -748,7 +742,7 @@ export function registerCli(
               ...(command === "list"
                 ? bots.map(
                     (b) =>
-                      `${b.id}  @${b.handle}  ${b.name}  ${b.paused ? "mission paused" : "ready"}`,
+                      `${b.id}  @${b.handle}  ${b.name}  ${b.retired ? "archived" : "ready"}`,
                   )
                 : []),
               ...rooms.map(
@@ -834,17 +828,12 @@ export function registerCli(
             await call("create", input),
           );
         }
-        if (["show", "pause", "resume", "wake"].includes(command!)) {
+        if (command === "show" || command === "wake") {
           const a = argumentsFor(rest),
             [selector] = a.positional(1),
             b = ownBot(selector!);
           return emit(
-            command === "show"
-              ? b
-              : await call(command === "wake" ? "wake" : "pause", {
-                  id: b.id,
-                  paused: command === "pause",
-                }),
+            command === "show" ? b : await call("wake", { id: b.id }),
           );
         }
         if (command === "mission" || command === "memory") {

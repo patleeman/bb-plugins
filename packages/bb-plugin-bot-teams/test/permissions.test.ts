@@ -21,7 +21,6 @@ const makeBot = (
   home: `/tmp/${name}`,
   hostId: "host_test",
   projectId: "proj_test",
-  paused: false,
   createdAt: 1,
   updatedAt: 1,
   lastWakeAt: Date.now(),

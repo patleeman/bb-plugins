@@ -55,7 +55,6 @@ export const botSchema = profileInput.extend({
   projectId: z.string(),
   hostId: z.string(),
   retired: z.boolean().optional(),
-  paused: z.boolean(),
   createdAt: z.number(),
   updatedAt: z.number(),
   lastWakeAt: z.number(),
@@ -581,10 +580,6 @@ export const rpcContract = defineRpcContract({
       conversations: z.array(conversationSchema),
       jobs: z.array(jobSchema),
     }),
-  },
-  pause: {
-    input: z.object({ id: idSchema, paused: z.boolean() }),
-    output: botSchema,
   },
   document: {
     input: z.object({

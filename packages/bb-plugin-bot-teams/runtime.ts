@@ -495,7 +495,6 @@ export class Runtime {
   }
   wake(bot: Bot) {
     if (bot.retired) throw new Error("Restore this bot before waking it.");
-    if (bot.paused) throw new Error("Resume this bot before waking it.");
     if (this.store.work(bot.id).some((j) => j.conversationKey === "mission"))
       return false;
     const queued = this.enqueue(bot, {
@@ -2244,7 +2243,8 @@ export class Runtime {
           const next = {
             ...bot,
             retired,
-            paused: true,
+            // Archiving and restoring both leave the mission schedule off.
+            intervalMinutes: 0,
             updatedAt: Math.max(Date.now(), bot.updatedAt + 1),
           };
           this.store.db.transaction(() => {
@@ -2641,10 +2641,7 @@ export class Runtime {
     if (forkJob) return this.driveJob(bot, forkJob, true);
     const first = new Map<string, Job>();
     for (const job of this.store.work(bot.id)) {
-      if (
-        !isForkConversation(job.conversationKey) &&
-        (job.cancellationPending || !bot.paused || !!job.roomId)
-      ) {
+      if (!isForkConversation(job.conversationKey)) {
         const lane = primaryLane(bot.id, job.conversationKey);
         if (!first.has(lane)) first.set(lane, job);
       }
@@ -3053,7 +3050,6 @@ export class Runtime {
           await this.reconcileBusy(bot);
           if (
             !bot.retired &&
-            !bot.paused &&
             bot.intervalMinutes &&
             Date.now() - bot.lastWakeAt >= bot.intervalMinutes * 60000
           )

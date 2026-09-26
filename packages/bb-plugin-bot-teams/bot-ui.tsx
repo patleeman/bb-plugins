@@ -341,7 +341,7 @@ export function ProfileForm({
           <FormRow
             label="Mission schedule"
             htmlFor={`${id}-schedule`}
-            hint="Channel replies are always available. Scheduled work follows the mission's pause setting."
+            hint="Channel replies and direct chats are always available. Off means the bot works on its mission only when asked."
           >
             <Select
               disabled={pending}

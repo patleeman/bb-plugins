@@ -128,7 +128,6 @@ async function setup() {
     home: "/tmp/atlas",
     hostId: "host_test",
     projectId: "proj_bots",
-    paused: true,
     createdAt: 1,
     updatedAt: 1,
     lastWakeAt: 1,

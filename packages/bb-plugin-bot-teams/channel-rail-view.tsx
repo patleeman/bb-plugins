@@ -308,7 +308,6 @@ function MemberRow({
     working: "Working",
     queued: "Queued",
     attention: "Needs attention",
-    paused: "Paused",
     idle: "Idle",
   } as const;
   // An idle bot is the resting case; saying so on every row is just noise.

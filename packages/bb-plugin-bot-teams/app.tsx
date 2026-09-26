@@ -100,16 +100,14 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
     ? "error"
     : activeWork
       ? "working"
-      : bot.paused || bot.retired
+      : bot.retired
         ? "paused"
         : "ready";
   const statusLabel = bot.retired
     ? "Archived"
     : bot.error
       ? "Failing"
-      : botStatus === "paused"
-        ? "Paused"
-        : botStatus === "working"
+      : botStatus === "working"
           ? "Working"
           : "Ready";
   return (
@@ -130,18 +128,6 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
         />
         <div className="bot-bar-actions">
           <StatusBadge status={botStatus} label={statusLabel} />
-          {!bot.retired && (
-            <Button
-              variant={bot.paused ? "default" : "ghost"}
-              size="sm"
-              disabled={pending}
-              onClick={() =>
-                action(() => rpc.call("pause", { id, paused: !bot.paused }))
-              }
-            >
-              {bot.paused ? "Resume" : "Pause"}
-            </Button>
-          )}
         </div>
       </header>
       <Modal
@@ -218,7 +204,7 @@ function BotDetail({ id, tab }: { id: string; tab: string }) {
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={pending || bot.paused || bot.retired}
+                    disabled={pending || bot.retired}
                     onClick={() => action(() => rpc.call("wake", { id }))}
                   >
                     Wake now

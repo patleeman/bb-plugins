@@ -12,7 +12,7 @@ Each active bot has a direct chat under Channels in the left sidebar; archived b
 
 ## Keep work and memory across conversations
 
-Profiles, files, channels, reactions, and work survive BB restarts. Mission schedules are optional and separately pausable. Bots use your existing BB providers and permissions on the primary machine.
+Profiles, files, channels, reactions, and work survive BB restarts. Mission schedules are optional and off by default. Bots use your existing BB providers and permissions on the primary machine.
 
 Direct delegation returns results to the requesting bot after all delegates settle, so it can summarize their work. Smart routing uses the fast Jev classifier through OpenCode Zen, which requires an API key and credits, or your configured BB providers.
 

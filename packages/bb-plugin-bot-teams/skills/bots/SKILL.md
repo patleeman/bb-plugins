@@ -112,10 +112,11 @@ Document reads return `{text, version}` with `--json`, or raw text without it.
 When editing a previously read copy, pass that `version` to reject stale saves.
 Without `--version`, the command reads the current version before saving.
 
-New standalone bots start with mission work paused and schedules off. Channel
-requests still work. `bb bots resume @atlas` enables mission work;
-`bb bots wake @atlas` requests one bounded mission step; `bb bots pause @atlas`
-cancels standalone mission work without cancelling channel responses.
+Bots have no pause state. New bots start with the mission schedule off
+(`--interval 0`), so they work only when asked. `bb bots wake @atlas` requests
+one bounded mission step; `bb bots update @atlas --interval N` sets a schedule.
+Use `bb bots stop <job-id>` to end one response and `bb bots archive` to take a
+bot out of use.
 
 ## Channels and messages
 
@@ -214,8 +215,8 @@ Existing schedules remain in Automations for inspection and cleanup. Restoring a
 channel or reinviting a bot makes an enabled schedule eligible again.
 
 The Automations plugin must be enabled. Scheduling never changes channel
-membership. Bot mission pause is separate from channel schedules, just as it is
-separate from ordinary channel replies. `automation-dispatch` is an internal CLI
+membership. A bot's mission schedule is separate from channel schedules, just as
+it is separate from ordinary channel replies. `automation-dispatch` is an internal CLI
 entry point; use the guarded `run` action to request a manual run.
 
 ## Files and transcription
@@ -269,7 +270,7 @@ other bots’ missions or share unrelated private conversation data.
 - `bb bots archive <bot> --json` stops current work and removes the bot from all
   channels while retaining its profile, mission, memory, files, and history.
 - `bb bots list --archived --json` finds archived bots. `--all` includes both states.
-- `bb bots restore <bot> --json` restores availability with mission work paused.
+- `bb bots restore <bot> --json` restores availability with its mission schedule off.
   Invite the bot to its channels again explicitly.
 - `bb bots retry <job-id> --json` retries one failed or stopped channel response.
   Repeating the command returns the same retry. To retry a failed retry, use its

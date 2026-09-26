@@ -36,7 +36,6 @@ const bot = (
   home,
   hostId: "host_test",
   projectId: "proj_test",
-  paused: false,
   createdAt: 1,
   updatedAt: 1,
   lastWakeAt: Date.now(),
@@ -1469,7 +1468,7 @@ test("owner requests in channel work threads are rejected and directed to the ch
       kind: "group",
       createdAt: 1,
     });
-    x.store.put({ ...x.a, paused: true, retired: true });
+    x.store.put({ ...x.a, retired: true });
     x.store.putRoom({ ...x.room, memberIds: [x.b.id], archived: true });
     x.runtime.busy.set(x.a.id, { threadId: "another-thread", at: Date.now() });
     for (const origin of ["app", "cli", "sdk"] as const) {
@@ -1527,12 +1526,11 @@ test("a managed channel dispatch proceeds even when core marks its initiator as 
   }
 });
 
-test("managed paused chats resume through core recheck and removed members cannot dispatch", async () => {
+test("managed bot chats dispatch directly and removed members cannot dispatch", async () => {
   const x = setup();
   await plugin(x.bb);
   try {
     const hook = x.harness.inspection.registrations.hooks["message.dispatch"]!;
-    x.store.put({ ...x.a, paused: true });
     x.store.putConversation({
       id: "admin",
       botId: x.a.id,
@@ -1547,10 +1545,6 @@ test("managed paused chats resume through core recheck and removed members canno
       origin: "plugin",
       originPluginId: "bot-teams",
     });
-    assert.equal((await hook(context)).action, "wait");
-    const checks = x.harness.inspection.recheckCount;
-    await x.harness.behavior.callRpc("pause", { id: x.a.id, paused: false });
-    assert.equal(x.harness.inspection.recheckCount, checks + 1);
     assert.equal((await hook(context)).action, "proceed");
     x.store.putConversation({
       id: "removed",
@@ -2101,11 +2095,11 @@ test("bot output advances channel activity after the owner's message was read", 
   }
 });
 
-test("channel requests run without starting a bot's paused scheduled mission", async () => {
+test("channel requests run without starting a bot's unscheduled mission", async () => {
   const x = setup();
   try {
     await plugin(x.bb);
-    x.store.put({ ...x.a, paused: true, intervalMinutes: 15, lastWakeAt: 1 });
+    x.store.put({ ...x.a, intervalMinutes: 0, lastWakeAt: 1 });
     x.store.putRoom({ ...x.room, paused: true }); // Legacy stopped rooms are open now.
     x.runtime.send(x.store.room(x.room.id), "@atlas help", randomUUID());
     await x.runtime.tick();
@@ -2723,7 +2717,7 @@ test("retiring stops all work and leaves channels while preserving identity and 
       /archived/,
     );
     await x.runtime.retire(x.a.id, false);
-    assert.equal(x.store.get(x.a.id).paused, true);
+    assert.equal(x.store.get(x.a.id).intervalMinutes, 0);
     assert.ok(!x.store.room(x.room.id).memberIds.includes(x.a.id));
     await x.harness.behavior.callRpc("member", {
       id: x.room.id,

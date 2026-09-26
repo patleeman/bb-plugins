@@ -17,7 +17,7 @@ function setup(executionMode: "serialized" | "parallel") {
     name,
     handle: ["news-desk", "secretary", "researcher"][i],
     home: `/tmp/smart-dependency-${i}`,
-    projectId: "p", hostId: "h", paused: false, createdAt: 1, updatedAt: 1, lastWakeAt: 0, error: null,
+    projectId: "p", hostId: "h", createdAt: 1, updatedAt: 1, lastWakeAt: 0, error: null,
   }));
   for (const bot of bots) store.put(bot);
   const room = roomSchema.parse({ id: randomUUID(), name: "News", memberIds: bots.map((bot) => bot.id), responseBehavior: "smart", paused: false, createdAt: 1, updatedAt: 1 });

@@ -129,7 +129,7 @@ test("CLI creates and patches profiles, preserves fields, and exposes its skill"
   const x = await setup();
   try {
     const b = await x.create();
-    assert.equal(b.paused, true);
+    assert.equal(b.intervalMinutes, 0);
     assert.match((await x.run(["mission", "@atlas"])).stdout, /Verify facts/);
     const updated = botSchema.parse(
       await x.ok([
@@ -857,11 +857,10 @@ test("CLI attachments use the invoking machine, support downloads, and protect d
   }
 });
 
-test("CLI activity and per-response stop preserve the channel and separate mission pauses", async () => {
+test("CLI activity and per-response stop preserve the channel alongside mission work", async () => {
   const x = await setup();
   try {
     const b = await x.create();
-    await x.ok(["resume", b.id]);
     await x.ok(["wake", b.id]);
     const room = roomSchema.parse(
       await x.ok([
@@ -875,8 +874,8 @@ test("CLI activity and per-response stop preserve the channel and separate missi
       ]),
     );
     await x.ok(["channel", "send", "Work", "--text", "Please help"]);
-    await x.ok(["pause", b.id]);
-    assert.ok(x.store.work(b.id).every((j) => j.roomId === room.id));
+    assert.ok(x.store.work(b.id).some((j) => j.conversationKey === "mission"));
+    assert.equal((await x.run(["pause", b.id])).exitCode, 2);
     const data = (await x.ok([
       "activity",
       "--bot",
@@ -889,8 +888,10 @@ test("CLI activity and per-response stop preserve the channel and separate missi
     assert.deepEqual(await x.ok(["stop", job.id]), { cancelled: true });
     assert.deepEqual(await x.ok(["stop", job.id]), { cancelled: false });
     await x.ok(["channel", "send", "Work", "--text", "Still usable"]);
-    assert.equal(x.store.work(b.id).length, 1);
-    assert.equal((await x.run(["wake", b.id])).exitCode, 1);
+    assert.equal(
+      x.store.work(b.id).filter((j) => j.roomId === room.id).length,
+      1,
+    );
   } finally {
     await x.close();
   }

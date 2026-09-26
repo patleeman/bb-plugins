@@ -27,7 +27,6 @@ function setup() {
       home: `/tmp/return-${name}`,
       projectId: "p",
       hostId: "h",
-      paused: false,
       createdAt: 1,
       updatedAt: 1,
       lastWakeAt: 0,

@@ -925,7 +925,6 @@
 .state-error {
   background: var(--destructive);
 }
-.state-paused,
 .state-cancelled {
   background: var(--muted-foreground);
   opacity: 0.65;

@@ -39,7 +39,6 @@ export type RailMemberState =
   | "working"
   | "queued"
   | "attention"
-  | "paused"
   | "idle";
 
 export type RailMember = {
@@ -53,8 +52,7 @@ const memberOrder: Record<RailMemberState, number> = {
   working: 0,
   queued: 1,
   attention: 2,
-  paused: 3,
-  idle: 4,
+  idle: 3,
 };
 
 /** Who is in the room and what each one is doing right now. */
@@ -73,11 +71,9 @@ export function railMembers(
         ? entry.running
           ? "working"
           : "queued"
-        : bot.paused
-          ? "paused"
-          : bot.error
-            ? "attention"
-            : "idle";
+        : bot.error
+          ? "attention"
+          : "idle";
       return [
         {
           bot,

@@ -75,7 +75,7 @@ export function BotCollection({
               (status === "attention"
                 ? !!b.error
                 : status === "ready"
-                  ? !b.error && !b.paused && !b.working
+                  ? !b.error && !b.working
                   : false))),
     )
     .sort((a, b) =>
@@ -352,8 +352,6 @@ export function BotCollection({
                       <StatusBadge status="error" label="Failing" />
                     ) : bot.working ? (
                       <StatusBadge status="working" />
-                    ) : bot.paused ? (
-                      <StatusBadge status="paused" />
                     ) : null}
                     <span
                       className="bot-last-active"

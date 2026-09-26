@@ -111,7 +111,7 @@ state.
 - **Needs you** collects the channel's open decisions and the requests a bot is
   blocked on, so they can be answered without leaving the channel.
 - **Members** shows every bot in the channel, labelled only when it is doing
-  something: working, queued, needs attention or paused. Idle is the resting
+  something: working, queued or needs attention. Idle is the resting
   case and goes unsaid. A member row opens that bot's work thread when one
   exists; ⌘-click (drag) opens it in a split. A bell marks work waiting on your approval.
 - The soonest scheduled run counts down on its own row and can be paused.
@@ -223,9 +223,9 @@ and CLI commands.
 
 ## Mission work
 
-Channels always respond to explicit messages. Separately, a bot’s mission work can be paused from its administration page. New bots start with scheduled mission work paused. **Wake now** asks for one bounded step toward the mission. Schedules are off by default and do not replay missed intervals after downtime. Pausing mission work does not disable channel replies.
+Bots are always available in channels and direct chats; there is no bot-level pause. A bot works on its mission on its own only when its **Mission schedule** is set. Schedules are off by default and do not replay missed intervals after downtime. **Wake now** asks for one bounded step toward the mission. Use **Stop** to end a response in progress and **Archive bot** to take a bot out of use.
 
-**Archive bot** stops its current work, removes it from every channel, and keeps its profile, files, and history. Use the collection’s **Archived** filter to find it. **Restore bot** makes it available for invitations again, with scheduled mission work paused.
+**Archive bot** stops its current work, removes it from every channel, and keeps its profile, files, and history. Use the collection’s **Archived** filter to find it. **Restore bot** makes it available for invitations again, with its mission schedule off.
 
 Failed channel responses show **Open work thread** and **Retry response**. Retrying keeps the original message and targets only that bot; repeated clicks do not start duplicate retries. A long response gets a wrap-up request at 75% of its time limit (15 minutes at the 20-minute default), asking the bot to stop new work, save its state, and report progress. If it reaches the limit without finishing, Bot Teams stops the response, posts the last recorded progress in the channel, and preserves its bot work thread and workspace. **Resume response** continues in that same work thread. For an important checkpoint or blocker before then, bots can use `bots_channel_notify`; it leaves a durable channel message and notifies the owner without waking other bots. Restore and invite a removed bot before retrying.
 
