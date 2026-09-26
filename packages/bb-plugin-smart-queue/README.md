@@ -17,8 +17,8 @@ for ordinary threads.
 2. **The fallback model** answers when no Jev provider does. It asks the same
    question in a hidden, temporary thread in BB's Personal project, on the
    thread's machine, and deletes the thread afterwards. By default it uses the
-   thread's own provider and that provider's default model; pick a fast, cheap
-   model in settings, or turn it off.
+   thread's own provider and that provider's default model. Pick a fast,
+   inexpensive model with BB's model picker in settings, or turn it off.
 3. **Follow-up** is used when neither answers. An unnecessary steer interrupts
    work, so waiting is the safe default.
 
@@ -84,12 +84,20 @@ Open **Settings → Plugins → Smart Queue**, or use `bb plugin config smart-qu
 | `enabled` | `true` | Turn classification on or off. |
 | `jevProvider` | `auto` | `auto`, `typesafe`, `vercel`, `openrouter`, `opencode-zen`, or `custom`. |
 | `typesafeApiKey`, `vercelApiKey`, `openRouterApiKey`, `zenApiKey` | — | Provider keys (secret). See [Jev providers](#jev-providers). |
-| `typesafeModel` | `jev-latest` | `jev-preview`, or a versioned ID such as `jev-1.13.0` to pin one. |
+| `typesafeModel` | `jev-latest` | Dropdown: `jev-latest`, `jev-preview`, or `jev-1.13.0` to pin that version. |
 | `customJevEndpoint`, `customJevApiKey`, `customJevModel` | — | Your own System One endpoint. |
 | `jevTimeoutMs` | `5000` | Deadline for each provider attempt, 250 to 15000 ms. |
 | `steerConfidence` | `0.7` | Minimum Jev confidence to steer. |
-| `fallbackProvider` | the thread's provider | Provider for the fallback model. Enter `none` to turn it off. |
-| `fallbackModel` | the provider's default | A fast, cheap model from that provider's catalog. |
+
+Below the form, two sections complete the page:
+
+- **Jev connection** lists the providers Smart Queue will call, in order, and
+  any configuration problems. **Test** sends a fixed sample message to Jev and
+  reports which provider answered; it never reads a thread.
+- **Fallback model** chooses what decides when no Jev provider answers: the
+  thread's provider, a specific model picked with BB's own provider, model,
+  and reasoning picker, or off. The same choice is available as
+  `bb smart-queue fallback`.
 
 ## Commands
 
@@ -97,6 +105,8 @@ Open **Settings → Plugins → Smart Queue**, or use `bb plugin config smart-qu
 bb smart-queue status              # Jev routes, problems, and the fallback model
 bb smart-queue recent [--limit n]  # Recent decisions, newest first
 bb smart-queue classify <thread-id> <message>  # Dry run; sends nothing
+bb smart-queue check               # Test the Jev connection with a sample message
+bb smart-queue fallback [thread | off | <provider-id> <model> [<reasoning>]]
 ```
 
 Every command accepts `--json`.
@@ -113,11 +123,14 @@ shown by BB's **Steer** label. It kept the separate task ("Next, write a haiku
 about message queues.") in the **Queue** as a follow-up. The capture also checks
 both decisions in `bb smart-queue recent`.
 
-![Smart Queue settings with the Jev provider picker, provider keys, and a custom endpoint](assets/settings.png)
+![Smart Queue settings with provider keys, the Jev connection check, and the fallback model picker](assets/settings.png)
 
-The second screenshot is the plugin's real settings page: the Jev provider
-picker, a key field for each provider, the custom endpoint fields, and the
-fallback model settings. The only key set is OpenCode Zen's, shown masked.
+The second screenshot is the plugin's real settings page. It shows the
+TypeSafe model dropdown, a key field for each Jev provider, and the custom
+endpoint fields. Below them, **Jev connection** lists OpenCode Zen, the only
+provider with a key (shown masked), and a live **Test** result. **Fallback
+model** shows pi's Qwen3.8 Flash at low reasoning, chosen in BB's model
+picker.
 
 ## Install
 

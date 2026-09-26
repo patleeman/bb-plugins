@@ -1,5 +1,6 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import type { Fallback } from "./contract";
 import { describeHttpFailure, jevRoutes, type JevProviderSettings, type JevRoute } from "./jev-providers";
 
 export type Action = "steer" | "followup";
@@ -23,16 +24,12 @@ export type Situation = {
 export type ClassifierSettings = JevProviderSettings & {
   jevTimeoutMs?: number;
   steerConfidence?: number;
-  fallbackProvider?: string;
-  fallbackModel?: string;
 };
 
 const probability = z.number().min(0).max(1);
 const settingsSchema = z.object({
   jevTimeoutMs: z.number().int().min(250).max(15000).default(5000),
   steerConfidence: probability.default(0.7),
-  fallbackProvider: z.string().trim().default(""),
-  fallbackModel: z.string().trim().default(""),
 });
 const jevResponseSchema = z.object({
   answers: z.object({
@@ -181,22 +178,20 @@ export function parseModelVerdict(text: string | null): Verdict {
 
 /**
  * Runs the prompt in a hidden, temporary thread, the same way Bot Teams runs
- * its provider classifier. With no fallback provider configured it uses the
- * thread's own provider, so it works with whatever the user has installed;
- * `none` turns the fallback off.
+ * its provider classifier. In `thread` mode it uses the thread's own provider
+ * and default model, so it works with whatever the user has installed.
  */
 export async function askModel(
   bb: BbPluginApi,
-  settings: ClassifierSettings,
+  fallback: Fallback,
   target: { projectId: string; hostId: string; queuedMessageId: string; threadProviderId: string },
   situation: Situation,
   signal: AbortSignal,
   sessions: Set<string>,
 ): Promise<Verdict> {
-  const config = settingsSchema.parse(settings);
-  if (config.fallbackProvider.toLowerCase() === "none") throw new UnavailableError("The fallback model is turned off.");
-  const providerId = config.fallbackProvider || target.threadProviderId;
-  const model = config.fallbackModel || undefined;
+  if (fallback.mode === "off") throw new UnavailableError("The fallback model is turned off.");
+  const providerId = fallback.mode === "model" ? fallback.providerId : target.threadProviderId;
+  const model = fallback.mode === "model" ? fallback.model : undefined;
   signal.throwIfAborted();
   const provider = (await bb.sdk.providers.list({ hostId: target.hostId })).find(
     (candidate) => candidate.id === providerId,
@@ -214,7 +209,10 @@ export async function askModel(
       input: [{ type: "text", text: modelPrompt(situation), mentions: [] }],
       providerId,
       model,
-      reasoningLevel: levels.includes("none") ? "none" : levels.includes("low") ? "low" : undefined,
+      // A classifier needs no deliberation: use the lowest level unless the user chose one.
+      reasoningLevel:
+        (fallback.mode === "model" && fallback.reasoningLevel) ||
+        (levels.includes("none") ? "none" : levels.includes("low") ? "low" : undefined),
       permissionMode: modes.includes("accept-edits") ? "accept-edits" : modes.includes("auto") ? "auto" : "full",
       executionInputSources: {
         providerId: "explicit",

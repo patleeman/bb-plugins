@@ -9,10 +9,20 @@ import {
   type ClassifierSettings,
   type Situation,
 } from "./classifier";
+import { defaultFallback, fallbackSchema, rpcContract, type Fallback } from "./contract";
 import { jevProviderChoices, jevRoutes } from "./jev-providers";
 import { SmartQueue, describeVerdict, rowText, type DecisionRecord, type ThreadInfo } from "./queue";
 
 const recentKey = "recent-decisions";
+const fallbackKey = "fallback";
+/** A fixed, harmless sample for connection checks, so a check never reads a thread. */
+const sampleSituation: Situation = {
+  title: "Connection check",
+  requests: ["Rename the config loader and update its tests."],
+  latestOutput: "Renaming the loader now.",
+  message: "Stop, keep the old name. Only update the tests.",
+};
+export const typesafeModels = ["jev-latest", "jev-preview", "jev-1.13.0"];
 const recentLimit = 30;
 const watchIntervalMs = 1000;
 
@@ -41,10 +51,11 @@ export default async function plugin(bb: BbPluginApi) {
         "TypeSafe serves Jev directly. Create a key at https://console.typesafe.ai/keys. Falls back to the server's TYPESAFE_API_KEY environment variable.",
     },
     typesafeModel: {
-      type: "string",
+      type: "select",
       label: "TypeSafe model",
+      options: typesafeModels,
       default: "jev-latest",
-      description: "jev-latest follows each stable release, jev-preview tries previews, and a versioned ID such as jev-1.13.0 pins one.",
+      description: "jev-latest follows each stable release, jev-preview tries previews, and jev-1.13.0 pins that version.",
     },
     vercelApiKey: {
       type: "string",
@@ -95,23 +106,75 @@ export default async function plugin(bb: BbPluginApi) {
       experimental_schema: z.number().min(0).max(1),
       description: "A value from 0 to 1. An uncertain steer becomes a follow-up.",
     },
-    fallbackProvider: {
-      type: "string",
-      label: "Fallback provider",
-      default: "",
-      description:
-        "Used when no Jev provider answers. Empty uses the thread's own provider. Enter none to skip straight to follow-up.",
-    },
-    fallbackModel: {
-      type: "string",
-      label: "Fallback model",
-      default: "",
-      description:
-        "A fast, cheap model from that provider's catalog. Empty uses the provider's default model. It runs in a hidden, temporary thread.",
-    },
   });
   const config = async (): Promise<ClassifierSettings & { enabled: boolean }> => settings.get();
   const sessions = new Set<string>();
+
+  // The fallback model lives in plugin storage, not declarative settings, so
+  // the settings page can edit it with BB's own provider and model picker.
+  async function fallback(): Promise<Fallback> {
+    const parsed = fallbackSchema.safeParse(await bb.storage.kv.get(fallbackKey));
+    return parsed.success ? parsed.data : defaultFallback;
+  }
+  async function setFallback(value: Fallback) {
+    const parsed = fallbackSchema.parse(value);
+    await bb.storage.kv.set(fallbackKey, parsed);
+    return parsed;
+  }
+  const describeFallback = (value: Fallback) =>
+    value.mode === "off"
+      ? "off (follow-up)"
+      : value.mode === "thread"
+        ? "the thread's provider and default model"
+        : `${value.providerId}/${value.model}${value.reasoningLevel ? ` (${value.reasoningLevel})` : ""}`;
+
+  async function jevStatus() {
+    const current = await config();
+    const { routes, problems } = jevRoutes(current);
+    // Names and models only; keys never leave the server.
+    return {
+      provider: current.jevProvider ?? "auto",
+      routes: routes.map(({ name, model }) => ({ name, model })),
+      problems,
+    };
+  }
+  async function checkJev() {
+    const started = Date.now();
+    try {
+      const verdict = await askJev(await config(), sampleSituation, AbortSignal.timeout(20_000));
+      return {
+        ok: true as const,
+        via: verdict.via ?? "Jev",
+        action: verdict.action,
+        confidence: verdict.confidence ?? 0,
+        ms: Date.now() - started,
+      };
+    } catch (error) {
+      return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  async function suggestFallback() {
+    for (const provider of (await bb.sdk.providers.list()).filter((candidate) => candidate.available)) {
+      const options = await bb.sdk.providers.models({ providerId: provider.id }).catch(() => null);
+      const model = options?.models.find((candidate) => candidate.isDefault) ?? options?.models[0];
+      if (!model) continue;
+      const efforts = model.supportedReasoningEfforts.map((effort) => effort.reasoningEffort);
+      return {
+        mode: "model" as const,
+        providerId: provider.id,
+        model: model.model,
+        reasoningLevel: efforts.includes("none") ? ("none" as const) : efforts.includes("low") ? ("low" as const) : model.defaultReasoningEffort,
+      };
+    }
+    return null;
+  }
+  bb.rpc.register(rpcContract, {
+    "fallback.get": () => fallback(),
+    "fallback.set": (value) => setFallback(value),
+    "fallback.suggest": () => suggestFallback(),
+    "jev.status": () => jevStatus(),
+    "jev.check": () => checkJev(),
+  });
 
   async function situation(threadId: string, message: string, thread: ThreadInfo): Promise<Situation> {
     const [history, output] = await Promise.all([
@@ -162,7 +225,7 @@ export default async function plugin(bb: BbPluginApi) {
           model: async (s) =>
             askModel(
               bb,
-              settingsNow,
+              await fallback(),
               await modelTarget(thread, row.id),
               state,
               s,
@@ -233,6 +296,8 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb smart-queue status [--json]",
     "  bb smart-queue recent [--limit <n>] [--json]",
     "  bb smart-queue classify <thread-id> <message> [--json]",
+    "  bb smart-queue check [--json]",
+    "  bb smart-queue fallback [thread | off | <provider-id> <model> [<reasoning-level>]] [--json]",
   ].join("\n");
   bb.cli.register({
     name: "smart-queue",
@@ -248,6 +313,16 @@ export default async function plugin(bb: BbPluginApi) {
         name: "classify",
         summary: "Dry-run the classifier for a message to a thread without sending it",
         usage: "bb smart-queue classify <thread-id> <message> [--json]",
+      },
+      {
+        name: "check",
+        summary: "Test the Jev connection with a fixed sample message",
+        usage: "bb smart-queue check [--json]",
+      },
+      {
+        name: "fallback",
+        summary: "Show or set the model used when no Jev provider answers",
+        usage: "bb smart-queue fallback [thread | off | <provider-id> <model> [<reasoning-level>]] [--json]",
       },
     ],
     async run(argv) {
@@ -265,19 +340,14 @@ export default async function plugin(bb: BbPluginApi) {
           return { exitCode: 0, stdout: usage };
         case "status": {
           const current = await config();
-          const { routes, problems } = jevRoutes(current);
-          const fallbackProvider = current.fallbackProvider?.trim() ?? "";
-          const fallbackModel = current.fallbackModel?.trim() ?? "";
+          const jev = await jevStatus();
+          const fallbackNow = await fallback();
           const status = {
             enabled: current.enabled,
-            jevProvider: current.jevProvider ?? "auto",
-            // Names, endpoints, and models only; keys never leave the server.
-            jev: routes.map(({ name, endpoint, model }) => ({ name, endpoint, model })),
-            problems,
-            fallback:
-              fallbackProvider.toLowerCase() === "none"
-                ? null
-                : `${fallbackProvider || "the thread's provider"}${fallbackModel ? `/${fallbackModel}` : " (default model)"}`,
+            jevProvider: jev.provider,
+            jev: jev.routes,
+            problems: jev.problems,
+            fallback: fallbackNow,
             holding: [...queue.entries.values()].filter((entry) => entry.state === "pending").length,
           };
           return reply(
@@ -288,11 +358,39 @@ export default async function plugin(bb: BbPluginApi) {
               status.jev.length
                 ? `Jev routes: ${status.jev.map((route) => `${route.name} (${route.model})`).join(" → ")}`
                 : "Jev routes: none (add a TypeSafe key, another provider key, or a custom endpoint)",
-              ...problems.map((problem) => `Problem: ${problem}`),
-              `Fallback model: ${status.fallback ?? "off (follow-up)"}`,
+              ...status.problems.map((problem) => `Problem: ${problem}`),
+              `Fallback model: ${describeFallback(fallbackNow)}`,
               `Deciding now: ${status.holding}`,
             ].join("\n"),
           );
+        }
+        case "check": {
+          const result = await checkJev();
+          return result.ok
+            ? reply(result, `Jev answered through ${result.via} in ${result.ms} ms (${result.action}, ${Math.round(result.confidence * 100)}%).`)
+            : { exitCode: 1, stdout: json ? JSON.stringify(result) : "", stderr: json ? "" : `Jev check failed: ${result.error}` };
+        }
+        case "fallback": {
+          const [mode, model, reasoningLevel] = rest;
+          if (mode === undefined) {
+            const current = await fallback();
+            return reply(current, `Fallback model: ${describeFallback(current)}`);
+          }
+          let next: Fallback;
+          if (mode === "thread" || mode === "off") {
+            if (model !== undefined) break;
+            next = { mode };
+          } else {
+            if (!model) break;
+            const providers = await bb.sdk.providers.list();
+            if (!providers.some((provider) => provider.id === mode))
+              return { exitCode: 1, stderr: `Unknown provider ${mode}. Known: ${providers.map((provider) => provider.id).join(", ")}.` };
+            const parsed = fallbackSchema.safeParse({ mode: "model", providerId: mode, model, reasoningLevel: reasoningLevel ?? null });
+            if (!parsed.success) return { exitCode: 1, stderr: parsed.error.issues[0]?.message ?? "Invalid fallback." };
+            next = parsed.data;
+          }
+          const saved = await setFallback(next);
+          return reply(saved, `Fallback model: ${describeFallback(saved)}`);
         }
         case "recent": {
           const limitIndex = rest.indexOf("--limit");
@@ -329,7 +427,7 @@ export default async function plugin(bb: BbPluginApi) {
               model: async (s) =>
                 askModel(
                   bb,
-                  settingsNow,
+                  await fallback(),
                   await modelTarget(thread, "dry-run"),
                   state,
                   s,

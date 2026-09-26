@@ -1815,14 +1815,47 @@ const captures = [
     packageDir: "bb-plugin-smart-queue",
     fileName: "settings.png",
     setup: async (client) => {
-      await client.navigate("/settings/plugins/smart-queue");
-      await client.waitForText("Smart Queue");
-      await client.waitForText("Jev provider");
-      await client.waitForText("TypeSafe API key");
-      await client.waitForText("Vercel AI Gateway API key");
-      await client.waitForText("OpenRouter API key");
-      await client.waitForText("Custom Jev endpoint");
-      await client.waitForText("Fallback provider");
+      // Stage a known fallback choice for the picker, then restore the owner's.
+      const previous = JSON.parse(await bbCli(["smart-queue", "fallback", "--json"]));
+      await bbCli(["smart-queue", "fallback", "pi", "opencode-go/qwen3.8-flash", "low"]);
+      const restore = async () => {
+        await client.command("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+        await (previous.mode === "model"
+          ? bbCli(["smart-queue", "fallback", previous.providerId, previous.model, ...(previous.reasoningLevel ? [previous.reasoningLevel] : [])])
+          : bbCli(["smart-queue", "fallback", previous.mode]));
+      };
+      try {
+        await client.navigate("/settings/plugins/smart-queue");
+        await client.waitForText("Jev provider");
+        await client.waitForText("TypeSafe model");
+        await client.waitForText("Jev connection");
+        await client.waitForText("Providers auto will try");
+        await client.waitForText("Test connection");
+        await client.waitForText("Fallback model");
+        await client.waitForText("A specific model");
+        await client.waitForText("Qwen3.8 Flash");
+        // A taller frame shows the provider keys and both custom sections
+        // without clipping a row; the page ends at the fallback model.
+        await client.command("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1120, deviceScaleFactor: 1, mobile: false });
+        await sleep(400);
+        // The live connection check proves the listed provider answers.
+        await client.clickButtonText("Test");
+        await client.waitForText("Jev answered through", 20000);
+        await client.evaluate(`(() => {
+          const picker = Array.from(document.querySelectorAll("button"))
+            .find((candidate) => candidate.innerText.includes("Qwen3.8 Flash"));
+          let pane = picker?.parentElement;
+          while (pane && pane.scrollHeight <= pane.clientHeight) pane = pane.parentElement;
+          if (!pane) throw new Error("Settings scroll pane not found");
+          pane.scrollTop = pane.scrollHeight;
+          return true;
+        })()`);
+        await sleep(400);
+      } catch (error) {
+        await restore();
+        throw error;
+      }
+      return restore;
     },
   },
   {
