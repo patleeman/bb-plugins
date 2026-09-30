@@ -9,7 +9,6 @@
     { "name": "automation-calendar", "source": "./packages/bb-plugin-automation-calendar" },
     { "name": "bot-teams", "source": "./packages/bb-plugin-bot-teams" },
     { "name": "cobalt2", "source": "./packages/bb-plugin-cobalt2" },
-    { "name": "comprehension", "source": "./packages/bb-plugin-comprehension" },
     { "name": "copy-session-id", "source": "./packages/bb-plugin-copy-session-id" },
     { "name": "ds4", "source": "./packages/bb-plugin-ds4" },
     { "name": "emoji-react", "source": "./packages/bb-plugin-emoji-react" },

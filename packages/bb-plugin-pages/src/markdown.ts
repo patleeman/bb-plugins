@@ -11,7 +11,7 @@ import type {
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
-import { EMBED_KINDS, MENTION_KINDS, type MentionKind } from "./schema-config";
+import { EMBED_KINDS, MAX_HTML_CHARS, MENTION_KINDS, type MentionKind } from "./schema-config";
 
 // Agents read and write pages as markdown. This module converts between
 // markdown and BlockNote blocks without a DOM (BlockNote's own converters need
@@ -19,6 +19,7 @@ import { EMBED_KINDS, MENTION_KINDS, type MentionKind } from "./schema-config";
 //
 //   ```chart / ```stats / ```embed   fenced JSON for data blocks
 //   ```mermaid                        Mermaid diagrams
+//   ```html                           raw HTML, rendered in a sandboxed iframe
 //   > [!NOTE] text                    callouts (NOTE, TIP, WARNING, CAUTION)
 //   @[Label](bot:bot_…)               mentions (bot, page, thread, date, agent, item)
 //   <!-- ^1a2b3c4d -->                block ids in read output; ignored on input
@@ -115,6 +116,9 @@ function convertBlock(node: RootContent): PageBlock[] {
       if (fence === "stats") return [{ type: "stats", props: { items: node.value.trim() } }];
       if (fence === "embed") return [embedBlock(node.value)];
       if (lang === "mermaid") return [{ type: "mermaid", content: node.value }];
+      // Oversized HTML stays a code block: kept, but never rendered. So does
+      // ```html source, which is how an HTML code block is written back.
+      if (lang === "html" && node.meta?.trim() !== HTML_SOURCE_META && node.value.length <= MAX_HTML_CHARS) return [{ type: "html", content: node.value }];
       return [{ type: "codeBlock", props: { language: node.lang ?? "text" }, content: node.value }];
     }
     case "thematicBreak":
@@ -382,11 +386,15 @@ function renderBlock(block: PageBlock, indent: string, number: number, options: 
     case "codeBlock": {
       const code = typeof block.content === "string" ? block.content : plainText(content);
       const language = props.language && props.language !== "text" ? String(props.language) : "";
-      body = fence(language, code, indent);
+      // A bare ```html fence reads back as a rendered HTML block; keep code as code.
+      body = fence(language.toLowerCase() === "html" ? `${language} ${HTML_SOURCE_META}` : language, code, indent);
       break;
     }
     case "mermaid":
       body = fence("mermaid", typeof block.content === "string" ? block.content : plainText(content), indent);
+      break;
+    case "html":
+      body = fence("html", typeof block.content === "string" ? block.content : plainText(content), indent);
       break;
     case "chart":
       body = fence("chart", prettyJson(String(props.spec ?? "")), indent);
@@ -427,8 +435,13 @@ function renderBlock(block: PageBlock, indent: string, number: number, options: 
   return idLine + body;
 }
 
+/** The info-string word that keeps an ```html fence a code block instead of rendered HTML. */
+const HTML_SOURCE_META = "source";
+
 function fence(language: string, code: string, indent: string): string {
-  const ticks = code.includes("```") ? "````" : "```";
+  // Longer than any backtick run inside, so HTML and scripts can't close it early.
+  const longest = Math.max(0, ...(code.match(/`+/g) ?? []).map((run) => run.length));
+  const ticks = "`".repeat(Math.max(3, longest + 1));
   return [`${indent}${ticks}${language}`, ...code.split("\n").map((line) => indent + line), `${indent}${ticks}`].join("\n");
 }
 

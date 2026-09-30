@@ -72,8 +72,6 @@ description, and icon aligned with its package manifest.
   attach Excalidraw drawings in conversations.
 - [`bb-plugin-prime-agent`](packages/bb-plugin-prime-agent/) — register Prime
   Agent as an ACP-based bb provider (`acp-prime-agent`).
-- [`bb-plugin-comprehension`](packages/bb-plugin-comprehension/) — turn messages,
-  selections, and threads into clear HTML, audio, and podcast explainers.
 - [`bb-plugin-emoji-react`](packages/bb-plugin-emoji-react/) — emoji reactions
   in the assistant-message text-selection menu; the reaction list is
   configurable in plugin settings.

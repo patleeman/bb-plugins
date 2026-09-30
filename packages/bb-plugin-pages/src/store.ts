@@ -3,6 +3,7 @@ import type Database from "better-sqlite3";
 
 // SQLite persistence. A page's content is its Yjs state (`state`); `markdown`
 // is a derived cache for search, mentions and previews, refreshed on save.
+// MIGRATIONS is append-only: BB records each statement's hash by index.
 
 export const MIGRATIONS = [
   `CREATE TABLE IF NOT EXISTS pages (
@@ -68,6 +69,47 @@ export const MIGRATIONS = [
      created_at INTEGER NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS chats_page ON chats (page_id, created_at)`,
+  // Explore: explainers written from what agents noticed along the way (explore/store.ts).
+  `CREATE TABLE IF NOT EXISTS explore_explainers (
+     id TEXT PRIMARY KEY,
+     key TEXT NOT NULL UNIQUE,
+     parent_id TEXT,
+     thread_id TEXT NOT NULL,
+     message_id TEXT NOT NULL,
+     turn_id TEXT,
+     emoji TEXT NOT NULL,
+     label TEXT NOT NULL,
+     page_id TEXT,
+     project_id TEXT,
+     status TEXT NOT NULL,
+     follow_ups TEXT NOT NULL DEFAULT '[]',
+     generated_at INTEGER,
+     regenerated_at INTEGER,
+     error TEXT,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS explore_explainers_message ON explore_explainers (thread_id, message_id)`,
+  `CREATE INDEX IF NOT EXISTS explore_explainers_page ON explore_explainers (page_id)`,
+  `CREATE TABLE IF NOT EXISTS explore_jobs (
+     id TEXT PRIMARY KEY,
+     explainer_id TEXT NOT NULL,
+     kind TEXT NOT NULL,
+     status TEXT NOT NULL,
+     label TEXT NOT NULL,
+     detail TEXT NOT NULL,
+     progress INTEGER NOT NULL,
+     worker_thread_id TEXT,
+     error TEXT,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS explore_jobs_explainer ON explore_jobs (explainer_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS explore_parents (
+     project_key TEXT PRIMARY KEY,
+     page_id TEXT NOT NULL,
+     created_at INTEGER NOT NULL
+   )`,
 ];
 
 export const newId = (prefix: string) => `${prefix}_${randomBytes(6).toString("hex")}`;

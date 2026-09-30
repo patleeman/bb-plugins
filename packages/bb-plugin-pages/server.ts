@@ -5,17 +5,19 @@ import { studioSchemas } from "@bb-studio/kit/contract";
 import { createStudioNotifier } from "@bb-studio/kit/server";
 import * as Y from "yjs";
 import { z } from "zod";
-import { BotDirectory } from "./src/bots";
-import { FILES_PATH, HUMAN_USER_ID, MAX_UPLOAD_BYTES, MERMAID_PATH, PLUGIN_ID, SYNC_PATH, UPLOAD_PATH } from "./src/constants";
+import { actorColor, BotDirectory } from "./src/bots";
+import { FILES_PATH, HUMAN_USER_ID, MAX_UPLOAD_BYTES, MERMAID_PATH, PLUGIN_ID, PLUGIN_RPC_ACTOR, SYNC_PATH, UPLOAD_PATH } from "./src/constants";
 import { rpcContract } from "./src/contract";
 import { studioEmbeds } from "./src/embeds";
 import { fetchPreview } from "./src/unfurl";
 import { applyEdits, readMarkdown } from "./src/doc";
+import { EXPLORE_USAGE, registerExplore } from "./src/explore/register";
+import { isExploreWorker } from "./src/explore/worker";
 import type { Socket } from "./src/hub";
 import { errorText, pageUrl, PagesService, requestView, toView, truncate, validateCron } from "./src/service";
 import { MIGRATIONS, PageStore } from "./src/store";
 import { registerStudio } from "./src/studio";
-import { registerTools } from "./src/tools";
+import { agentConfiguration, registerTools } from "./src/tools";
 
 const INLINE_MIME = /^(image\/(png|jpeg|gif|webp|avif)|video\/(mp4|webm|ogg)|audio\/(mpeg|mp4|ogg|wav|webm)|application\/pdf)$/;
 
@@ -25,6 +27,22 @@ export default async function plugin(bb: BbPluginApi) {
   const store = new PageStore(db);
   const bots = new BotDirectory(bb);
   const service = new PagesService(bb, store, bots);
+  const explore = registerExplore(bb, service);
+
+  const settings = bb.settings.define({
+    explore: {
+      type: "boolean",
+      label: "Explore: suggest things to explore",
+      description:
+        "Agents end answers that involved reading code with a few things they noticed along the way. Click one to get a page explaining it. Applies to agent sessions started after the change.",
+      default: true,
+    },
+  });
+  // `bb.agents.configure` is synchronous, so keep the latest value in memory.
+  let exploreEnabled = (await settings.get()).explore !== false;
+  settings.onChange((next) => {
+    exploreEnabled = next.explore !== false;
+  });
 
   // Live sync -----------------------------------------------------------------
 
@@ -193,6 +211,11 @@ export default async function plugin(bb: BbPluginApi) {
       requireMeta(id);
       return { markdown: readMarkdown(service.hub.open(id).doc) };
     },
+    replaceMarkdown: ({ id, markdown, snapshotName }) => {
+      requireMeta(id);
+      const actor = { key: PLUGIN_RPC_ACTOR, name: "Agent", color: actorColor(PLUGIN_RPC_ACTOR) };
+      return { page: toView(service.replaceMarkdown(id, markdown, snapshotName, actor)) };
+    },
     search: ({ query, projectId }) => ({ pages: store.search(query, projectId).map(toView) }),
     bots: async () => {
       const result = await bots.list();
@@ -284,6 +307,7 @@ export default async function plugin(bb: BbPluginApi) {
       return { snapshot: { id: row.id, label: row.label, actor: row.actor, createdAt: row.created_at } };
     },
     restore: ({ snapshotId }) => ({ ok: service.restore(snapshotId, HUMAN_USER_ID) }),
+    ...explore.rpc,
   });
 
   // Studio --------------------------------------------------------------------
@@ -291,11 +315,19 @@ export default async function plugin(bb: BbPluginApi) {
   registerStudio(bb, service, studio);
   // Typing saves a page every few seconds; Studio only needs to hear about it now and then.
   const studioNotifier = createStudioNotifier({ plugins: bb.sdk.plugins, pluginId: PLUGIN_ID, schemas: studio, delayMs: 1500 });
-  service.onPublish = () => studioNotifier.changed();
+  service.onPublish = (event) => {
+    if (event.type === "deleted") explore.pagesDeleted(event.pageIds);
+    // Explainer progress isn't a change to anything Studio lists.
+    if (event.type !== "explainer") studioNotifier.changed();
+  };
 
   // Agents --------------------------------------------------------------------
 
   registerTools(bb, service);
+  // Explore workers write a page as their reply: no findings line, no explore tool.
+  bb.agents.configure((context) =>
+    agentConfiguration(isExploreWorker(context.pluginMetadata) ? null : explore.configure(exploreEnabled)),
+  );
 
   bb.ui.registerMentionProvider({
     id: "page",
@@ -332,8 +364,9 @@ export default async function plugin(bb: BbPluginApi) {
       { name: "show", summary: "Print a page (id or title) as Markdown", usage: "bb pages show <page-id> [--ids]" },
       { name: "create", summary: "Create a page from a title and optional Markdown", usage: "bb pages create <title> [--global] [--markdown <text>]" },
       { name: "append", summary: "Append Markdown to a page", usage: "bb pages append <page-id> <markdown…>" },
+      { name: "explore", summary: "Explore explainers: list, open (link, state, follow-ups), regenerate in place", usage: EXPLORE_USAGE },
     ],
-    run(argv, ctx) {
+    async run(argv, ctx) {
       const [command, ...rest] = argv;
       const flag = (name: string) => {
         const index = rest.indexOf(name);
@@ -385,8 +418,10 @@ export default async function plugin(bb: BbPluginApi) {
             applyEdits(service.hub.open(meta.id).doc, [{ op: "append", markdown }], origin);
             return { exitCode: 0, stdout: `Appended to ${meta.id}.\n` };
           }
+          case "explore":
+            return await explore.cli(rest, ctx);
           default:
-            return { exitCode: 1, stderr: "usage: bb pages <list|show|create|append> …\n" };
+            return { exitCode: 1, stderr: "usage: bb pages <list|show|create|append|explore> …\n" };
         }
       } catch (error) {
         return { exitCode: 1, stderr: `${errorText(error)}\n` };

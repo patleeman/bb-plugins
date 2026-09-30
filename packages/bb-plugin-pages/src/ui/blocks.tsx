@@ -25,6 +25,7 @@ import { ThreadTitle } from "@get-bb/plugin-sdk/app";
 import { calloutConfig, chartConfig, embedConfig, isStudioEmbed, mentionConfig, statsConfig } from "../schema-config";
 import { codeBlockSpec } from "./code";
 import { usePagesUi } from "./context";
+import { HtmlBlock } from "./html";
 import { MermaidBlock } from "./mermaid";
 import { StudioEmbed, StudioPicker, useStudioItem } from "./studio-embeds";
 
@@ -523,6 +524,7 @@ export const pageSchema = BlockNoteSchema.create({
     ...defaultBlockSpecs,
     codeBlock: codeBlockSpec,
     mermaid: MermaidBlock(),
+    html: HtmlBlock(),
     callout: Callout(),
     chart: ChartBlock(),
     stats: StatsBlock(),

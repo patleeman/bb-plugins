@@ -36,6 +36,19 @@ export const mermaidConfig = {
   content: "plain",
 } as const;
 
+/**
+ * Raw HTML, shown in a sandboxed iframe (scripts, no same-origin access); its
+ * source is the block's plain-text content.
+ */
+export const htmlConfig = {
+  type: "html",
+  propSchema: {},
+  content: "plain",
+} as const;
+
+/** The longest HTML source an ```html fence may hold; longer ones stay code. */
+export const MAX_HTML_CHARS = 200_000;
+
 export const EMBED_KINDS = ["thread", "page", "bookmark", "drawing", "artifact", "recording", "task", "item"] as const;
 export type EmbedKind = (typeof EMBED_KINDS)[number];
 

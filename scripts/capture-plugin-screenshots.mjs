@@ -1344,17 +1344,6 @@ const captures = [
     },
   },
   {
-    id: "comprehension",
-    packageDir: "bb-plugin-comprehension",
-    setup: async (client) => {
-      await client.navigate(threadUrl);
-      await client.waitForAriaButton("Explain this");
-      await client.clickFirstButtonWithAria("Explain this");
-      await client.waitForText("What do you want to make?");
-      await client.waitForText("What should it cover?");
-    },
-  },
-  {
     id: "copy-session-id",
     packageDir: "bb-plugin-copy-session-id",
     setup: async (client) => {

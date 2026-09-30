@@ -205,6 +205,14 @@ export function PageEditor({
         onItemClick: () => insertOrUpdateBlockForSlashMenu(editor, { type: "mermaid" }),
       },
       {
+        title: "HTML",
+        subtext: "Custom HTML, CSS and scripts in a sandboxed frame",
+        aliases: ["html", "iframe", "widget", "custom"],
+        group: "Advanced",
+        icon: <Icon name="Code" className="size-4" />,
+        onItemClick: () => insertOrUpdateBlockForSlashMenu(editor, { type: "html" }),
+      },
+      {
         title: "Chart",
         subtext: "Bar, line, area or pie chart from data",
         aliases: ["graph", "plot", "bar", "line", "pie"],

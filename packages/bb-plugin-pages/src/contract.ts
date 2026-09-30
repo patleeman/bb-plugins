@@ -1,5 +1,6 @@
 import { defineRpcContract, type NewThreadRequest } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { exploreMethods } from "./explore/contract";
 
 export * from "./constants";
 
@@ -173,6 +174,14 @@ export const rpcContract = defineRpcContract({
     input: z.object({ id: pageId }),
     output: z.object({ markdown: z.string() }),
   },
+  /**
+   * Saves a version named `snapshotName`, then replaces the whole page with
+   * `markdown`. Open editors update live; the change is recorded as an agent's.
+   */
+  replaceMarkdown: {
+    input: z.object({ id: pageId, markdown: z.string().max(200_000), snapshotName: z.string().trim().min(1).max(120) }),
+    output: z.object({ page: pageMetaSchema }),
+  },
   search: {
     input: z.object({ query: z.string().max(200), projectId: projectId.optional() }),
     output: z.object({ pages: z.array(pageMetaSchema) }),
@@ -222,4 +231,6 @@ export const rpcContract = defineRpcContract({
     input: z.object({ snapshotId: z.string() }),
     output: z.object({ ok: z.boolean() }),
   },
+  // Explore: explainer pages for what agents noticed along the way.
+  ...exploreMethods,
 });

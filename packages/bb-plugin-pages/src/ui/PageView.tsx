@@ -23,7 +23,7 @@ import { pageFieldKey, toggleTalk, useTalk, type TalkView } from "./talk";
 const PAGE_ICONS = ["📄", "📝", "📋", "✅", "📊", "📈", "🗺️", "🧭", "💡", "🚀", "🧪", "🛠️", "📚", "🗓️", "🎯", "🔥", "⭐", "🧠", "🤖", "📣"];
 type Chat = { threadId: string; createdAt: number };
 
-function useConnection(pageId: string) {
+export function useConnection(pageId: string) {
   const [connection, setConnection] = useState<PageConnection | null>(null);
   useEffect(() => {
     const next = new PageConnection(pageId);

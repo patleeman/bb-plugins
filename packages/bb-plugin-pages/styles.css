@@ -220,6 +220,11 @@
   }
 }
 
+/* A thread's side panel is narrow: keep room for the side menu, no more. */
+.pages-panel-tab .pages-main > .bn-editor {
+  padding-inline: 40px 16px;
+}
+
 /* Touch screens can't hover, so controls revealed on hover stay visible. A
    chart or stats block's Edit button then sits above the data instead of
    over it. */

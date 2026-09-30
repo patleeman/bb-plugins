@@ -165,6 +165,10 @@ dependencies; React, Radix, sonner and the SDK are host shims.
 **Studio Pages**
 - Implements the provider contract; its collection becomes `CollectionPage`.
 - Item header moves into `ItemHeader` (same look it has today).
+- **Explore** is a Pages feature: agents end answers with findings they
+  noticed along the way (`::explore{items="…"}`), and a click writes an
+  explainer page under the project's "Explore" page, tagged `Explore` in
+  Studio.
 
 **Studio Talk**
 - Implements the provider contract; its table becomes `CollectionPage` with

@@ -1,7 +1,7 @@
 import { blocksToYDoc, yDocToBlocks } from "@blocknote/core/yjs";
 import { describe, expect, it } from "vitest";
 import { blocksToMarkdown, markdownToBlocks, type PageBlock } from "./markdown";
-import { DOCUMENT_FRAGMENT } from "./schema-config";
+import { DOCUMENT_FRAGMENT, MAX_HTML_CHARS } from "./schema-config";
 import { createServerEditor } from "./schema-server";
 
 const editor = createServerEditor();
@@ -137,5 +137,53 @@ See @[Roadmap](item:excalidraw:drw_1).
     expect(markdown).toContain("```mermaid\nflowchart LR\n  A --> B\n```");
     expect(markdown).toContain('{"kind":"drawing","target":"drw_1"}');
     expect(markdown).toContain("@[Roadmap](item:excalidraw:drw_1)");
+  });
+});
+
+describe("html blocks", () => {
+  const HTML = `<style>
+  body { font: 14px system-ui; }
+  @media (prefers-color-scheme: dark) { body { color: #eee; } }
+</style>
+<div id="app"></div>
+<script>
+  const tpl = \`\`\`;
+  document.getElementById("app").textContent = "Hi";
+</script>`;
+
+  it("round-trips an html fence losslessly through the Yjs document", () => {
+    const markdown = `# Widget\n\n\`\`\`\`html\n${HTML}\n\`\`\`\`\n\nAfter the widget.\n`;
+    const blocks = markdownToBlocks(markdown);
+    expect(blocks.map((block) => block.type)).toEqual(["heading", "html", "paragraph"]);
+    expect(blocks[1]).toMatchObject({ type: "html", content: HTML });
+    const back = throughYjs(blocks);
+    expect(back[1]).toMatchObject({ type: "html", content: [{ text: HTML }] });
+    const serialized = blocksToMarkdown(back);
+    // The fence is longer than the backtick run inside the script.
+    expect(serialized).toBe(markdown);
+    expect(blocksToMarkdown(throughYjs(markdownToBlocks(serialized)))).toBe(serialized);
+  });
+
+  it("finds html fences inside other content", () => {
+    const blocks = markdownToBlocks("- Item\n\n  ```html\n  <b>nested</b>\n  ```\n\n> quote\n\n```HTML\n<i>upper</i>\n```\n");
+    expect(blocks[0]).toMatchObject({ type: "bulletListItem", children: [{ type: "html", content: "<b>nested</b>" }] });
+    expect(blocks[2]).toMatchObject({ type: "html", content: "<i>upper</i>" });
+    expect(blocksToMarkdown(throughYjs(blocks))).toBe("- Item\n  ```html\n  <b>nested</b>\n  ```\n\n> quote\n\n```html\n<i>upper</i>\n```\n");
+  });
+
+  it("keeps an existing HTML code block as code through a read and write", () => {
+    const code: PageBlock[] = [{ type: "codeBlock", props: { language: "html" }, content: "<b>shown as source</b>" }];
+    const markdown = blocksToMarkdown(throughYjs(code));
+    expect(markdown).toBe("```html source\n<b>shown as source</b>\n```\n");
+    const [block] = markdownToBlocks(markdown);
+    expect(block).toMatchObject({ type: "codeBlock", props: { language: "html" }, content: "<b>shown as source</b>" });
+  });
+
+  it("keeps oversized HTML as an unrendered code block", () => {
+    const big = `<p>${"x".repeat(MAX_HTML_CHARS)}</p>`;
+    const [block] = markdownToBlocks(`\`\`\`html\n${big}\n\`\`\`\n`);
+    expect(block).toMatchObject({ type: "codeBlock", props: { language: "html" }, content: big });
+    const [atCap] = markdownToBlocks(`\`\`\`html\n${"y".repeat(MAX_HTML_CHARS)}\n\`\`\`\n`);
+    expect(atCap!.type).toBe("html");
   });
 });

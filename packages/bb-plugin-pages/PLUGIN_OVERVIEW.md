@@ -19,6 +19,9 @@ live.
   and it keeps the page up to date.
 - **Dictation.** With the Talk plugin installed, press **Dictate** or type
   `/dictate` and speak. The transcript goes in at your cursor.
+- **Explore.** Agents end answers that read code with a few things they
+  noticed along the way. Click one and a page explaining it is written in
+  the background, under an **Explore** page, and opens beside the thread.
 - **Projects and nesting.** Pages per project plus global pages, nested to
   any depth, with version history you can restore from.
 

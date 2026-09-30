@@ -22,8 +22,9 @@ export const TOOL_NAMES = [
 export const AGENT_INSTRUCTIONS = [
   "BB Pages are collaborative documents the user edits live. Read a page with pages_read before changing it; it returns Markdown with a `<!-- ^id -->` marker on the line before each block, naming the block below it.",
   "Edit with pages_edit using small, targeted operations that reference those block ids, so you don't overwrite the user's concurrent typing. Use replace_all only when asked to rewrite a whole page.",
-  "Pages Markdown supports GFM plus: ```chart / ```stats / ```embed fenced JSON blocks, ```mermaid diagrams, `> [!NOTE]` callouts (NOTE, TIP, WARNING, CAUTION, IMPORTANT), and mentions like @[Name](bot:bot_id), @[Title](page:pg_id), @[Title](item:plugin:id), @[2026-10-01](date:2026-10-01).",
+  "Pages Markdown supports GFM plus: ```chart / ```stats / ```embed fenced JSON blocks, ```mermaid diagrams, ```html blocks, `> [!NOTE]` callouts (NOTE, TIP, WARNING, CAUTION, IMPORTANT), and mentions like @[Name](bot:bot_id), @[Title](page:pg_id), @[Title](item:plugin:id), @[2026-10-01](date:2026-10-01).",
   'Chart JSON: {"type":"bar|line|area|pie","title":"…","x":"label","series":["Revenue"],"unit":"$","data":[{"label":"Q1","Revenue":10}]}. Stats JSON: [{"label":"ARR","value":"$1.2M","delta":"+8%","trend":"up"}] (1–6 items). Embed JSON: {"kind":"bookmark|thread|page|drawing|artifact|recording|task|item","target":"https://… or an id","title":"…"}; item targets are plugin:id from studio_list_items.',
+  "An ```html block renders its HTML in a sandboxed iframe: scripts run, but with no same-origin access (no cookies, storage or BB APIs), and don't assume network access. Keep it self-contained with inline <style> and <script>, follow light and dark with prefers-color-scheme, and keep it under 200,000 characters (longer ones show as code). Use ```html only for something to render; show HTML source as code with ```html source (or another language such as ```xml).",
   "Answer comments with pages_comment_reply in the same thread; start new threads with pages_comment on the text you are discussing.",
 ].join("\n");
 
@@ -106,7 +107,8 @@ export function registerTools(bb: BbPluginApi, service: PagesService): void {
 
   bb.agents.registerTool({
     name: "pages_create",
-    description: "Create a BB Page from Markdown. Pages belong to the current project unless global is true; set parent to nest it.",
+    description:
+      "Create a BB Page from Markdown (GFM plus chart/stats/embed JSON fences, mermaid, sandboxed ```html blocks, callouts and mentions). Pages belong to the current project unless global is true; set parent to nest it.",
     parameters: z.object({
       title: z.string().min(1).max(200),
       markdown: z.string().max(200_000).optional(),
@@ -132,7 +134,7 @@ export function registerTools(bb: BbPluginApi, service: PagesService): void {
   bb.agents.registerTool({
     name: "pages_edit",
     description:
-      "Edit a BB Page live with targeted operations: insert_after/insert_before/replace/delete/set_checked by block id, append/prepend, replace_text (keeps formatting), or replace_all. Optionally set the title or icon. Ops apply in order as one change.",
+      "Edit a BB Page live with targeted operations: insert_after/insert_before/replace/delete/set_checked by block id, append/prepend, replace_text (keeps formatting), or replace_all. Markdown may use the Pages extensions, including sandboxed ```html blocks. Optionally set the title or icon. Ops apply in order as one change.",
     parameters: z.object({
       page: ref,
       ops: z.array(opSchema).max(100).default([]),
@@ -230,8 +232,19 @@ export function registerTools(bb: BbPluginApi, service: PagesService): void {
       }
     },
   });
+}
 
-  bb.agents.configure(() => ({ tools: [...TOOL_NAMES], skills: [], instructions: AGENT_INSTRUCTIONS }));
+/**
+ * What `bb.agents.configure` gives a thread: Pages' tools and instructions,
+ * plus Explore's part (null for an Explore worker, which gets none of it).
+ * Instructions past 4,096 characters are cut, so both have to fit.
+ */
+export function agentConfiguration(explore: { tools: string[]; instructions: string | null } | null) {
+  return {
+    tools: [...TOOL_NAMES, ...(explore?.tools ?? [])],
+    skills: [],
+    instructions: explore?.instructions ? `${AGENT_INSTRUCTIONS}\n\n${explore.instructions}` : AGENT_INSTRUCTIONS,
+  };
 }
 
 function threadSummary(thread: ThreadView): string {

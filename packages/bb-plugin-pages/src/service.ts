@@ -5,7 +5,7 @@ import { actorColor, type BotDirectory, type BotInfo } from "./bots";
 import { listThreads, threadAuthors } from "./comments";
 import { HUMAN_USER_ID, PLUGIN_ID, REALTIME_CHANNEL, type RealtimeEvent } from "./constants";
 import type { PageMetaView, RequestView } from "./contract";
-import { applyEdits, mentionsIn, readMarkdown, restoreFromState, seedMarkdown, type EditOp, type EditResult } from "./doc";
+import { applyEdits, mentionsIn, readMarkdown, replaceContent, restoreFromState, seedMarkdown, type EditOp, type EditResult } from "./doc";
 import { PageHub, type Actor, type LivePage } from "./hub";
 import { shortId } from "./markdown";
 import { PageStore, type PageMeta, type RequestRow } from "./store";
@@ -215,6 +215,20 @@ export class PagesService {
       this.markWorking(pageId, actor);
     }
     return result;
+  }
+
+  /** Saves a named version, then replaces the whole page with `markdown`, live. */
+  replaceMarkdown(pageId: string, markdown: string, snapshotName: string, actor: Actor): PageMeta {
+    if (!this.store.meta(pageId)) throw new Error("Page not found.");
+    const page = this.hub.open(pageId);
+    this.store.addSnapshot(page.id, Y.encodeStateAsUpdate(page.doc), snapshotName, actor.key);
+    const result = replaceContent(page.doc, markdown, actor.key);
+    if (result.changed) {
+      this.hub.showPresence(page, actor, result.touched[0] ?? null);
+      // Saves now, so the returned meta carries this edit.
+      this.hub.flush(page);
+    }
+    return this.store.meta(pageId)!;
   }
 
   restore(snapshotId: string, actor: string): boolean {

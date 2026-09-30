@@ -9,7 +9,7 @@ import {
 import { CommentsExtension, DefaultThreadStoreAuth } from "@blocknote/core/comments";
 import { YjsThreadStore } from "@blocknote/core/yjs";
 import * as Y from "yjs";
-import { calloutConfig, chartConfig, embedConfig, mentionConfig, mermaidConfig, statsConfig } from "./schema-config";
+import { calloutConfig, chartConfig, embedConfig, htmlConfig, mentionConfig, mermaidConfig, statsConfig } from "./schema-config";
 
 // The server never renders blocks; these specs only contribute their configs
 // to the ProseMirror schema so server-side edits produce the same nodes the
@@ -24,6 +24,7 @@ export const serverSchema = BlockNoteSchema.create({
     stats: createBlockSpec(statsConfig, { render: noRender })(),
     embed: createBlockSpec(embedConfig, { render: noRender })(),
     mermaid: createBlockSpec(mermaidConfig, { render: noRender })(),
+    html: createBlockSpec(htmlConfig, { render: noRender })(),
   },
   inlineContentSpecs: {
     ...defaultInlineContentSpecs,

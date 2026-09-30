@@ -139,27 +139,6 @@
       }
     },
     {
-      "id": "comprehension",
-      "displayName": "Comprehension",
-      "description": "Turns messages and threads into clear, skimmable explainers.",
-      "icon": "Zap",
-      "tags": [
-        "explainers",
-        "audio"
-      ],
-      "author": {
-        "name": "Patrick Lee",
-        "github": "patleeman"
-      },
-      "source": {
-        "git": {
-          "url": "https://github.com/patleeman/bb-plugins.git",
-          "subdir": "packages/bb-plugin-comprehension",
-          "ref": "main"
-        }
-      }
-    },
-    {
       "id": "copy-session-id",
       "displayName": "Copy Session ID",
       "description": "Add Copy session ID to thread context menus in the left sidebar.",
@@ -298,7 +277,7 @@
     {
       "id": "pages",
       "displayName": "Studio Pages",
-      "description": "Part of BB Studio. Collaborative pages you write with your agents. Mention a Studio Teams bot to hand it work, or let one keep a page up to date.",
+      "description": "Part of BB Studio. Collaborative pages you write with your agents. Mention a Studio Teams bot to hand it work, let one keep a page up to date, or explore what an agent noticed along the way.",
       "icon": {
         "url": "./packages/bb-plugin-pages/icons/pages.svg"
       },
@@ -307,6 +286,7 @@
         "documents",
         "collaboration",
         "bots",
+        "agents",
         "bb-studio"
       ],
       "author": {

@@ -258,6 +258,17 @@ export function applyEdits(doc: Y.Doc, ops: EditOp[], origin: unknown): EditResu
   return { touched: [...new Set(touched)], changed };
 }
 
+/** Replaces the whole page with Markdown; Markdown with no blocks leaves one empty paragraph. */
+export function replaceContent(doc: Y.Doc, markdown: string, origin: unknown): EditResult {
+  if (markdownToBlocks(markdown).length) return applyEdits(doc, [{ op: "replace_all", markdown }], origin);
+  const changed = transformDoc(doc, origin, (tr) => {
+    ensureNonEmpty(tr);
+    const { start, end } = topGroup(tr.doc);
+    tr.replaceWith(start, end, emptyContainers());
+  });
+  return { touched: [], changed };
+}
+
 function ensureNonEmpty(tr: Transform): void {
   // A doc that was never opened in an editor has no blockGroup yet.
   if (tr.doc.childCount === 0 || tr.doc.firstChild!.childCount === 0) {

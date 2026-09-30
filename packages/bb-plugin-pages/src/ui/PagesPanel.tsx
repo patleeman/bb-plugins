@@ -9,7 +9,7 @@ import { PagesUiContext, type PagesUi } from "./context";
 import { PageView } from "./PageView";
 import { useProjects, type BotsState, type Rpc } from "./shared";
 
-function usePagesData(rpc: Rpc) {
+export function usePagesData(rpc: Rpc) {
   const [pages, setPages] = useState<PageMetaView[] | null>(null);
   const [bots, setBots] = useState<BotsState>({ available: false, reason: null, bots: [] });
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +43,37 @@ function usePagesData(rpc: Rpc) {
     };
   }, [refetchBots]);
   return { pages, bots, error, refetch };
+}
+
+/** What the page's blocks and mentions need to open things, shared by every view of a page. */
+export function usePagesUiValue(rpc: Rpc, pages: PageMetaView[] | null, bots: BotsState): PagesUi {
+  const navigate = useBbNavigate();
+  const openPage = useCallback((id: string) => navigate.toPluginPanel("pages", { subPath: id }), [navigate]);
+  const studioItems = useRef<{ at: number; items: Promise<StudioEmbedItem[]> } | null>(null);
+  return useMemo<PagesUi>(
+    () => ({
+      pages: pages ?? [],
+      bots: bots.bots,
+      openPage,
+      openThread: (threadId) => navigate.toThread(threadId),
+      openUrl: (url) => {
+        if (!navigate.openUrl(url)) window.open(url, "_blank", "noopener");
+      },
+      openPath: openAppPath,
+      linkPreview: (url) => rpc.call("linkPreview", { url }),
+      studioItems: () => {
+        // Every embed on a page asks; one request serves them all for a few seconds.
+        if (!studioItems.current || Date.now() - studioItems.current.at > 5_000) {
+          const items = rpc.call("studioItems", null).then((result) => result.items);
+          studioItems.current = { at: Date.now(), items };
+          items.catch(() => (studioItems.current = null));
+        }
+        return studioItems.current.items;
+      },
+      artifactView: (id) => rpc.call("artifactView", { id }).then((result) => result.view),
+    }),
+    [pages, bots.bots, openPage, navigate, rpc],
+  );
 }
 
 /** The Pages collection at the panel root, and one page at `<page id>`. */
@@ -86,32 +117,8 @@ export function PagesPanel({ subPath }: { subPath: string }) {
     if (event.type === "requests" && event.pageId === pageId) setRequestsVersion((version) => version + 1);
   });
 
-  const openPage = useCallback((id: string) => navigate.toPluginPanel("pages", { subPath: id }), [navigate]);
-  const studioItems = useRef<{ at: number; items: Promise<StudioEmbedItem[]> } | null>(null);
-  const ui = useMemo<PagesUi>(
-    () => ({
-      pages: pages ?? [],
-      bots: bots.bots,
-      openPage,
-      openThread: (threadId) => navigate.toThread(threadId),
-      openUrl: (url) => {
-        if (!navigate.openUrl(url)) window.open(url, "_blank", "noopener");
-      },
-      openPath: openAppPath,
-      linkPreview: (url) => rpc.call("linkPreview", { url }),
-      studioItems: () => {
-        // Every embed on a page asks; one request serves them all for a few seconds.
-        if (!studioItems.current || Date.now() - studioItems.current.at > 5_000) {
-          const items = rpc.call("studioItems", null).then((result) => result.items);
-          studioItems.current = { at: Date.now(), items };
-          items.catch(() => (studioItems.current = null));
-        }
-        return studioItems.current.items;
-      },
-      artifactView: (id) => rpc.call("artifactView", { id }).then((result) => result.view),
-    }),
-    [pages, bots.bots, openPage, navigate, rpc],
-  );
+  const ui = usePagesUiValue(rpc, pages, bots);
+  const openPage = ui.openPage;
 
   const createPage = async (projectId: string | null, parentId: string | null = null) => {
     const result = await rpc.call("create", { projectId, parentId, title: "" });
