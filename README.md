@@ -2,6 +2,15 @@
 
 Plugins for [bb](https://github.com/patleeman/bb).
 
+## BB Studio has moved
+
+The Studio plugins (Studio, Studio Chat, Pages, Talk, Draw, Artifacts, Tasks,
+Teams and Sidebar) and `studio-kit` now live in
+[patleeman/bb-studio](https://github.com/patleeman/bb-studio), which is their
+source of truth. The copies in this repository are frozen and will be removed.
+Install them from bb-studio instead; its README explains how to switch an
+existing install.
+
 ## Marketplace
 
 In BB's **Plugin marketplaces** settings, paste this into **Marketplace source**:
