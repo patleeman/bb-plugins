@@ -1,5 +1,5 @@
 // The small pieces every Studio surface shares: button styles, tiles,
-// badges, the checkbox, and the project list.
+// badges, the checkbox, the project list, and search highlighting.
 import { useSdk } from "@get-bb/plugin-sdk/app";
 import { useEffect, useState, type ReactNode } from "react";
 import type { StudioTone } from "../contract";
@@ -154,4 +154,19 @@ export function EmptyState({ icon, title, children, actions }: { icon: string; t
       {actions ? <div className="mt-1 flex flex-wrap justify-center gap-2">{actions}</div> : null}
     </div>
   );
+}
+
+/** `text` with each match of `query` in bold. */
+export function Highlight({ text, query }: { text: string; query: string }): ReactNode {
+  if (!query) return text;
+  const needle = query.toLowerCase();
+  const lower = text.toLowerCase();
+  const parts: ReactNode[] = [];
+  let from = 0;
+  for (let at = lower.indexOf(needle); at >= 0; at = lower.indexOf(needle, from)) {
+    parts.push(text.slice(from, at), <mark key={at} className="bg-transparent font-semibold text-foreground">{text.slice(at, at + needle.length)}</mark>);
+    from = at + needle.length;
+  }
+  parts.push(text.slice(from));
+  return parts;
 }

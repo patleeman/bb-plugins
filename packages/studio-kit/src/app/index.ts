@@ -22,6 +22,7 @@ export {
   FLOATING,
   FLOATING_BUTTON,
   GHOST_BUTTON,
+  Highlight,
   ICON_BUTTON,
   ItemTile,
   OUTLINE_BUTTON,

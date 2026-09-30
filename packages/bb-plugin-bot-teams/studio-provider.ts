@@ -73,7 +73,9 @@ export function registerStudio(
     studio_list: () => ({ items: items() }),
     // Studio matches names itself; this finds descriptions and handles.
     studio_search: ({ query }) => {
-      const needle = query.toLowerCase().replace(/^@/, "");
+      const needle = query.trim().toLowerCase().replace(/^@/, "");
+      // A bare "@" would match every bot.
+      if (!needle) return { ids: [], snippets: {} };
       const found = deps
         .bots()
         .filter((bot) => bot.description.toLowerCase().includes(needle) || bot.handle.toLowerCase().includes(needle));

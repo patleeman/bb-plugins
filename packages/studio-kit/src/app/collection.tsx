@@ -24,6 +24,7 @@ import {
   DANGER_BUTTON,
   EmptyState,
   GHOST_BUTTON,
+  Highlight,
   ItemTile,
   OUTLINE_BUTTON,
   PageColumn,
@@ -58,8 +59,8 @@ export interface CollectionHandlers {
   onArchive(items: CollectionItem[], archived: boolean): Promise<ActionResults>;
   onDelete(items: CollectionItem[]): Promise<ActionResults>;
   onAction(kind: CollectionKind, action: StudioAction, items: CollectionItem[]): Promise<{ message: string | null; text: string | null }>;
-  /** Item keys whose content matches, beyond title matches. */
-  onSearch?(query: string): Promise<ReadonlySet<string>>;
+  /** Item keys whose content matches, beyond title matches, each with the text that matched if known. */
+  onSearch?(query: string): Promise<ReadonlyMap<string, string | null>>;
   /** Tagging, when the collection has `tags`. */
   onTag?(items: CollectionItem[], add: string[], remove: string[]): Promise<void>;
   /** Makes a tag, or returns the one with this name. */
@@ -156,7 +157,7 @@ export function CollectionPage({
   const [renaming, setRenaming] = useState(false);
   const [archived, setArchived] = useState(false);
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
-  const [contentMatches, setContentMatches] = useState<ReadonlySet<string>>(() => new Set());
+  const [contentMatches, setContentMatches] = useState<ReadonlyMap<string, string | null>>(() => new Map());
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [working, setWorking] = useState(false);
@@ -191,7 +192,7 @@ export function CollectionPage({
   useEffect(() => {
     const text = query.trim();
     if (!text || !onSearch) {
-      setContentMatches(new Set());
+      setContentMatches(new Map());
       return;
     }
     let live = true;
@@ -456,6 +457,17 @@ export function CollectionPage({
   const noItemsAtAll = items !== null && !(items ?? []).some((item) => !item.archived);
   const subtitle = (item: CollectionItem) =>
     [showKind ? kindLabel(item) : null, projectLabel(item), relativeTime(item.updatedAt)].filter(Boolean).join(" · ");
+  // While searching, an item that matched on content shows the text that matched.
+  const preview = (item: CollectionItem, className: string) => {
+    const text = query.trim();
+    const snippet = text ? contentMatches.get(itemKey(item)) : null;
+    if (!snippet && !item.preview) return null;
+    return (
+      <div className={cn("text-xs text-muted-foreground", className)} data-snippet={snippet ? "" : undefined}>
+        {snippet ? <Highlight text={snippet} query={text} /> : item.preview}
+      </div>
+    );
+  };
 
   return (
     <PageColumn>
@@ -740,7 +752,7 @@ export function CollectionPage({
                   <div className="flex flex-1 flex-col p-4">
                     <div className="min-w-0">
                       <div className={cn("truncate font-medium", !item.title && "text-muted-foreground")}>{untitled(item.title)}</div>
-                      {item.preview ? <div className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{item.preview}</div> : null}
+                      {preview(item, "mt-0.5 line-clamp-2")}
                       <div className="mt-1 truncate text-xs text-muted-foreground">{subtitle(item)}</div>
                       {tagging && item.tags?.length ? (
                         <div className="mt-2 flex min-w-0 items-center gap-1 overflow-hidden">
@@ -833,7 +845,7 @@ export function CollectionPage({
                         {tagging ? <TagChips ids={item.tags} tags={tagById} onPick={pickTag} /> : null}
                       </div>
                       {parent ? <div className="truncate text-xs text-muted-foreground">{parent}</div> : null}
-                      {item.preview && !parent ? <div className="truncate text-xs text-muted-foreground">{item.preview}</div> : null}
+                      {!parent ? preview(item, "truncate") : null}
                       <div className="truncate text-xs text-muted-foreground md:hidden">{subtitle(item)}</div>
                     </div>
                   </div>

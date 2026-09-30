@@ -168,29 +168,38 @@ export default async function plugin(bb: BbPluginApi) {
 
   // Agents --------------------------------------------------------------------
 
-  type TaggedItem = HubItem & { tags: string[] };
-  const itemLine = (item: TaggedItem, kindLabel: string, tagNames: Map<string, string>) =>
+  /** `snippet` is the content that matched a query, when the add-on gave it. */
+  type ListedItem = HubItem & { tags: string[]; snippet?: string };
+  const itemLine = (item: ListedItem, kindLabel: string, tagNames: Map<string, string>) =>
     `- ${item.icon ? `${item.icon} ` : ""}${untitled(item.title)} — ${kindLabel}${item.archived ? ", archived" : ""}, ${
       item.projectId ? "project" : "global"
-    }, updated ${relativeTime(item.updatedAt)}${item.tags.map((id) => ` #${tagNames.get(id) ?? id}`).join("")} (${item.href})`;
+    }, updated ${relativeTime(item.updatedAt)}${item.tags.map((id) => ` #${tagNames.get(id) ?? id}`).join("")} (${item.href})${
+      item.snippet ? `\n  > ${item.snippet}` : ""
+    }`;
 
   const listItems = async (options: { projectId: string | null; all: boolean; kind?: string; query?: string; tag?: string }) => {
     const { providers, items, tags: allTags } = await overview();
     const tag = options.tag ? tags.byName(options.tag) : null;
     if (options.tag && !tag) throw new Error(`No tag called "${options.tag}". Tags: ${allTags.map((each) => each.name).join(", ") || "none yet"}.`);
     const labels = new Map(providers.flatMap((provider) => provider.kinds.map((kind) => [`${provider.pluginId}:${kind.id}`, kind.label])));
-    const query = options.query?.trim().toLowerCase();
-    const contentKeys = query ? new Set((await hub.search(query)).keys) : null;
-    const picked = items
+    const raw = options.query?.trim();
+    const query = raw?.toLowerCase();
+    const content = raw ? await hub.search(raw) : null;
+    const contentKeys = new Set(content?.keys);
+    const picked: ListedItem[] = items
       .filter(
         (item) =>
           !item.archived &&
           (options.all || item.projectId === null || item.projectId === options.projectId) &&
           (!options.kind || item.kind === options.kind) &&
           (!tag || item.tags.includes(tag.id)) &&
-          (!query || untitled(item.title).toLowerCase().includes(query) || contentKeys!.has(`${item.pluginId}:${item.id}`)),
+          (!query || untitled(item.title).toLowerCase().includes(query) || contentKeys.has(`${item.pluginId}:${item.id}`)),
       )
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map((item) => {
+        const snippet = content?.snippets[`${item.pluginId}:${item.id}`];
+        return snippet ? { ...item, snippet } : item;
+      });
     const problems = providers.filter((provider) => provider.state !== "ready").map((provider) => `${provider.name}: ${provider.detail}`);
     const tagNames = new Map(allTags.map((each) => [each.id, each.name]));
     return { picked, labels, problems, tagNames, kinds: providers.flatMap((provider) => provider.kinds.map((kind) => kind.id)) };
@@ -207,7 +216,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "studio_list_items",
     description:
-      "List the user's BB Studio items — pages, Talk recordings, drawings and anything else a Studio add-on provides — in this project and global ones, newest first. Each line has a link and the item's #tags; open or mention it to work with the item.",
+      "List the user's BB Studio items — pages, Talk recordings, drawings and anything else a Studio add-on provides — in this project and global ones, newest first. Each line has a link and the item's #tags, and a content match shows the text that matched; open or mention it to work with the item.",
     parameters: z.object({
       query: z.string().max(200).optional().describe("Match titles and content"),
       kind: z.string().max(100).optional().describe("Only this kind, e.g. page, recording, drawing"),

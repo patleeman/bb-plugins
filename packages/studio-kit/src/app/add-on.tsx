@@ -111,7 +111,10 @@ export function AddOnCollection({
       onArchive: (items, archived) => after(call("studio_archive", { ids: ids(items), archived })),
       onDelete: (items) => after(call("studio_delete", { ids: ids(items) })),
       onAction: (_kind, action, items) => after(call("studio_action", { action: action.id, ids: ids(items) })),
-      onSearch: async (query) => new Set((await call("studio_search", { query })).ids.map((id) => `${pluginId}:${id}`)),
+      onSearch: async (query) => {
+        const { ids, snippets = {} } = await call("studio_search", { query });
+        return new Map(ids.map((id) => [`${pluginId}:${id}`, snippets[id] ?? null]));
+      },
     };
   }, [call, navigate, pluginId, refetch, title]);
 

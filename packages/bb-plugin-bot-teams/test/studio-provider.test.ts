@@ -69,6 +69,7 @@ test("archives by retiring, and refuses move and delete", async () => {
   assert.match((await call("studio_delete", { ids: [scout.id] })).failed[0].error, /Archive them/);
   assert.match((await call("studio_move", { ids: [scout.id], projectId: "proj_a" })).failed[0].error, /own project/);
   assert.deepEqual((await call("studio_search", { query: "@scout" })).ids, [scout.id]);
+  assert.deepEqual((await call("studio_search", { query: "@" })).ids, []);
 });
 
 test("the change signature ignores activity Studio doesn't show", () => {

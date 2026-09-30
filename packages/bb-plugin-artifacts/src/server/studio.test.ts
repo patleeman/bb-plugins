@@ -2,7 +2,7 @@ import { studioSchemas } from "@bb-studio/kit/contract";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { bytes, memoryStore } from "../test/db";
-import { registerStudio } from "./studio";
+import { htmlText, registerStudio } from "./studio";
 
 function setup() {
   const { store } = memoryStore();
@@ -96,5 +96,12 @@ describe("the Artifacts Studio provider", () => {
       text: "## A\n\nAlpha\n\n## B\n\nBeta",
     });
     expect(await call("studio_action", { action: "copy-text", ids: [image.id] })).toMatchObject({ text: null });
+  });
+});
+
+describe("htmlText", () => {
+  it("keeps the words and drops markup, scripts and styles", () => {
+    const html = '<style>ul { color: red }</style><ul><li>Offline sync &amp; plans</li></ul><script>track("ul")</script>';
+    expect(htmlText(html).replace(/\s+/g, " ").trim()).toBe("Offline sync & plans");
   });
 });

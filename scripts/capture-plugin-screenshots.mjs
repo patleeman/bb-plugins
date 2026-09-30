@@ -66,10 +66,19 @@ class CdpClient {
     });
   }
 
-  command(method, params = {}) {
+  command(method, params = {}, timeoutMs = 60000) {
     const id = ++this.nextId;
     return new Promise((resolvePromise, reject) => {
-      this.pending.set(id, { resolve: resolvePromise, reject });
+      // A wedged page never answers; fail the capture instead of hanging it.
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP ${method} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      const settle = (fn) => (value) => {
+        clearTimeout(timer);
+        fn(value);
+      };
+      this.pending.set(id, { resolve: settle(resolvePromise), reject: settle(reject) });
       this.socket.send(JSON.stringify({ id, method, params }));
     });
   }
@@ -1935,6 +1944,63 @@ const captures = [
         const loaded = await client.evaluate(`(async () => { const img = document.querySelector('img[src*="/plugins/excalidraw/http/thumbnail"]'); await img.decode(); return img.naturalWidth > 0; })()`, true);
         if (!loaded) throw new Error("The drawing thumbnail didn't load");
         await sleep(1000);
+      } catch (error) {
+        await cleanup();
+        throw error;
+      }
+      return cleanup;
+    },
+  },
+  {
+    id: "studio-search",
+    packageDir: "bb-plugin-studio",
+    fileName: "search.png",
+    privateSidebar: true,
+    setup: async (client) => {
+      const pages = await seedPages();
+      const artifact = await seedArtifact().catch(async (error) => {
+        await pages.cleanup();
+        throw error;
+      });
+      const taskIds = [];
+      const cleanup = async () => {
+        await pages.cleanup();
+        await artifact.cleanup();
+        for (const id of taskIds) await pluginRpc("studio-tasks", "delete", { id }).catch(() => {});
+      };
+      try {
+        for (const task of [
+          { title: "Write the launch post", status: "todo", assignee: "me", description: "Announce offline sync and the new team plans." },
+          { title: "Add offline sync to settings", status: "review", assignee: "agent" },
+        ]) {
+          const { task: created } = await pluginRpc("studio-tasks", "create", { ...task, projectId });
+          taskIds.push(created.id);
+        }
+        // Artifacts search their saved text; check it through Studio's hub.
+        const found = await pluginRpc("studio", "search", { query: "weekly active teams" });
+        const key = `artifacts:${artifact.artifactId}`;
+        if (!found.keys.includes(key) || !/weekly active teams/i.test(found.snippets[key] ?? "")) {
+          throw new Error(`Studio search didn't find the artifact with a snippet: ${JSON.stringify(found)}`);
+        }
+        await client.navigate("/plugins/studio/studio");
+        await client.waitForSelector('input[aria-label="Search studio"]');
+        // Open Studio search with its real shortcut, Mod+Shift+K.
+        const modifiers = (process.platform === "darwin" ? 4 : 2) | 8;
+        // rawKeyDown: a shortcut with no text, as a real keyboard sends it.
+        for (const type of ["rawKeyDown", "keyUp"]) {
+          await client.command("Input.dispatchKeyEvent", { type, modifiers, key: "K", code: "KeyK", windowsVirtualKeyCode: 75 });
+        }
+        await client.waitForSelector('.studio-quick-open [role="dialog"][aria-label="Search Studio"]');
+        await client.waitForText("Recently changed");
+        await client.command("Input.insertText", { text: "offline sync" });
+        // The task's title matches; the page and the other task match on content.
+        await client.waitForText("Add offline sync to settings");
+        await client.waitForText("Announce offline sync and the new team plans.");
+        await client.waitForText("Offline sync for every team");
+        await client.waitForText("Ship offline sync to beta teams");
+        const snippets = await client.evaluate(`document.querySelectorAll(".studio-quick-open-snippet mark").length`);
+        if (snippets < 3) throw new Error(`Expected highlighted snippets, found ${snippets}`);
+        await sleep(600);
       } catch (error) {
         await cleanup();
         throw error;

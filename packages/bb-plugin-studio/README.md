@@ -14,6 +14,13 @@ Captured from the running BB application: the Studio collection in a staged
 project, listing a page, a Talk recording and a drawing side by side, with
 the kind filters and New menu in the header.
 
+![Live BB screenshot of Studio search](assets/search.png)
+
+Studio search (Cmd/Ctrl+Shift+K) over the same staged project, searching
+"offline sync": a task matches on its title, and another task, an HTML
+artifact and two pages match on their content, each showing the matching
+text with the match in bold.
+
 ## What you get
 
 - **One collection** (sidebar → Studio): every add-on's items in one list or

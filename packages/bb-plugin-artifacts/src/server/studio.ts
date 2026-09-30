@@ -29,18 +29,50 @@ const PREVIEW_CHARS = 140;
 /** Text past this isn't searched or previewed. */
 const TEXT_SCAN_BYTES = 1024 * 1024;
 
+/** How much text the cache keeps, in characters; the least recently read goes first. */
+const TEXT_CACHE_CHARS = 32 * 1024 * 1024;
+
 const texts = new Map<string, string | null>();
+let cachedChars = 0;
 
 /** A version's text, for text types under the scan limit. Cached by version. */
 export function artifactText(store: ArtifactStore, artifact: ArtifactWithVersion): string | null {
   const { version } = artifact;
-  if (texts.has(version.id)) return texts.get(version.id)!;
+  if (texts.has(version.id)) {
+    const text = texts.get(version.id)!;
+    texts.delete(version.id);
+    texts.set(version.id, text);
+    return text;
+  }
   let text: string | null = null;
   if (isTextType(versionType(version)) && version.size <= TEXT_SCAN_BYTES) {
     text = store.bytes(version.sha256)?.toString("utf8") ?? null;
   }
   texts.set(version.id, text);
+  cachedChars += text?.length ?? 0;
+  for (const [id, old] of texts) {
+    if (cachedChars <= TEXT_CACHE_CHARS || id === version.id) break;
+    texts.delete(id);
+    cachedChars -= old?.length ?? 0;
+  }
   return text;
+}
+
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", nbsp: " " };
+
+/** The words of an HTML document: no scripts, styles or tags. */
+export function htmlText(html: string): string {
+  return html
+    .replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&(amp|lt|gt|quot|#39|nbsp);/g, (_, name: string) => ENTITIES[name]!);
+}
+
+/** What search matches and excerpts: the text, with HTML reduced to its words. */
+function searchText(store: ArtifactStore, artifact: ArtifactWithVersion): string | null {
+  const text = artifactText(store, artifact);
+  return text && versionType(artifact.version) === "html" ? htmlText(text) : text;
 }
 
 function preview(store: ArtifactStore, artifact: ArtifactWithVersion): string | null {
@@ -111,12 +143,12 @@ export function registerStudio(
           (artifact) =>
             artifact.description.toLowerCase().includes(needle) ||
             artifact.version.name.toLowerCase().includes(needle) ||
-            (artifactText(store, artifact)?.toLowerCase().includes(needle) ?? false),
+            (searchText(store, artifact)?.toLowerCase().includes(needle) ?? false),
         )
         .slice(0, 200);
       return {
         ids: found.map((artifact) => artifact.id),
-        snippets: snippets(found, query, (artifact) => [artifact.description, artifactText(store, artifact)].filter(Boolean).join("\n")),
+        snippets: snippets(found, query, (artifact) => [artifact.description, searchText(store, artifact)].filter(Boolean).join("\n")),
       };
     },
     studio_create: () => {

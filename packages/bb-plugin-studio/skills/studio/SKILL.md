@@ -26,7 +26,9 @@ Items belong to a BB project or are global. Every item has a link
   first, each with its kind and link. Pass `query` to match titles and
   content, `kind` (`page`, `recording`, `dictation`, `drawing`, `artifact`, `task`) to narrow, and
   `allProjects: true` to look everywhere, and `tag` to list one tag's items.
-  Archived items are left out. Each line shows the item's `#tags`.
+  Archived items are left out. Each line shows the item's `#tags`; an item
+  that matched `query` on its content has the matching text on a `>` line
+  below it (`snippet` in `--json`).
 - CLI: `bb studio list [--all] [--kind <kind>] [--query <text>] [--tag <tag>] [--json]`;
   `bb studio tags` lists the tags and how many items each has.
 - `bb studio providers` shows which add-ons are installed and whether each is
