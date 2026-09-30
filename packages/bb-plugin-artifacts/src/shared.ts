@@ -133,3 +133,15 @@ export function titleFromName(name: string): string {
   const title = stem.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim() || base;
   return title.charAt(0).toUpperCase() + title.slice(1);
 }
+
+type PickerFile = { path: string; artifactId: string | null };
+
+/**
+ * "Save to Studio"'s selection after its file list reloads: only paths still
+ * offered stay ticked. The first load ticks the reply's unsaved files.
+ */
+export function prunePicked(current: ReadonlySet<string> | null, files: { reply: readonly PickerFile[]; storage: readonly PickerFile[] }): Set<string> {
+  if (!current) return new Set(files.reply.filter((file) => !file.artifactId).map((file) => file.path));
+  const offered = new Set([...files.reply, ...files.storage].map((file) => file.path));
+  return new Set([...current].filter((path) => offered.has(path)));
+}

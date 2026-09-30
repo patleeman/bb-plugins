@@ -12,12 +12,17 @@
 // Remote scenes are reconciled with the live local scene using Excalidraw's
 // own `reconcileElements`, so in-progress local edits (and any local element
 // with a newer `version`) win over the remote copy — exactly like Excalidraw
-// multiplayer. The reconciled scene is applied with updateScene; the editor
-// does NOT autosave it (the server already has it) which avoids save
-// ping-pong between writers.
+// multiplayer. Every signal fetches and reconciles; nothing is dropped by
+// revision, because the editor's own save can land a newer revision that
+// already contains an agent's elements the editor hasn't shown yet. Remote
+// elements go through `restoreElements` (fills defaults missing from partial
+// agent elements) and new image files are loaded with `addFiles`. The
+// reconciled scene is applied with updateScene; the editor does NOT autosave
+// it (the server already has it) which avoids save ping-pong between writers.
 import { useCallback, useEffect, useRef } from "react";
-import { reconcileElements } from "@excalidraw/excalidraw";
+import { reconcileElements, restoreElements } from "@excalidraw/excalidraw";
 import { useRealtime } from "@get-bb/plugin-sdk/app";
+import { elementsChanged, missingFiles, type SceneElement } from "./merge";
 import { parseScene } from "./scene";
 
 type SyncRpc = {
@@ -33,6 +38,8 @@ type SyncRpc = {
 type SyncApi = {
   getSceneElementsIncludingDeleted(): unknown;
   getAppState(): unknown;
+  getFiles(): unknown;
+  addFiles(files: unknown[]): void;
   updateScene(opts: { elements: unknown }): void;
 };
 
@@ -41,47 +48,75 @@ export function useDrawingSync(
   rpc: SyncRpc,
   getApi: () => SyncApi | null,
   onRemoteApplied?: (updatedAt: number) => void,
-  onBeforeApply?: () => void,
+  /** Called with true before a remote scene is applied and false after, even if it fails. */
+  onApplying?: (applying: boolean) => void,
 ) {
+  // Latest revision this editor has fetched and reconciled (poll gate only).
   const serverRevRef = useRef(0);
   const busyRef = useRef(false);
+  // A signal arrived mid-apply; run again so it isn't lost.
+  const rerunRef = useRef(false);
   const onRemoteAppliedRef = useRef(onRemoteApplied);
   onRemoteAppliedRef.current = onRemoteApplied;
-  const onBeforeApplyRef = useRef(onBeforeApply);
-  onBeforeApplyRef.current = onBeforeApply;
+  const onApplyingRef = useRef(onApplying);
+  onApplyingRef.current = onApplying;
+
+  const applyOnce = useCallback(async () => {
+    const api = getApi();
+    if (!api) return;
+    const res = await rpc.call("getDrawing", { id: drawingId });
+    const drawing = res?.drawing;
+    if (!drawing) return;
+    const scene = parseScene(drawing.data);
+    if (!scene) return;
+    serverRevRef.current = Math.max(serverRevRef.current, drawing.updatedAt);
+    const localElements = api.getSceneElementsIncludingDeleted() as SceneElement[];
+    // No local elements passed: restoreElements would otherwise bump remote
+    // versions above local ones and defeat the reconcile below.
+    const remoteElements = restoreElements(scene.elements as never, null);
+    const reconciled = reconcileElements(
+      localElements as never,
+      remoteElements as never,
+      api.getAppState() as never,
+    );
+    const files = missingFiles(
+      (api.getFiles() ?? {}) as Record<string, unknown>,
+      scene.files,
+    );
+    const changed = elementsChanged(
+      localElements,
+      reconciled as unknown as SceneElement[],
+    );
+    if (!changed && files.length === 0) return;
+    onApplyingRef.current?.(true);
+    try {
+      if (files.length > 0) api.addFiles(files);
+      if (changed) api.updateScene({ elements: reconciled as never });
+      onRemoteAppliedRef.current?.(drawing.updatedAt);
+    } finally {
+      onApplyingRef.current?.(false);
+    }
+  }, [drawingId, rpc, getApi]);
 
   const applyRemote = useCallback(async () => {
-    if (busyRef.current) return;
+    if (busyRef.current) {
+      rerunRef.current = true;
+      return;
+    }
     busyRef.current = true;
     try {
-      const api = getApi();
-      if (!api) return;
-      const res = await rpc.call("getDrawing", { id: drawingId });
-      const drawing = res?.drawing;
-      if (!drawing) return;
-      if (drawing.updatedAt <= serverRevRef.current) return;
-      const scene = parseScene(drawing.data);
-      if (!scene) return;
-      // Apply only after confirming the scene actually differs from the rev
-      // we last saw (protects against applying our own just-saved scene).
-      serverRevRef.current = drawing.updatedAt;
-      const localElements = api.getSceneElementsIncludingDeleted();
-      const remoteElements = scene.elements;
-      const appState = api.getAppState();
-      const reconciled = reconcileElements(
-        localElements as never,
-        remoteElements as never,
-        appState as never,
-      );
-      onBeforeApplyRef.current?.();
-      api.updateScene({ elements: reconciled as never });
-      onRemoteAppliedRef.current?.(drawing.updatedAt);
-    } catch {
-      // transient failure — the poll / next signal retries
+      do {
+        rerunRef.current = false;
+        try {
+          await applyOnce();
+        } catch {
+          // transient failure — the poll / next signal retries
+        }
+      } while (rerunRef.current);
     } finally {
       busyRef.current = false;
     }
-  }, [drawingId, rpc, getApi]);
+  }, [applyOnce]);
 
   // Realtime push: the server publishes after every successful write.
   useRealtime("excalidraw", (payload) => {
@@ -111,7 +146,11 @@ export function useDrawingSync(
   }, [drawingId, rpc, applyRemote]);
 
   return {
-    /** Track the server revision after a load or a successful local save. */
+    /**
+     * Track the server revision after a load. Not for local saves: the merged
+     * revision a save returns can hold other writers' elements this editor
+     * hasn't applied, so the poll must still fetch it.
+     */
     setServerRev(rev: number) {
       serverRevRef.current = rev;
     },

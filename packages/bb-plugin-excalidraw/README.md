@@ -81,10 +81,13 @@ versa) via tombstones; edits to the *same* element resolve by Excalidraw's
   debounce plus an ordered save chain, so rapid edits never race.
 - Every successful write (editor autosave, agent tool, CLI) publishes a
   realtime `excalidraw` signal and tells Studio the collection changed; open
-  editors apply remote scenes with Excalidraw's own `reconcileElements`
-  (in-progress local edits win) plus a 5s polling fallback. The server
-  merges concurrent writes element-wise (`lib/merge.ts`), keeping tombstones
-  for deletions and pruning them after 30 days.
+  editors fetch the latest scene on every signal, fill in element defaults
+  with `restoreElements`, load new image files, and apply it with
+  Excalidraw's own `reconcileElements` (in-progress local edits win) plus a
+  5s polling fallback. The server merges concurrent writes element-wise
+  (`lib/merge.ts`): agent and CLI upserts merge into the stored element, so
+  a partial element (`{ id, type, x }`) changes only those properties.
+  Tombstones for deletions are pruned after 30 days.
 - Attaching renders the scene to a PNG in the browser
   (`exportToBlob` — no editor mount needed), base64-encodes it, and the
   server uploads the bytes with

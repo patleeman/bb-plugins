@@ -70,6 +70,9 @@ export function toStudioItem(recording: Recording, transcript: string): StudioIt
 
 const LIVE = new Set(["recording", "paused"]);
 
+/** Studio lists at most this many; past it, Studio keeps tags of items it didn't see. */
+const LIST_LIMIT = 10_000;
+
 export function registerStudio(
   bb: BbPluginApi,
   schemas: StudioSchemas,
@@ -84,9 +87,13 @@ export function registerStudio(
 
   registerStudioProvider(bb, schemas, {
     studio_describe: () => ({ pluginId: "talk", version: 1, panel: "recordings", kinds: RECORDING_KINDS }),
-    studio_list: () => ({
-      items: store.list({ includeArchived: true, limit: 10_000 }).map((recording) => toStudioItem(recording, store.transcript(recording.id))),
-    }),
+    studio_list: () => {
+      const rows = store.list({ includeArchived: true, limit: LIST_LIMIT });
+      return {
+        items: rows.map((recording) => toStudioItem(recording, store.transcript(recording.id))),
+        truncated: rows.length === LIST_LIMIT,
+      };
+    },
     studio_search: ({ query }) => {
       const found = store.list({ query, limit: 200 });
       return {

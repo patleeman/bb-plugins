@@ -92,21 +92,28 @@ export class StudioHub {
     }
   }
 
-  /** Providers and every ready provider's items; a provider that fails to list goes offline. */
-  async overview(): Promise<{ providers: ProviderView[]; items: HubItem[] }> {
+  /**
+   * Providers and every ready provider's items; a provider that fails to list
+   * goes offline. `truncated` names the providers that listed only some.
+   */
+  async overview(): Promise<{ providers: ProviderView[]; items: HubItem[]; truncated: Set<string> }> {
     const providers = await this.providers();
     const lists = await Promise.all(
       providers.map(async (provider) => {
-        if (provider.state !== "ready") return { provider, items: [] as HubItem[] };
+        if (provider.state !== "ready") return { provider, items: [] as HubItem[], truncated: false };
         try {
-          const { items } = await this.call(provider.pluginId, "studio_list", null);
-          return { provider, items: items.map((item) => ({ ...item, pluginId: provider.pluginId })) };
+          const { items, truncated = false } = await this.call(provider.pluginId, "studio_list", null);
+          return { provider, items: items.map((item) => ({ ...item, pluginId: provider.pluginId })), truncated };
         } catch (error) {
-          return { provider: { ...provider, state: "offline" as const, detail: errorText(error) }, items: [] as HubItem[] };
+          return { provider: { ...provider, state: "offline" as const, detail: errorText(error) }, items: [] as HubItem[], truncated: false };
         }
       }),
     );
-    return { providers: lists.map((list) => list.provider), items: lists.flatMap((list) => list.items) };
+    return {
+      providers: lists.map((list) => list.provider),
+      items: lists.flatMap((list) => list.items),
+      truncated: new Set(lists.filter((list) => list.truncated).map((list) => list.provider.pluginId)),
+    };
   }
 
   /**

@@ -178,7 +178,12 @@ export function studioSchemas(z: typeof Zod) {
     /** The methods an add-on registers with `bb.rpc.register`. */
     provider: {
       studio_describe: { input: z.null(), output: info },
-      studio_list: { input: z.null(), output: z.object({ items: z.array(item) }) },
+      /**
+       * Every item, archived ones included. An add-on that caps its list sets
+       * `truncated` when it hit the cap, so Studio keeps the tags and tabs of
+       * items it didn't see.
+       */
+      studio_list: { input: z.null(), output: z.object({ items: z.array(item), truncated: z.boolean().optional() }) },
       /**
        * Ids of items whose content matches; Studio matches titles itself.
        * `snippets` has the matching text by id, for as many as the add-on

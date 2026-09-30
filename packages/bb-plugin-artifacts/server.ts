@@ -13,6 +13,7 @@ import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { mentionContext } from "./lib/mention";
 import { contentHeaders } from "./src/server/content";
+import { pageMarkdown } from "./src/server/page";
 import { displayPath, resolveSource, type ResolvedSource, type SourceRoot } from "./src/server/source";
 import { artifactText, registerStudio } from "./src/server/studio";
 import {
@@ -121,7 +122,9 @@ export const rpcContract = defineRpcContract({
   saveFiles: {
     input: z.object({ threadId: threadIdSchema, paths: z.array(z.string().min(1).max(4096)).min(1).max(50) }),
     output: z.object({
-      saved: z.array(z.object({ path: z.string(), artifactId: z.string(), outcome: z.enum(["created", "versioned", "unchanged"]) })),
+      saved: z.array(
+        z.object({ path: z.string(), artifactId: z.string(), outcome: z.enum(["created", "versioned", "unchanged"]), restored: z.boolean() }),
+      ),
       failed: z.array(z.object({ path: z.string(), error: z.string() })),
     }),
   },
@@ -215,6 +218,16 @@ export default async function plugin(bb: BbPluginApi) {
     return { bytes: new Uint8Array(bytes), mime: file.mimeType };
   }
 
+  /** Whether a file is there. A read that fails counts as no file; a write would fail the same way. */
+  async function exists(source: ResolvedSource): Promise<boolean> {
+    try {
+      await bb.sdk.files.read({ hostId: source.root.hostId, rootPath: source.root.path, path: source.path });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** Copies a file from a thread into an artifact. */
   async function saveFromThread(input: {
     threadId: string;
@@ -243,7 +256,7 @@ export default async function plugin(bb: BbPluginApi) {
       artifactId: input.artifactId,
       by: input.by,
     });
-    if (result.outcome !== "unchanged" || input.title || input.description) changed(result.artifact.id);
+    if (result.outcome !== "unchanged" || result.restored || input.title || input.description) changed(result.artifact.id);
     return { ...result, display: displayPath(source) };
   }
 
@@ -281,7 +294,8 @@ export default async function plugin(bb: BbPluginApi) {
         : outcome === "versioned"
           ? `Saved version ${artifact.version.number} of "${displayTitle(artifact)}"`
           : `"${displayTitle(artifact)}" is already saved with these contents (version ${artifact.version.number})`;
-    return `${what}: ${TYPE_LABELS[versionType(artifact.version)]}, ${formatBytes(artifact.version.size)}, id ${artifact.id}, link ${artifactHref(artifact.id)}.`;
+    const restored = result.restored ? " It was archived; saving brought it back." : "";
+    return `${what}: ${TYPE_LABELS[versionType(artifact.version)]}, ${formatBytes(artifact.version.size)}, id ${artifact.id}, link ${artifactHref(artifact.id)}.${restored}`;
   }
 
   bb.log.info("loaded");
@@ -373,12 +387,12 @@ export default async function plugin(bb: BbPluginApi) {
       return { reply, storage, storageError: listError };
     },
     async saveFiles({ threadId, paths }) {
-      const saved: { path: string; artifactId: string; outcome: SaveResult["outcome"] }[] = [];
+      const saved: { path: string; artifactId: string; outcome: SaveResult["outcome"]; restored: boolean }[] = [];
       const failed: { path: string; error: string }[] = [];
       for (const path of paths) {
         try {
           const result = await saveFromThread({ threadId, path, by: "app" });
-          saved.push({ path, artifactId: result.artifact.id, outcome: result.outcome });
+          saved.push({ path, artifactId: result.artifact.id, outcome: result.outcome, restored: result.restored ?? false });
         } catch (error) {
           failed.push({ path, error: error instanceof Error ? error.message : String(error) });
         }
@@ -387,14 +401,7 @@ export default async function plugin(bb: BbPluginApi) {
     },
     async saveAsPage({ id }) {
       const artifact = mustGet(id);
-      const type = versionType(artifact.version);
-      const text = artifactText(store, artifact);
-      if (text === null || type === "html") throw new Error("Only Markdown, text and code artifacts can become pages.");
-      const fence = "`".repeat(Math.max(3, ...[...text.matchAll(/`+/g)].map((match) => match[0].length + 1)));
-      const markdown =
-        type === "markdown"
-          ? text
-          : `${fence}${type === "code" ? (artifact.version.name.split(".").pop() ?? "") : ""}\n${text}\n${fence}`;
+      const markdown = pageMarkdown(artifact.version, artifactText(store, artifact));
       const { page } = await bb.sdk.plugins.callRpc({
         pluginId: "pages",
         method: "create",
@@ -535,12 +542,12 @@ export default async function plugin(bb: BbPluginApi) {
       { name: "save", summary: "Save a file from this thread's workspace or thread storage", usage: "bb artifacts save <path> [--title <title>] [--description <text>]" },
       { name: "list", summary: "List artifacts", usage: "bb artifacts list [--thread]" },
       { name: "show", summary: "Print a text artifact's contents", usage: "bb artifacts show <id>" },
-      { name: "export", summary: "Copy an artifact into this thread's workspace (or a path you give)", usage: "bb artifacts export <id> [path]" },
+      { name: "export", summary: "Copy an artifact into this thread's workspace (or a path you give)", usage: "bb artifacts export <id> [path] [--force]" },
       { name: "delete", summary: "Delete an artifact and all its versions", usage: "bb artifacts delete <id>" },
     ],
     async run(argv, ctx) {
       const [cmd, ...rest] = argv;
-      const flags = parseFlags(rest, ["thread"]);
+      const flags = parseFlags(rest, ["thread", "force"]);
       switch (cmd) {
         case "save": {
           const [path] = flags.positional;
@@ -579,7 +586,7 @@ export default async function plugin(bb: BbPluginApi) {
         case "export": {
           const [id, target] = flags.positional;
           const artifact = store.get(id ?? "");
-          if (!artifact) return { exitCode: 1, stderr: "usage: bb artifacts export <id> [path]\n" };
+          if (!artifact) return { exitCode: 1, stderr: "usage: bb artifacts export <id> [path] [--force]\n" };
           if (!ctx.threadId) return { exitCode: 1, stderr: "Run this from a BB thread, so there's a workspace to write to.\n" };
           const bytes = store.bytes(artifact.version.sha256);
           if (!bytes) return { exitCode: 1, stderr: "This artifact's contents are missing.\n" };
@@ -587,6 +594,9 @@ export default async function plugin(bb: BbPluginApi) {
             const { roots } = await threadRoots(ctx.threadId);
             const destination = resolveSource(target ?? artifact.version.name, roots, ctx.cwd);
             if ("error" in destination) throw new Error(destination.error);
+            if (flags.values.force === undefined && (await exists(destination))) {
+              return { exitCode: 1, stderr: `${displayPath(destination)} already exists. Pass --force to overwrite it, or give another path.\n` };
+            }
             await bb.sdk.files.write({
               hostId: destination.root.hostId,
               rootPath: destination.root.path,
@@ -608,7 +618,7 @@ export default async function plugin(bb: BbPluginApi) {
           return { exitCode: 0, stdout: `deleted ${id}\n` };
         }
         default:
-          return { exitCode: 1, stderr: "unknown command — try: save <path> | list [--thread] | show <id> | export <id> [path] | delete <id>\n" };
+          return { exitCode: 1, stderr: "unknown command — try: save <path> | list [--thread] | show <id> | export <id> [path] [--force] | delete <id>\n" };
       }
     },
   });

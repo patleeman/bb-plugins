@@ -259,7 +259,7 @@ function RecordingDetail({ id }: { id: string }) {
                   </DropdownMenuItem>
                 ) : null}
                 <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" disabled={activeHere} onSelect={() => setConfirmDelete(true)}>
+                <DropdownMenuItem variant="destructive" disabled={activeHere || recording.status === "recording"} onSelect={() => setConfirmDelete(true)}>
                   <Icon name="Trash2" className="size-4" /> Delete…
                 </DropdownMenuItem>
               </DropdownMenuContent>

@@ -98,6 +98,8 @@ export interface SaveResult {
   artifact: ArtifactWithVersion;
   /** "created": a new artifact; "versioned": a new version; "unchanged": same bytes as the newest version. */
   outcome: "created" | "versioned" | "unchanged";
+  /** The artifact was archived; saving to it brought it back. */
+  restored?: boolean;
 }
 
 export class ArtifactStore {
@@ -156,7 +158,8 @@ export class ArtifactStore {
 
   /**
    * Saves a file. The same source file from the same thread becomes a new
-   * version of its artifact, unless the bytes haven't changed.
+   * version of its artifact, unless the bytes haven't changed. Saving to an
+   * archived artifact brings it back, whether or not the bytes changed.
    */
   save(input: SaveInput): SaveResult {
     if (input.bytes.byteLength > MAX_ARTIFACT_BYTES) {
@@ -177,13 +180,14 @@ export class ArtifactStore {
           : null;
       if (input.artifactId && !existing) throw new Error(`Artifact ${input.artifactId} not found.`);
       const at = this.nextRevision(existing?.updated_at ?? 0);
+      const restored = existing ? existing.archived_at !== null : false;
       if (existing && existing.version.sha256 === sha256 && existing.version.name === input.name) {
-        if ((title && title !== existing.title) || (description !== null && description !== existing.description)) {
+        if (restored || (title && title !== existing.title) || (description !== null && description !== existing.description)) {
           this.db
-            .prepare("UPDATE artifacts SET title = ?, description = ?, updated_at = ?, updated_by = ? WHERE id = ?")
+            .prepare("UPDATE artifacts SET title = ?, description = ?, updated_at = ?, updated_by = ?, archived_at = NULL WHERE id = ?")
             .run(title ?? existing.title, description ?? existing.description, at, writerKind(input.by), existing.id);
         }
-        return { artifact: this.get(existing.id)!, outcome: "unchanged" };
+        return { artifact: this.get(existing.id)!, outcome: "unchanged", ...(restored ? { restored } : {}) };
       }
 
       this.db.prepare("INSERT OR IGNORE INTO artifact_blobs (sha256, bytes) VALUES (?, ?)").run(sha256, Buffer.from(input.bytes));
@@ -210,7 +214,7 @@ export class ArtifactStore {
            VALUES (?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM artifact_versions WHERE artifact_id = ?), ?, ?, ?, ?, ?)`,
         )
         .run(randomUUID(), id, id, input.name, input.mime, input.bytes.byteLength, sha256, at);
-      return { artifact: this.get(id)!, outcome: existing ? "versioned" : "created" };
+      return { artifact: this.get(id)!, outcome: existing ? "versioned" : "created", ...(restored ? { restored } : {}) };
     })();
   }
 

@@ -9,7 +9,7 @@ import { errorMessage, plural, relativeTime } from "@bb-studio/kit/format";
 import { useRealtime, useRpc, type PluginThreadPanelProps } from "@get-bb/plugin-sdk/app";
 import type { z } from "zod";
 import type { rpcContract } from "../server";
-import { REALTIME_CHANNEL, SAVE_ICON, TYPE_ICONS, TYPE_LABELS, artifactType, baseName, mimeFor } from "../src/shared";
+import { REALTIME_CHANNEL, SAVE_ICON, TYPE_ICONS, TYPE_LABELS, artifactType, baseName, mimeFor, prunePicked } from "../src/shared";
 import { ArtifactViewer } from "./artifact-viewer";
 
 type Candidates = z.infer<(typeof rpcContract)["candidates"]["output"]>;
@@ -29,7 +29,9 @@ export function SavePicker({ threadId, params }: PluginThreadPanelProps) {
   const [openId, setOpenId] = useState<string | null>(null);
   const back = useCallback(() => setOpenId(null), []);
   if (openId) return <ArtifactViewer artifactId={openId} backLabel="Save to Studio" onBack={back} />;
-  return <PickerList threadId={threadId} seq={pickerSeq(params)} onOpen={setOpenId} />;
+  const seq = pickerSeq(params);
+  // Another reply is another list: start its selection afresh.
+  return <PickerList key={`${threadId}:${seq}`} threadId={threadId} seq={seq} onOpen={setOpenId} />;
 }
 
 function PickerList({ threadId, seq, onOpen }: { threadId: string; seq: number | null; onOpen(id: string): void }) {
@@ -45,8 +47,7 @@ function PickerList({ threadId, seq, onOpen }: { threadId: string; seq: number |
       (result) => {
         setCandidates(result);
         setError(null);
-        // Start with the reply's unsaved files ticked.
-        setPicked((current) => current ?? new Set(result.reply.filter((file) => !file.artifactId).map((file) => file.path)));
+        setPicked((current) => prunePicked(current, result));
       },
       (failure) => setError(errorMessage(failure)),
     );
@@ -73,7 +74,7 @@ function PickerList({ threadId, seq, onOpen }: { threadId: string; seq: number |
     setSaving(true);
     try {
       const { saved: done, failed } = await rpc.call("saveFiles", { threadId, paths: chosen });
-      const changed = done.filter((each) => each.outcome !== "unchanged").length;
+      const changed = done.filter((each) => each.outcome !== "unchanged" || each.restored).length;
       if (done.length) {
         toast.success(
           changed === 0

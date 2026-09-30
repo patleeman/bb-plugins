@@ -56,7 +56,8 @@ or failed. Say so instead of guessing at the missing part.
 - **Recordings page.** A table the user can search, filter by kind, and sort.
   Selected rows can start one thread that mentions them all, have their
   transcripts copied as one Markdown document, have failed pieces retried,
-  or be deleted together. The recording Talk is capturing can't be selected.
+  or be deleted together. The recording Talk is capturing can't be selected,
+  and the server refuses to delete a recording while a window is capturing it.
 - **Recording pill.** A small pill at the top of every page shows the clock,
   input level, and pause/stop controls. Expand it to read the live transcript.
   It follows the user between threads, and it can be dragged anywhere in the

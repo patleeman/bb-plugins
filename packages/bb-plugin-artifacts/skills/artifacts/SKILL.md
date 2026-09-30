@@ -40,7 +40,8 @@ own line in your reply and the user sees a card that opens the artifact.
 bb artifacts save <path> [--title <title>] [--description <text>]
 bb artifacts list [--thread]
 bb artifacts show <id>          # print a text artifact
-bb artifacts export <id> [path] # copy it into the workspace (default: its file name)
+bb artifacts export <id> [path] [--force] # copy it into the workspace (default: its file name;
+                                          # --force replaces a file already there)
 bb artifacts delete <id>
 ```
 
@@ -52,7 +53,8 @@ Markdown (rendered, with a source view), code and plain text, and PDF.
 Anything else can be downloaded. The limit is 25 MB per file.
 
 To change an artifact, export or rewrite the file, then save it again from
-the same path (or pass `artifactId`).
+the same path (or pass `artifactId`). Saving to an archived artifact brings
+it back out of the archive.
 
 ## Studio
 

@@ -18,6 +18,27 @@ export function segmentPolicy(segmentSeconds: number): SegmentPolicy {
   return { targetMs: target * 1000, maxMs: Math.round(target * 1.6 * 1000), pauseMs: 350 };
 }
 
+/** The server refuses longer segments (`segment_put`'s `durationMs`). */
+export const MAX_SEGMENT_MS = 10 * 60_000;
+
+/**
+ * The most one level tick may add to a segment's length. Ticks come every
+ * 100ms (every second or minute in a throttled background tab); a longer gap
+ * means the machine slept, and no audio was recorded during it.
+ */
+export const MAX_TICK_GAP_MS = 60_000;
+
+/** Recorded time a tick adds: the gap since the last one, less any sleep. */
+export function tickGap(dtMs: number): number {
+  return Number.isFinite(dtMs) ? Math.min(MAX_TICK_GAP_MS, Math.max(0, dtMs)) : 0;
+}
+
+/** A duration the server accepts: whole, non-negative, and under the cap. */
+export function uploadDuration(durationMs: number | null | undefined): number {
+  const value = Number.isFinite(durationMs) ? Math.round(durationMs!) : 0;
+  return Math.min(MAX_SEGMENT_MS, Math.max(0, value));
+}
+
 export function shouldCut(policy: SegmentPolicy, elapsedMs: number, quietForMs: number): boolean {
   if (elapsedMs >= policy.maxMs) return true;
   return elapsedMs >= policy.targetMs && quietForMs >= policy.pauseMs;

@@ -183,7 +183,8 @@ export function mergeFullScene(
 
 /**
  * Apply explicit element upserts + deletions (agent tool / CLI path).
- * Touched elements always win: their version is bumped above whatever is
+ * Upserts merge into the stored element (partial updates keep the other
+ * properties) and always win: their version is bumped above whatever is
  * stored, so they override any concurrent stale copy. `deletedElementIds`
  * mark elements deleted (tombstone with a bumped version).
  */
@@ -219,12 +220,16 @@ export function applyElementUpserts(
     const index =
       typeof el.index === "string" && el.index.length > 0
         ? el.index
-        : nextIndexAfter([...byId.values()]);
+        : typeof existing?.index === "string" && existing.index.length > 0
+          ? existing.index
+          : nextIndexAfter([...byId.values()]);
+    // Merge into the stored element: agents often send only the properties
+    // they change (`{ id, type, x }`), which must not wipe the rest.
     byId.set(el.id, {
+      ...existing,
       ...el,
       version,
-      versionNonce:
-        typeof el.versionNonce === "number" ? el.versionNonce : randomNonce(),
+      versionNonce: randomNonce(),
       updated: now,
       isDeleted: false,
       index,
@@ -252,6 +257,37 @@ export function applyElementUpserts(
     files: { ...cur.files, ...(options.files ?? {}) },
   };
   return pruneTombstones(scene);
+}
+
+/**
+ * True when `next` differs from `current` in membership or in any element's
+ * `version`/`versionNonce` — i.e. applying it would change the editor.
+ */
+export function elementsChanged(
+  current: readonly SceneElement[],
+  next: readonly SceneElement[],
+): boolean {
+  if (current.length !== next.length) return true;
+  const byId = new Map<unknown, SceneElement>();
+  for (const el of current) byId.set(el.id, el);
+  return next.some((el) => {
+    const cur = byId.get(el.id);
+    return (
+      !cur ||
+      elementVersion(cur) !== elementVersion(el) ||
+      elementNonce(cur) !== elementNonce(el)
+    );
+  });
+}
+
+/** Files in `remote` whose ids aren't loaded in `local` yet. */
+export function missingFiles(
+  local: Record<string, unknown>,
+  remote: Record<string, unknown> | undefined,
+): unknown[] {
+  return Object.entries(remote ?? {})
+    .filter(([id, file]) => !(id in local) && file && typeof file === "object")
+    .map(([, file]) => file);
 }
 
 /** Drop tombstones older than TOMBSTONE_MAX_AGE_MS (they've long propagated). */

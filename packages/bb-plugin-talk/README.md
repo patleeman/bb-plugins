@@ -80,7 +80,14 @@ afterwards.
 - **Offline.** While offline, audio keeps saving locally. It uploads with
   backoff when the connection returns.
 - **One capture at a time.** A Web Lock makes sure only one window captures.
-  Every window shows the pill.
+  Every window shows the pill. Other windows leave the capturing window's
+  unsaved audio alone, and upload it only once that window is gone.
+- **Refused pieces don't block the rest.** If the server rejects a piece as
+  invalid, Talk keeps its audio on the device, says so, and uploads the
+  pieces after it. A laptop that sleeps mid-recording doesn't count the
+  sleep as recorded time.
+- **Deleting.** A recording that a window is still capturing can't be
+  deleted. Stop it first.
 - **Interrupted recordings.** If a capture stops reporting for two minutes,
   for example because the laptop closed or the app was killed, the recording
   is marked *Interrupted*. **Resume recording** on its page continues it.

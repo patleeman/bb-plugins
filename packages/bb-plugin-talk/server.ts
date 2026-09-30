@@ -228,6 +228,11 @@ export default async function plugin(bb: BbPluginApi) {
       return mustGet(id);
     },
     recording_delete: async ({ id }) => {
+      // A window is capturing into it; deleting now would strand the audio
+      // still on its way. An interrupted one (its window is gone) can go.
+      if (store.recording(id)?.status === "recording") {
+        throw new Error("Stop the recording before deleting it.");
+      }
       const deleted = store.delete(id);
       await files.removeRecording(id);
       if (deleted) changed(id);

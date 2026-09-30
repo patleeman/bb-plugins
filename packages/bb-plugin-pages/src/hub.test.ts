@@ -90,4 +90,13 @@ describe("PageHub", () => {
     applyEdits(editor.doc, [{ op: "append", markdown: "First human edit" }], "local");
     expect(events).toEqual(["opened:Seeded", "changed"]);
   });
+
+  it("closes every editor of a deleted page", () => {
+    const hub = new PageHub({ load: () => null, save: () => {} });
+    const a = client(hub, "pg_1");
+    const closed: number[] = [];
+    Object.assign(a.socket, { close: (code: number) => closed.push(code) });
+    hub.evict("pg_1");
+    expect(closed).toEqual([4404]);
+  });
 });

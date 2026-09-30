@@ -14,6 +14,8 @@ import { itemKey, missingNote, parseItemKey, pointerNote, toViewed, withItemPill
 const PLUGIN_ID = "studio-chat";
 const PAGES_PLUGIN_ID = "pages";
 const CALL_TIMEOUT_MS = 10_000;
+/** Starting a page chat creates a thread, which can take a while; don't wait forever. */
+const START_TIMEOUT_MS = 60_000;
 
 interface Link {
   threadId: string;
@@ -85,6 +87,7 @@ export default async function plugin(bb: BbPluginApi) {
           method: "work",
           input: { id: ref.id, request },
           outputSchema: pagesSchemas.work,
+          signal: AbortSignal.timeout(START_TIMEOUT_MS),
         });
         await setLink(ref, threadId);
         return { threadId };

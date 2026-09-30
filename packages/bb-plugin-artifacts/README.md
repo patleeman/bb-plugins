@@ -24,7 +24,8 @@ with the Preview/Source toggle, New thread, Copy, Download and the ⋯ menu.
 - **Artifacts in Studio.** With the [Studio](../bb-plugin-studio) plugin
   installed, artifacts join Studio's collection next to pages, recordings
   and drawings. They get type, size and version columns, image thumbnails,
-  projects, search over titles and text, archive, move and delete. Studio
+  projects, search over titles and text, archive, move and delete. Saving
+  to an archived artifact again brings it back. Studio
   can't create an artifact, because artifacts come from threads. Without
   Studio, the **Artifacts** panel shows the same collection on its own.
 - **The viewer** (`/plugins/artifacts/artifacts/<id>`) shows each type in
@@ -52,8 +53,9 @@ with the Preview/Source toggle, New thread, Copy, Download and the ⋯ menu.
 - **`@artifact` mentions.** The agent receives the artifact's details and,
   for text types, its contents.
 - **`bb artifacts` CLI**: `save <path> [--title] [--description]`,
-  `list [--thread]`, `show <id>`, `export <id> [path]` (copies an artifact
-  into the thread's workspace, so an agent can edit it and save it back), and
+  `list [--thread]`, `show <id>`, `export <id> [path] [--force]` (copies an
+  artifact into the thread's workspace, so an agent can edit it and save it
+  back; it won't replace an existing file without `--force`), and
   `delete <id>`.
 
 ## How it works

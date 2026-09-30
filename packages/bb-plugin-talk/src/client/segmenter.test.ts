@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { LevelTracker, pickMimeType, rmsOf, segmentPolicy, shouldCut } from "./segmenter";
+import {
+  LevelTracker,
+  MAX_SEGMENT_MS,
+  MAX_TICK_GAP_MS,
+  pickMimeType,
+  rmsOf,
+  segmentPolicy,
+  shouldCut,
+  tickGap,
+  uploadDuration,
+} from "./segmenter";
 
 describe("segmenter", () => {
   it("cuts at a pause after the target, or at the hard maximum", () => {
@@ -8,6 +18,21 @@ describe("segmenter", () => {
     expect(shouldCut(policy, 26_000, 100)).toBe(false);
     expect(shouldCut(policy, 26_000, 400)).toBe(true);
     expect(shouldCut(policy, 40_000, 0)).toBe(true);
+  });
+
+  it("doesn't count a sleep as recorded time", () => {
+    expect(tickGap(100)).toBe(100);
+    expect(tickGap(3 * 3_600_000)).toBe(MAX_TICK_GAP_MS);
+    expect(tickGap(-5)).toBe(0);
+    expect(tickGap(Number.NaN)).toBe(0);
+  });
+
+  it("clamps upload durations to what the server accepts", () => {
+    expect(uploadDuration(25_400.6)).toBe(25_401);
+    expect(uploadDuration(null)).toBe(0);
+    expect(uploadDuration(-1)).toBe(0);
+    // A segment sealed across a laptop sleep.
+    expect(uploadDuration(8 * 3_600_000)).toBe(MAX_SEGMENT_MS);
   });
 
   it("clamps the segment length", () => {

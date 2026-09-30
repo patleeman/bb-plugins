@@ -88,6 +88,19 @@ describe("StudioHub", () => {
     expect(overview.providers[1]).toMatchObject({ pluginId: "talk", state: "offline", detail: "Database locked" });
   });
 
+  it("names the providers that listed only some of their items", async () => {
+    const sdk = fakeSdk({
+      plugins: [plugin("pages"), plugin("talk")],
+      rpc: {
+        "pages.studio_describe": () => ({ pluginId: "pages", version: 1, panel: "pages", kinds: [kind] }),
+        "pages.studio_list": () => ({ items: [item("pg_1")] }),
+        "talk.studio_describe": () => ({ pluginId: "talk", version: 1, panel: "recordings", kinds: [] }),
+        "talk.studio_list": () => ({ items: [], truncated: true }),
+      },
+    });
+    expect([...(await new StudioHub(sdk).overview()).truncated]).toEqual(["talk"]);
+  });
+
   it("describes each plugin version once", async () => {
     const sdk = fakeSdk({
       plugins: [plugin("pages")],

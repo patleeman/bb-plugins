@@ -21,7 +21,7 @@ Drawings belong to a project or are global. Link to one as
 | `excalidraw_list_drawings` | List drawings with ids, names and element counts. |
 | `excalidraw_get_drawing` | Read a drawing's current scene before changing it. |
 | `excalidraw_create_drawing` | Create a drawing. Returns its id and a link to share. |
-| `excalidraw_update_drawing` | Upsert elements, delete elements by id, or patch appState. |
+| `excalidraw_update_drawing` | Upsert elements, delete elements by id, or patch appState. An upsert of an existing id merges: send `id`, `type` and just the properties to change. |
 
 ## CLI (works in every agent session)
 

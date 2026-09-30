@@ -70,6 +70,9 @@ export function toStudioItem(row: DrawingRow): StudioItem {
   };
 }
 
+/** Studio lists at most this many; past it, Studio keeps tags of items it didn't see. */
+const LIST_LIMIT = 10_000;
+
 export function registerStudio(
   bb: Pick<BbPluginApi, "rpc">,
   schemas: StudioSchemas,
@@ -84,7 +87,10 @@ export function registerStudio(
 
   registerStudioProvider(bb, schemas, {
     studio_describe: () => ({ pluginId: PLUGIN_ID, version: 1, panel: "drawings", kinds: [DRAWING_KIND] }),
-    studio_list: () => ({ items: store.list({ includeArchived: true, limit: 10_000 }).map(toStudioItem) }),
+    studio_list: () => {
+      const rows = store.list({ includeArchived: true, limit: LIST_LIMIT });
+      return { items: rows.map(toStudioItem), truncated: rows.length === LIST_LIMIT };
+    },
     // Studio matches titles itself; this finds the words written on drawings.
     studio_search: ({ query }) => {
       const needle = query.toLowerCase();

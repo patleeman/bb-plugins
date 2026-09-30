@@ -16,6 +16,8 @@ export const MESSAGE_AWARENESS = 1;
 
 export interface Socket {
   send(data: Uint8Array): void;
+  /** Ends the connection; 4404 tells the editor its page is gone. */
+  close?(code: number, reason: string): void;
 }
 
 /** Who made a change. Sockets are humans; strings are server-side actors. */
@@ -209,6 +211,13 @@ export class PageHub {
     const page = this.pages.get(pageId);
     if (!page) return;
     this.dispose(page, false);
+    for (const socket of page.sockets.keys()) {
+      try {
+        socket.close?.(4404, "Page deleted");
+      } catch {
+        // Already closing.
+      }
+    }
   }
 
   disposeAll(): void {

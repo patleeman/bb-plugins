@@ -27,7 +27,7 @@ export const ARTIFACT_KIND: StudioKind = {
 
 const PREVIEW_CHARS = 140;
 /** Text past this isn't searched or previewed. */
-const TEXT_SCAN_BYTES = 1024 * 1024;
+export const TEXT_SCAN_BYTES = 1024 * 1024;
 
 /** How much text the cache keeps, in characters; the least recently read goes first. */
 const TEXT_CACHE_CHARS = 32 * 1024 * 1024;
@@ -119,6 +119,9 @@ export function toStudioItem(store: ArtifactStore, artifact: ArtifactWithVersion
   };
 }
 
+/** Studio lists at most this many; past it, Studio keeps tags of items it didn't see. */
+const LIST_LIMIT = 10_000;
+
 export function registerStudio(
   bb: Pick<BbPluginApi, "rpc">,
   schemas: StudioSchemas,
@@ -133,7 +136,10 @@ export function registerStudio(
 
   registerStudioProvider(bb, schemas, {
     studio_describe: () => ({ pluginId: PLUGIN_ID, version: 1, panel: "artifacts", kinds: [ARTIFACT_KIND] }),
-    studio_list: () => ({ items: store.list({ includeArchived: true, limit: 10_000 }).map((a) => toStudioItem(store, a)) }),
+    studio_list: () => {
+      const rows = store.list({ includeArchived: true, limit: LIST_LIMIT });
+      return { items: rows.map((a) => toStudioItem(store, a)), truncated: rows.length === LIST_LIMIT };
+    },
     // Studio matches titles itself; this finds descriptions, file names and text.
     studio_search: ({ query }) => {
       const needle = query.toLowerCase();

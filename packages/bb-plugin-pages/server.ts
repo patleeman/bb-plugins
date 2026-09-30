@@ -39,7 +39,10 @@ export default async function plugin(bb: BbPluginApi) {
             ws.close(4404, "Page not found");
             return;
           }
-          const socket: Socket = { send: (data) => ws.readyState === 1 && ws.send(data) };
+          const socket: Socket = {
+            send: (data) => ws.readyState === 1 && ws.send(data),
+            close: (code, reason) => ws.close(code, reason),
+          };
           sockets.set(ws, { pageId, socket });
           service.hub.connect(pageId, socket);
         },

@@ -91,7 +91,10 @@ export function DrawingEditor({
   // saves only real changes, so the editor doesn't keep rewriting the scene
   // (and hearing its own write back as a remote update).
   const savedSceneRef = useRef<string | null>(null);
-  // Latest server revision (updated_at) — used to ignore our own writes.
+  // Set while a remote scene is being applied, so the onChange it causes is
+  // recorded as saved rather than written back.
+  const applyingRemoteRef = useRef(false);
+  // Server revision the editor loaded (the sync poll's starting point).
   const serverRevSetterRef = useRef<(rev: number) => void>(() => {});
   const [syncedAt, setSyncedAt] = useState<number | null>(null);
   const realtimeState = useRealtimeConnectionState();
@@ -165,6 +168,8 @@ export function DrawingEditor({
             getSceneElementsIncludingDeleted: () =>
               api.getSceneElementsIncludingDeleted(),
             getAppState: () => api.getAppState(),
+            getFiles: () => api.getFiles(),
+            addFiles: (files: unknown[]) => api.addFiles(files as never),
             updateScene: (opts: { elements: unknown }) =>
               api.updateScene({ elements: opts.elements as never }),
           }
@@ -182,6 +187,9 @@ export function DrawingEditor({
         );
       }
       setSyncedAt(updatedAt);
+    },
+    (applying) => {
+      applyingRemoteRef.current = applying;
     },
   );
   serverRevSetterRef.current = sync.setServerRev;
@@ -225,12 +233,10 @@ export function DrawingEditor({
     const payload = { id: drawingId, data: pending };
     saveChainRef.current = saveChainRef.current
       .then(() => rpc.call("saveDrawing", payload))
-      .then((result) => {
-        setSaving(false);
-        if (result?.ok && typeof result.updatedAt === "number") {
-          serverRevSetterRef.current(result.updatedAt);
-        }
-      })
+      // The server's merged revision is left for the sync hook to fetch: it
+      // can hold an agent's elements that landed while this save was in
+      // flight, and those must still reach the canvas.
+      .then(() => setSaving(false))
       .catch((error) => {
         setSaving(false);
         toast.error(
@@ -281,8 +287,9 @@ export function DrawingEditor({
           files,
         );
         // The first change after mount is Excalidraw normalizing the loaded
-        // scene; record it as the saved scene without writing it back.
-        if (savedSceneRef.current === null) {
+        // scene, and a remote scene being applied is already on the server;
+        // record either as the saved scene without writing it back.
+        if (savedSceneRef.current === null || applyingRemoteRef.current) {
           savedSceneRef.current = serialized;
           return;
         }

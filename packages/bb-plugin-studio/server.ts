@@ -34,13 +34,13 @@ export default async function plugin(bb: BbPluginApi) {
 
   /**
    * Every item with its tag ids. Tags and tabs of items a provider no longer
-   * lists are dropped; a provider that is down keeps them.
+   * lists are dropped; a provider that is down, or listed only some, keeps them.
    */
   const overview = async () => {
     const result = await hub.overview();
     let closed = false;
     for (const provider of result.providers) {
-      if (provider.state !== "ready") continue;
+      if (provider.state !== "ready" || result.truncated.has(provider.pluginId)) continue;
       const live = new Set(result.items.filter((item) => item.pluginId === provider.pluginId).map((item) => item.id));
       tags.prune(provider.pluginId, live);
       closed = tabs.prune(provider.pluginId, live) || closed;

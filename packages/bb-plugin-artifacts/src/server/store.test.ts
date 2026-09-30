@@ -88,6 +88,16 @@ describe("ArtifactStore", () => {
     expect(store.get(id)?.archived_at).toBeNull();
   });
 
+  it("brings an archived artifact back when it's saved again unchanged", () => {
+    const { store } = memoryStore();
+    const { id } = store.save(file("a")).artifact;
+    store.setArchived(id, true);
+    const again = store.save(file("a"));
+    expect(again).toMatchObject({ outcome: "unchanged", restored: true });
+    expect(store.list().map((artifact) => artifact.id)).toEqual([id]);
+    expect(store.save(file("a")).restored).toBeUndefined();
+  });
+
   it("orders by last change, with distinct revisions within a millisecond", () => {
     let now = 1000;
     const { store } = memoryStore(() => now);

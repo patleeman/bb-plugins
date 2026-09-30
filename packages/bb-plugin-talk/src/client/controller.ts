@@ -23,7 +23,7 @@ import type {
 import type { Recording, RecordingKind, TalkRpcContract } from "../shared/contract";
 import { PANEL_PATH, isEmptyRecording, joinTranscript } from "../shared/format";
 import { findComposer, insertIntoComposer, type MicState } from "./composer-dom";
-import { Outbox, toBase64, type OutboxKey } from "./outbox";
+import { Outbox, isOrphan, isPermanentRejection, isUploadable, toBase64, type OutboxKey } from "./outbox";
 import {
   FIELD_PENDING_PREFIX,
   findField,
@@ -43,7 +43,16 @@ import {
   writePending,
   writeTimes,
 } from "./pending-inserts";
-import { LevelTracker, pickMimeType, rmsOf, segmentPolicy, shouldCut, type SegmentPolicy } from "./segmenter";
+import {
+  LevelTracker,
+  pickMimeType,
+  rmsOf,
+  segmentPolicy,
+  shouldCut,
+  tickGap,
+  uploadDuration,
+  type SegmentPolicy,
+} from "./segmenter";
 
 export type Phase =
   | "idle"
@@ -91,7 +100,11 @@ interface OpenSegment {
   recorder: MediaRecorder;
   key: OutboxKey;
   startedAt: number;
+  /** Recorded time, summed from level ticks so a sleep doesn't count. */
+  elapsedMs: number;
   writes: Promise<void>;
+  /** Settles once the segment is sealed in the outbox. */
+  closed: Promise<void>;
 }
 
 interface Capture {
@@ -103,6 +116,8 @@ interface Capture {
   nextIndex: number;
   mimeType: string;
   current: OpenSegment | null;
+  /** Segments not yet sealed, including one a cut is still closing. */
+  open: Set<OpenSegment>;
   tracker: LevelTracker;
   lastTick: number;
   timers: number[];
@@ -147,6 +162,17 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** A start that a stop cancelled while it waited on the microphone or server. */
+class StartCancelled extends Error {
+  constructor() {
+    super("Talk stopped before it started.");
+  }
+}
+
+function stopTracks(stream: MediaStream): void {
+  for (const track of stream.getTracks()) track.stop();
+}
+
 export class TalkController {
   private state: TalkState = INITIAL;
   private readonly listeners = new Set<() => void>();
@@ -176,6 +202,8 @@ export class TalkController {
   private uploadRetry: number | null = null;
   private refreshTimer: number | null = null;
   private restartAttempts = 0;
+  /** Bumped by every stop, so a start still in flight backs out. */
+  private startEpoch = 0;
   replaceBuiltIn = true;
 
   // ── Store plumbing for React ─────────────────────────────────────────────
@@ -334,13 +362,14 @@ export class TalkController {
 
   private async init(): Promise<void> {
     try {
-      await this.outbox.sealOrphans((key) => this.live.has(keyString(key)));
+      await this.sealOrphans();
     } catch (error) {
       toast.error(`Talk cannot use local storage: ${message(error)}`);
     }
     void this.kickUpload();
     const saved = this.readPersisted();
     if (!saved) return;
+    const epoch = this.startEpoch;
     let recording: Recording;
     try {
       recording = (await this.rpc!.call("recording_get", { id: saved.recordingId })).recording;
@@ -363,14 +392,16 @@ export class TalkController {
     });
     void this.refresh();
     if (saved.phase === "recording") {
-      if (!(await this.acquireLock())) {
+      const locked = await this.acquireLock();
+      if (this.cancelled(epoch, locked)) return;
+      if (!locked) {
         this.set(INITIAL);
         return;
       }
       try {
-        await this.startCapture();
-      } catch {
-        this.set({ phase: "needs-resume" });
+        await this.startCapture(epoch);
+      } catch (error) {
+        if (!(error instanceof StartCancelled)) this.set({ phase: "needs-resume" });
       }
     } else if (saved.phase === "finalizing") {
       void this.finalize();
@@ -401,29 +432,38 @@ export class TalkController {
     // A field dictation belongs to the field, not to the open thread.
     const threadId = field ? null : this.context.threadId;
     this.set({ ...INITIAL, phase: "starting", kind, threadId, field });
+    const epoch = this.startEpoch;
     let stream: MediaStream;
     try {
       stream = await this.openMicrophone();
     } catch (error) {
+      // A stop while the permission prompt was up already went idle.
+      if (epoch !== this.startEpoch) return;
       this.set(INITIAL);
       this.unlock();
       toast.error(`Talk could not open the microphone: ${message(error)}`);
       return;
     }
+    let created: string | null = null;
     try {
+      if (epoch !== this.startEpoch) throw new StartCancelled();
       const recording = await this.rpc.call("recording_create", {
         kind,
         projectId: options.projectId !== undefined ? options.projectId : this.context.projectId,
         threadId,
       });
+      created = recording.id;
+      if (epoch !== this.startEpoch) throw new StartCancelled();
       this.set({ recordingId: recording.id, recording });
       this.persistPhase("recording");
-      await this.startCapture(stream);
+      await this.startCapture(epoch, stream);
     } catch (error) {
-      for (const track of stream.getTracks()) track.stop();
-      // Nothing was captured, so do not leave an empty recording behind.
-      const created = this.state.recordingId;
-      if (created) void this.rpc.call("recording_delete", { id: created }).catch(() => {});
+      stopTracks(stream);
+      // Nothing was captured, so do not leave an empty recording behind:
+      // finishing a recording with no audio discards it.
+      if (created) void this.rpc.call("recording_state", { id: created, status: "finishing" }).catch(() => {});
+      // The stop that cancelled the start has already gone idle.
+      if (error instanceof StartCancelled) return;
       this.set(INITIAL);
       this.persist(null);
       this.unlock();
@@ -453,9 +493,10 @@ export class TalkController {
       threadId: recording.threadId,
     });
     try {
-      await this.startCapture();
+      await this.startCapture(this.startEpoch);
       void this.refresh();
     } catch (error) {
+      if (error instanceof StartCancelled) return;
       this.set(INITIAL);
       this.persist(null);
       this.unlock();
@@ -496,14 +537,18 @@ export class TalkController {
 
   async resume(): Promise<void> {
     if (this.state.phase !== "paused" && this.state.phase !== "needs-resume") return;
-    if (!(await this.acquireLock())) {
+    const epoch = this.startEpoch;
+    const locked = await this.acquireLock();
+    if (this.cancelled(epoch, locked)) return;
+    if (!locked) {
       toast.info("Talk is recording in another window.");
       return;
     }
     this.set({ phase: "starting" });
     try {
-      await this.startCapture();
+      await this.startCapture(epoch);
     } catch (error) {
+      if (error instanceof StartCancelled) return;
       this.set({ phase: "needs-resume" });
       toast.error(`Talk could not open the microphone: ${message(error)}`);
     }
@@ -514,7 +559,28 @@ export class TalkController {
     const { phase } = this.state;
     if (phase !== "recording" && phase !== "paused" && phase !== "needs-resume" && phase !== "starting") return;
     this.insertOnDone = insert && this.state.kind === "dictation";
+    // Any start in flight (waiting on the microphone, the server, or a
+    // retry) sees this and releases the microphone instead of capturing.
+    this.startEpoch++;
+    if (phase === "starting" && !this.capture) {
+      this.unlock();
+      // A new recording that the server hasn't created yet: nothing to finish.
+      if (!this.state.recordingId) {
+        this.finishIdle();
+        return;
+      }
+    }
     await this.finalize();
+  }
+
+  /**
+   * Whether a stop arrived since a start began at `epoch`. If so, the lock
+   * the start just took is given back.
+   */
+  private cancelled(epoch: number, locked: boolean): boolean {
+    if (epoch === this.startEpoch) return false;
+    if (locked) this.unlock();
+    return true;
   }
 
   // ── Capture ──────────────────────────────────────────────────────────────
@@ -527,30 +593,46 @@ export class TalkController {
     });
   }
 
-  private async startCapture(stream?: MediaStream): Promise<void> {
+  /**
+   * Opens the microphone (unless given `stream`) and starts capturing. Throws
+   * StartCancelled, having released the microphone, if a stop arrived since
+   * `epoch`. On any failure the microphone it opened is released.
+   */
+  private async startCapture(epoch: number, stream?: MediaStream): Promise<void> {
     if (typeof MediaRecorder === "undefined") throw new Error("This browser cannot record audio.");
+    if (epoch !== this.startEpoch) throw new StartCancelled();
     const media = stream ?? (await this.openMicrophone());
-    const audio = new AudioContext();
-    void audio.resume().catch(() => {});
-    const analyser = audio.createAnalyser();
-    analyser.fftSize = 2048;
-    audio.createMediaStreamSource(media).connect(analyser);
-    const capture: Capture = {
-      stream: media,
-      audio,
-      analyser,
-      samples: new Float32Array(analyser.fftSize),
-      sessionId: randomId(),
-      nextIndex: 0,
-      mimeType: pickMimeType((type) => MediaRecorder.isTypeSupported(type)),
-      current: null,
-      tracker: new LevelTracker(),
-      lastTick: performance.now(),
-      timers: [],
-      wakeLock: null,
-    };
-    this.capture = capture;
-    this.openSegment(capture);
+    let audio: AudioContext | null = null;
+    let capture: Capture;
+    try {
+      if (epoch !== this.startEpoch) throw new StartCancelled();
+      audio = new AudioContext();
+      void audio.resume().catch(() => {});
+      const analyser = audio.createAnalyser();
+      analyser.fftSize = 2048;
+      audio.createMediaStreamSource(media).connect(analyser);
+      capture = {
+        stream: media,
+        audio,
+        analyser,
+        samples: new Float32Array(analyser.fftSize),
+        sessionId: randomId(),
+        nextIndex: 0,
+        mimeType: pickMimeType((type) => MediaRecorder.isTypeSupported(type)),
+        current: null,
+        open: new Set(),
+        tracker: new LevelTracker(),
+        lastTick: performance.now(),
+        timers: [],
+        wakeLock: null,
+      };
+      this.openSegment(capture);
+      this.capture = capture;
+    } catch (error) {
+      stopTracks(media);
+      void audio?.close().catch(() => {});
+      throw error;
+    }
     capture.timers.push(window.setInterval(() => this.tick(capture), 100));
     capture.timers.push(window.setInterval(() => void this.heartbeat(), HEARTBEAT_MS));
     for (const track of media.getAudioTracks()) {
@@ -573,10 +655,13 @@ export class TalkController {
       sessionId: capture.sessionId,
       index: capture.nextIndex++,
     };
+    let markClosed!: () => void;
     const segment: OpenSegment = {
       recorder,
       key,
       startedAt: Date.now(),
+      elapsedMs: 0,
+      closed: new Promise<void>((resolve) => (markClosed = resolve)),
       writes: this.outbox.begin({
         ...key,
         startedAt: Date.now(),
@@ -594,28 +679,43 @@ export class TalkController {
         .catch(report);
     });
     recorder.addEventListener("stop", () => {
-      const durationMs = Date.now() - segment.startedAt;
+      const durationMs = segment.elapsedMs;
       segment.writes = segment.writes
         .then(() => this.outbox.complete(key, durationMs))
         .catch(report)
         .finally(() => {
           this.live.delete(keyString(key));
+          capture.open.delete(segment);
+          markClosed();
           void this.kickUpload();
         });
     });
     this.live.add(keyString(key));
-    recorder.start(CHUNK_MS);
+    try {
+      recorder.start(CHUNK_MS);
+    } catch (error) {
+      this.live.delete(keyString(key));
+      throw error;
+    }
+    capture.open.add(segment);
     capture.current = segment;
   }
 
-  private tick(capture: Capture): void {
+  /** Adds the time since the last tick to the open segment; returns it. */
+  private advance(capture: Capture): number {
     const now = performance.now();
-    const dt = now - capture.lastTick;
+    const dt = tickGap(now - capture.lastTick);
     capture.lastTick = now;
+    if (capture.current) capture.current.elapsedMs += dt;
+    return dt;
+  }
+
+  private tick(capture: Capture): void {
+    const dt = this.advance(capture);
     capture.analyser.getFloatTimeDomainData(capture.samples);
     const { quietForMs } = capture.tracker.push(rmsOf(capture.samples), dt);
     const current = capture.current;
-    if (current && shouldCut(this.policy, Date.now() - current.startedAt, quietForMs)) {
+    if (current && shouldCut(this.policy, current.elapsedMs, quietForMs)) {
       // Open the next recorder before stopping this one so no audio falls
       // between them; a few milliseconds of overlap is harmless.
       this.openSegment(capture);
@@ -630,16 +730,13 @@ export class TalkController {
     if (!capture) return;
     this.capture = null;
     for (const timer of capture.timers) clearInterval(timer);
+    this.advance(capture);
     const current = capture.current;
-    if (current && current.recorder.state !== "inactive") {
-      const stopped = new Promise<void>((resolve) =>
-        current.recorder.addEventListener("stop", () => resolve(), { once: true }),
-      );
-      current.recorder.stop();
-      await stopped;
-    }
-    await current?.writes;
-    for (const track of capture.stream.getTracks()) track.stop();
+    if (current && current.recorder.state !== "inactive") current.recorder.stop();
+    // Every segment, including one a cut is still closing, is sealed before
+    // the lock goes: another window seals unfinished segments once it's free.
+    await Promise.all([...capture.open].map((segment) => segment.closed));
+    stopTracks(capture.stream);
     void capture.audio.close().catch(() => {});
     void capture.wakeLock?.release().catch(() => {});
     const started = this.state.captureStartedAt;
@@ -656,15 +753,20 @@ export class TalkController {
     // a phone). Keep what was recorded and try to reopen the microphone.
     await this.stopCapture();
     this.set({ phase: "starting" });
+    const epoch = this.startEpoch;
     while (this.restartAttempts < 3) {
       this.restartAttempts++;
       await new Promise((resolve) => setTimeout(resolve, 1000 * this.restartAttempts));
+      if (epoch !== this.startEpoch) return;
       if (document.visibilityState !== "visible") break;
       try {
-        if (!(await this.acquireLock())) break;
-        await this.startCapture();
+        const locked = await this.acquireLock();
+        if (this.cancelled(epoch, locked)) return;
+        if (!locked) break;
+        await this.startCapture(epoch);
         return;
-      } catch {
+      } catch (error) {
+        if (error instanceof StartCancelled) return;
         // try again
       }
     }
@@ -725,7 +827,7 @@ export class TalkController {
   private async maybeFinish(): Promise<void> {
     const id = this.state.recordingId;
     if (this.state.phase !== "finalizing" || !id || !this.rpc) return;
-    const waiting = (await this.outbox.all()).some((segment) => segment.recordingId === id);
+    const waiting = (await this.outbox.all()).some((segment) => segment.recordingId === id && !segment.rejected);
     if (waiting) return;
     const { kind } = this.state;
     let recording: Recording;
@@ -998,8 +1100,8 @@ export class TalkController {
   private async drain(): Promise<void> {
     const rpc = this.rpc;
     if (!rpc) return;
-    let segments = await this.outbox.all().catch(() => []);
-    for (const segment of segments.filter((s) => s.complete)) {
+    let segments = (await this.outbox.all().catch(() => [])).filter((s) => !s.rejected);
+    for (const segment of segments.filter(isUploadable)) {
       this.set({ pendingUploads: segments.length });
       try {
         await rpc.call("segment_put", {
@@ -1007,11 +1109,20 @@ export class TalkController {
           sessionId: segment.sessionId,
           index: segment.index,
           startedAt: segment.startedAt,
-          durationMs: Math.round(segment.durationMs ?? 0),
+          durationMs: uploadDuration(segment.durationMs),
           mimeType: segment.mimeType,
           audioBase64: toBase64(segment.parts),
         });
       } catch (error) {
+        if (isPermanentRejection(error)) {
+          // Retrying can't help, and would hold up every segment behind it.
+          // Keep the audio locally, set aside, and move on.
+          console.warn(`Talk set aside a segment the server refused: ${message(error)}`, segment);
+          toast.error(`Talk couldn't upload part of a recording and kept it on this device: ${message(error)}`);
+          await this.outbox.reject(segment, message(error));
+          segments = segments.filter((s) => s !== segment);
+          continue;
+        }
         if (!/No recording/.test(message(error))) {
           this.set({ uploadError: message(error) });
           this.scheduleUpload();
@@ -1063,6 +1174,25 @@ export class TalkController {
     const { recordingId, kind, threadId, field } = this.state;
     if (recordingId) {
       this.persist({ recordingId, kind, phase, threadId, field, insert: this.insertOnDone, composePath: this.composePath });
+    }
+  }
+
+  /**
+   * Seals segments a closed or crashed page left open. Another window's live
+   * segments are left alone: only the window holding the capture lock
+   * records, so they are orphans only while the lock is free (or ours).
+   */
+  private async sealOrphans(): Promise<void> {
+    const seal = (lockFree: boolean | null) =>
+      this.outbox.sealOrphans((segment) =>
+        isOrphan(segment, this.live.has(keyString(segment)), lockFree, Date.now()),
+      );
+    if (this.releaseLock) {
+      await seal(true);
+    } else if (!navigator.locks) {
+      await seal(null);
+    } else {
+      await navigator.locks.request(LOCK_NAME, { ifAvailable: true }, (lock) => seal(lock !== null));
     }
   }
 
