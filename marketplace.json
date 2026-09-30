@@ -48,30 +48,6 @@
       }
     },
     {
-      "id": "artifacts",
-      "displayName": "Studio Artifacts",
-      "description": "Part of BB Studio. Keep the images, pages, reports and files your agents make, in Studio's collection.",
-      "icon": {
-        "url": "./packages/bb-plugin-artifacts/assets/icon.svg"
-      },
-      "tags": [
-        "files",
-        "artifacts",
-        "bb-studio"
-      ],
-      "author": {
-        "name": "Patrick Lee",
-        "github": "patleeman"
-      },
-      "source": {
-        "git": {
-          "url": "https://github.com/patleeman/bb-plugins.git",
-          "subdir": "packages/bb-plugin-artifacts",
-          "ref": "main"
-        }
-      }
-    },
-    {
       "id": "automation-calendar",
       "displayName": "Automation Calendar",
       "description": "Explore and manage BB automations on a calendar.",
@@ -89,31 +65,6 @@
         "git": {
           "url": "https://github.com/patleeman/bb-plugins.git",
           "subdir": "packages/bb-plugin-automation-calendar",
-          "ref": "main"
-        }
-      }
-    },
-    {
-      "id": "bot-teams",
-      "displayName": "Studio Teams",
-      "description": "Part of BB Studio. Persistent bots that collaborate in channels, delegate work, and keep their own workspaces and memory.",
-      "icon": "Bot",
-      "tags": [
-        "agents",
-        "collaboration",
-        "channels",
-        "automation",
-        "notifications",
-        "studio"
-      ],
-      "author": {
-        "name": "Patrick Lee",
-        "github": "patleeman"
-      },
-      "source": {
-        "git": {
-          "url": "https://github.com/patleeman/bb-plugins.git",
-          "subdir": "packages/bb-plugin-bot-teams",
           "ref": "main"
         }
       }
@@ -206,30 +157,6 @@
       }
     },
     {
-      "id": "excalidraw",
-      "displayName": "Studio Draw",
-      "description": "Part of BB Studio. Sketch Excalidraw drawings with your agents, keep them in Studio's collection, and attach them to conversations.",
-      "icon": {
-        "url": "./packages/bb-plugin-excalidraw/assets/icon.svg"
-      },
-      "tags": [
-        "drawing",
-        "collaboration",
-        "bb-studio"
-      ],
-      "author": {
-        "name": "Patrick Lee",
-        "github": "patleeman"
-      },
-      "source": {
-        "git": {
-          "url": "https://github.com/patleeman/bb-plugins.git",
-          "subdir": "packages/bb-plugin-excalidraw",
-          "ref": "main"
-        }
-      }
-    },
-    {
       "id": "gtd-sidebar",
       "displayName": "GTD Sidebar",
       "description": "An action-oriented sidebar that groups threads by who can act next.",
@@ -270,33 +197,6 @@
         "git": {
           "url": "https://github.com/patleeman/bb-plugins.git",
           "subdir": "packages/bb-plugin-omp",
-          "ref": "main"
-        }
-      }
-    },
-    {
-      "id": "pages",
-      "displayName": "Studio Pages",
-      "description": "Part of BB Studio. Collaborative pages you write with your agents. Mention a Studio Teams bot to hand it work, let one keep a page up to date, or explore what an agent noticed along the way.",
-      "icon": {
-        "url": "./packages/bb-plugin-pages/icons/pages.svg"
-      },
-      "tags": [
-        "productivity",
-        "documents",
-        "collaboration",
-        "bots",
-        "agents",
-        "bb-studio"
-      ],
-      "author": {
-        "name": "Patrick Lee",
-        "github": "patleeman"
-      },
-      "source": {
-        "git": {
-          "url": "https://github.com/patleeman/bb-plugins.git",
-          "subdir": "packages/bb-plugin-pages",
           "ref": "main"
         }
       }
@@ -365,105 +265,6 @@
       }
     },
     {
-      "id": "studio",
-      "displayName": "Studio",
-      "description": "The home of BB Studio. One collection for your pages, recordings, drawings, tasks and bots: search, group with tags, filter by project, and hand anything to an agent. Add-ons plug in.",
-      "icon": {
-        "url": "./packages/bb-plugin-studio/icons/studio.svg"
-      },
-      "tags": [
-        "productivity",
-        "documents",
-        "collaboration",
-        "bb-studio"
-      ],
-      "author": {
-        "name": "Patrick Lee",
-        "github": "patleeman"
-      },
-      "source": {
-        "git": {
-          "url": "https://github.com/patleeman/bb-plugins.git",
-          "subdir": "packages/bb-plugin-studio",
-          "ref": "main"
-        }
-      }
-    },
-    {
-      "id": "studio-chat",
-      "displayName": "Studio Chat",
-      "description": "Part of BB Studio. A chat that floats over your pages, drawings and other Studio items, knows which one you're looking at, and can hold any thread.",
-      "icon": {
-        "url": "./packages/bb-plugin-studio-chat/assets/icon.svg"
-      },
-      "tags": [
-        "productivity",
-        "collaboration",
-        "agents",
-        "bb-studio"
-      ],
-      "author": {
-        "name": "Patrick Lee",
-        "github": "patleeman"
-      },
-      "source": {
-        "git": {
-          "url": "https://github.com/patleeman/bb-plugins.git",
-          "subdir": "packages/bb-plugin-studio-chat",
-          "ref": "main"
-        }
-      }
-    },
-    {
-      "id": "talk",
-      "displayName": "Studio Talk",
-      "description": "Part of BB Studio. Long-form, durable dictation and recording: saves audio as you speak, transcribes it with your voice subscription, and keeps every recording linkable and @-mentionable.",
-      "icon": {
-        "url": "./packages/bb-plugin-talk/icons/talk.svg"
-      },
-      "tags": [
-        "productivity",
-        "voice",
-        "dictation",
-        "bb-studio"
-      ],
-      "author": {
-        "name": "Patrick Lee",
-        "github": "patleeman"
-      },
-      "source": {
-        "git": {
-          "url": "https://github.com/patleeman/bb-plugins.git",
-          "subdir": "packages/bb-plugin-talk",
-          "ref": "main"
-        }
-      }
-    },
-    {
-      "id": "studio-tasks",
-      "displayName": "Studio Tasks",
-      "description": "Part of BB Studio. A board of tasks you can hand to agents; each task follows its thread from working to review.",
-      "icon": {
-        "url": "./packages/bb-plugin-studio-tasks/assets/icon.svg"
-      },
-      "tags": [
-        "tasks",
-        "agents",
-        "bb-studio"
-      ],
-      "author": {
-        "name": "Patrick Lee",
-        "github": "patleeman"
-      },
-      "source": {
-        "git": {
-          "url": "https://github.com/patleeman/bb-plugins.git",
-          "subdir": "packages/bb-plugin-studio-tasks",
-          "ref": "main"
-        }
-      }
-    },
-    {
       "id": "tok-speed",
       "displayName": "Tok Speed",
       "description": "Paints a small visible provider-output tokens-per-second figure in every assistant message's hover menu — hidden reasoning and host tool time excluded.",
@@ -480,29 +281,6 @@
         "git": {
           "url": "https://github.com/patleeman/bb-plugins.git",
           "subdir": "packages/bb-plugin-tok-speed",
-          "ref": "main"
-        }
-      }
-    },
-    {
-      "id": "thread-list-plus",
-      "displayName": "Studio Sidebar",
-      "description": "BB's thread list with a section for each Studio app above your threads, and New project in its menu.",
-      "icon": "ListView",
-      "tags": [
-        "sidebar",
-        "studio",
-        "threads",
-        "projects"
-      ],
-      "author": {
-        "name": "Patrick Lee",
-        "github": "patleeman"
-      },
-      "source": {
-        "git": {
-          "url": "https://github.com/patleeman/bb-plugins.git",
-          "subdir": "packages/bb-plugin-thread-list-plus",
           "ref": "main"
         }
       }

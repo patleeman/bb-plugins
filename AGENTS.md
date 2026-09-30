@@ -1,13 +1,10 @@
 # Agent instructions
 
-## BB Studio packages are frozen
+## BB Studio lives elsewhere
 
-`packages/studio-kit` and the Studio plugins (`bb-plugin-studio`,
-`bb-plugin-studio-chat`, `bb-plugin-pages`, `bb-plugin-talk`,
-`bb-plugin-excalidraw`, `bb-plugin-artifacts`, `bb-plugin-studio-tasks`,
-`bb-plugin-bot-teams`, `bb-plugin-thread-list-plus`) are maintained in
-https://github.com/patleeman/bb-studio. Don't change them here; make the
-change in bb-studio. They will be removed from this repository.
+The Studio plugins and `studio-kit` moved to
+https://github.com/patleeman/bb-studio. Make Studio changes there, and don't
+add them back to this repository.
 
 ## Marketplace maintenance
 

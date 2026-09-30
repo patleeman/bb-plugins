@@ -6,7 +6,7 @@ set -eu
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ok=0
 for pkg in "$REPO_DIR"/packages/bb-plugin-*/; do
-	[ -d "$pkg" ] || continue
+	[ -f "$pkg/package.json" ] || continue
 	name="$(basename "$pkg")"
 	echo "==> bb plugin install $name"
 	if bb plugin install "$pkg" --yes; then
@@ -19,4 +19,4 @@ done
 
 echo
 echo "Installed $ok plugin(s). Installed plugins from this repo:"
-bb plugin list 2>/dev/null | grep -E "^(agent-checklists|cobalt2|copy-session-id|ds4|emoji-react|excalidraw|plannotator|prime-agent|traces)@" || true
+bb plugin list 2>/dev/null | grep -E "^(agent-checklists|cobalt2|copy-session-id|ds4|emoji-react|plannotator|prime-agent|traces)@" || true

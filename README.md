@@ -6,10 +6,9 @@ Plugins for [bb](https://github.com/patleeman/bb).
 
 The Studio plugins (Studio, Studio Chat, Pages, Talk, Draw, Artifacts, Tasks,
 Teams and Sidebar) and `studio-kit` now live in
-[patleeman/bb-studio](https://github.com/patleeman/bb-studio), which is their
-source of truth. The copies in this repository are frozen and will be removed.
-Install them from bb-studio instead; its README explains how to switch an
-existing install.
+[patleeman/bb-studio](https://github.com/patleeman/bb-studio). Install them
+from there; its README explains how to switch an install from this
+marketplace.
 
 ## Marketplace
 
@@ -41,7 +40,7 @@ For a local checkout, run this from the repository root:
 bb marketplace add path:.
 ```
 
-The root [`marketplace.json`](marketplace.json) lists all 19 plugins. Each
+The root [`marketplace.json`](marketplace.json) lists all 15 plugins. Each
 entry installs its package from this repository's `main` branch, including
 when the catalog is added from a local checkout. Refresh the catalog with:
 
@@ -57,9 +56,6 @@ description, and icon aligned with its package manifest.
 
 - [`bb-plugin-automation-calendar`](packages/bb-plugin-automation-calendar/) — view BB
   automations by day, three days, week, or month and manage their schedules.
-- [`bb-plugin-bot-teams`](packages/bb-plugin-bot-teams/) — persistent agents with their
-  own workspaces, mission and memory files, profiles, sidebar channels, and
-  group consultations that replace the former Council plugin.
 - [`bb-plugin-agent-checklists`](packages/bb-plugin-agent-checklists/) — attach
   persisted structured checklists to threads, update them with agent tools,
   and continue incomplete work automatically.
@@ -77,8 +73,6 @@ description, and icon aligned with its package manifest.
   color palette to bb.
 - [`bb-plugin-ds4`](packages/bb-plugin-ds4/) — run and administer a local
   DwarfStar (`ds4`) inference server from bb.
-- [`bb-plugin-excalidraw`](packages/bb-plugin-excalidraw/) — create, edit, and
-  attach Excalidraw drawings in conversations.
 - [`bb-plugin-prime-agent`](packages/bb-plugin-prime-agent/) — register Prime
   Agent as an ACP-based bb provider (`acp-prime-agent`).
 - [`bb-plugin-emoji-react`](packages/bb-plugin-emoji-react/) — emoji reactions
