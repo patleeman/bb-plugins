@@ -59,8 +59,6 @@ description, and icon aligned with its package manifest.
 - [`bb-plugin-smart-queue`](packages/bb-plugin-smart-queue/) — decide whether a
   message sent to a busy thread steers the running turn or waits as a
   follow-up, using Jev with a provider-model fallback.
-- [`bb-plugin-spool`](packages/bb-plugin-spool/) — connect BB agents to Spool's
-  read-only, audited context MCP and bundled usage skill.
 - [`bb-plugin-gtd-sidebar`](packages/bb-plugin-gtd-sidebar/) — replace the thread
   list with a GTD-style inbox organized by workflow state.
 - [`bb-plugin-plannotator`](packages/bb-plugin-plannotator/) — embed the upstream

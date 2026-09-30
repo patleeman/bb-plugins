@@ -358,27 +358,6 @@
       }
     },
     {
-      "id": "spool",
-      "displayName": "Spool",
-      "description": "Give BB agents a read-only, audited Spool context connection and usage skill.",
-      "icon": "Database",
-      "tags": [
-        "context",
-        "integrations"
-      ],
-      "author": {
-        "name": "Patrick Lee",
-        "github": "patleeman"
-      },
-      "source": {
-        "git": {
-          "url": "https://github.com/patleeman/bb-plugins.git",
-          "subdir": "packages/bb-plugin-spool",
-          "ref": "main"
-        }
-      }
-    },
-    {
       "id": "talk",
       "displayName": "Talk",
       "description": "Long-form, durable dictation and recording: saves audio as you speak, transcribes it with your voice subscription, and keeps every recording linkable and @-mentionable.",

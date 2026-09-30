@@ -1003,30 +1003,6 @@ const captures = [
     },
   },
   {
-    id: "spool",
-    packageDir: "bb-plugin-spool",
-    setup: async (client) => {
-      await client.navigate("/plugins/spool/spool");
-      await client.waitForText("Spool for BB");
-      // The chip reports the live Agent Plugins bridge; assert it matches.
-      const bridge = await client.evaluate(`fetch("/api/v1/plugins/spool/rpc/bridge", { method: "POST", headers: { "content-type": "application/json" }, body: "null" }).then((response) => response.json()).then((body) => body.result.state)`, true);
-      const chips = {
-        ready: "MCP ready",
-        "no-bridge": "Agent Plugins missing",
-        "not-installed": "MCP not installed",
-        disabled: "MCP disabled",
-        "needs-approval": "Needs approval",
-        error: "MCP error",
-      };
-      if (!chips[bridge]) throw new Error(`Unexpected Spool bridge state: ${bridge}`);
-      await client.waitForText(chips[bridge]);
-      await client.waitForText("Connect it once");
-      await client.waitForText("MCP surface");
-      await client.waitForText("Trust boundaries");
-      await client.waitForText("Audited:");
-    },
-  },
-  {
     id: "gtd-sidebar",
     packageDir: "bb-plugin-gtd-sidebar",
     setup: async (client) => {
@@ -1652,7 +1628,7 @@ try {
       const outputPath = join(repoRoot, "packages", capture.packageDir, "assets", capture.fileName ?? "staged-preview.png");
       // Use BB's real collapsed-sidebar state so publication does not expose
       // unrelated local projects/threads alongside the deterministic fixtures.
-      const privateSidebar = !capture.showSidebar && (capture.privateSidebar || (capture.packageDir === "bb-plugin-bot-teams" && capture.id !== "bots-forks") || capture.id === "spool" || capture.id === "automation-calendar" || capture.id === "smart-queue");
+      const privateSidebar = !capture.showSidebar && (capture.privateSidebar || (capture.packageDir === "bb-plugin-bot-teams" && capture.id !== "bots-forks") || capture.id === "automation-calendar" || capture.id === "smart-queue");
       if (privateSidebar) {
         await client.evaluate(`document.querySelector('button[aria-label^="Toggle sidebar"]')?.click()`);
         await sleep(350);

@@ -19,7 +19,6 @@
     { "name": "plannotator", "source": "./packages/bb-plugin-plannotator" },
     { "name": "prime-agent", "source": "./packages/bb-plugin-prime-agent" },
     { "name": "smart-queue", "source": "./packages/bb-plugin-smart-queue" },
-    { "name": "spool", "source": "./packages/bb-plugin-spool" },
     { "name": "talk", "source": "./packages/bb-plugin-talk" },
     { "name": "tok-speed", "source": "./packages/bb-plugin-tok-speed" },
     { "name": "thread-list-plus", "source": "./packages/bb-plugin-thread-list-plus" },
