@@ -1,4 +1,4 @@
-// The board: four columns you drag tasks between, filtered by project and
+// The board: customizable columns you drag tasks between, filtered by project and
 // assignee. Each card shows who acts next when an agent has the task.
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -19,8 +19,9 @@ import {
 } from "@bb-studio/kit/app";
 import { errorMessage, plural } from "@bb-studio/kit/format";
 import { useBbContext } from "@get-bb/plugin-sdk/app";
-import { STATUSES, STATUS_LABELS, type TaskStatus } from "../src/shared";
+import { DEFAULT_COLUMNS, type TaskColumn, type TaskStatus } from "../src/shared";
 import { AssigneeChip, DueChip, HandoffBadge, STATUS_ICONS } from "./pieces";
+import { ColumnsEditor } from "./columns-editor";
 import { SPIN, useTasksRpc, type Task } from "./types";
 
 /** Done keeps growing; show the newest this many at a time. */
@@ -76,6 +77,9 @@ export function Board({
   const context = useBbContext();
   const projects = useProjects();
   const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [columns, setColumns] = useState<TaskColumn[]>(DEFAULT_COLUMNS);
+  const [revision, setRevision] = useState(0);
+  const [editingColumns, setEditingColumns] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [project, setProject] = useStored<ProjectFilter>("tasks:project", "all");
   const [assignee, setAssignee] = useStored<AssigneeFilter>("tasks:assignee", "everyone");
@@ -89,6 +93,8 @@ export function Board({
       (result) => {
         if (request !== latest.current) return;
         setTasks(result.tasks);
+        setColumns(result.columns);
+        setRevision(result.revision);
         setError(null);
       },
       (failure) => request === latest.current && setError(errorMessage(failure)),
@@ -165,10 +171,14 @@ export function Board({
         <ProjectPicker projects={projects} value={projectFilter} onChange={setProject} />
         <AssigneePicker value={assignee} onChange={setAssignee} />
         {viewToggle}
+        <button type="button" className={GHOST_BUTTON} disabled={!tasks} onClick={() => setEditingColumns((open) => !open)}>
+          <Icon name="GridView" /> Columns
+        </button>
         <button type="button" className={OUTLINE_BUTTON} onClick={() => setAdding("todo")}>
           <Icon name="Plus" /> New task
         </button>
       </div>
+      {editingColumns ? <ColumnsEditor columns={columns} revision={revision} onClose={() => setEditingColumns(false)} onSaved={() => { setEditingColumns(false); refetch(); }} /> : null}
       {error && !tasks ? (
         <div role="alert" className="px-6 text-sm text-destructive">
           {error}
@@ -179,13 +189,15 @@ export function Board({
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto px-6 pb-6 max-md:px-3">
-          {STATUSES.map((status) => {
+          {columns.map(({ id: status, label }) => {
             const cards = column(visible, status);
             const shown = status === "done" ? cards.slice(0, doneShown) : cards;
             return (
               <Column
                 key={status}
                 status={status}
+                label={label}
+                columns={columns}
                 count={cards.length}
                 tasks={shown}
                 projects={projects}
@@ -231,6 +243,8 @@ export function Board({
 
 function Column({
   status,
+  label,
+  columns,
   count,
   tasks,
   projects,
@@ -245,6 +259,8 @@ function Column({
   footer,
 }: {
   status: TaskStatus;
+  label: string;
+  columns: TaskColumn[];
   count: number;
   tasks: Task[];
   projects: Project[];
@@ -273,7 +289,7 @@ function Column({
 
   return (
     <section
-      aria-label={STATUS_LABELS[status]}
+      aria-label={label}
       className={cn(
         "flex w-72 min-w-64 shrink-0 flex-col rounded-lg bg-muted/40 max-md:w-64",
         dropAt !== null && "bg-state-hover ring-1 ring-border",
@@ -300,12 +316,12 @@ function Column({
       }}
     >
       <div className="flex items-center gap-2 px-3 pt-3 pb-2">
-        <Icon name={STATUS_ICONS[status]} className="size-4 text-muted-foreground" />
-        <h2 className="text-sm font-medium">{STATUS_LABELS[status]}</h2>
+        <Icon name={STATUS_ICONS[status] ?? "Circle"} className="size-4 text-muted-foreground" />
+        <h2 title={label} className="min-w-0 truncate text-sm font-medium">{label}</h2>
         <span className="text-xs text-muted-foreground tabular-nums">{count}</span>
         <button
           type="button"
-          aria-label={`Add to ${STATUS_LABELS[status]}`}
+          aria-label={`Add to ${label}`}
           title="Add a task"
           className="ml-auto flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-state-hover hover:text-foreground"
           onClick={onAdd}
@@ -318,7 +334,7 @@ function Column({
         {tasks.map((task, index) => (
           <div key={task.id} className="relative">
             {dropAt === index ? <DropLine /> : null}
-            <TaskCard task={task} projects={projects} showProject={showProject} onOpen={onOpen} onMove={onMove} onArchive={onArchive} />
+            <TaskCard columns={columns} task={task} projects={projects} showProject={showProject} onOpen={onOpen} onMove={onMove} onArchive={onArchive} />
           </div>
         ))}
         {dropAt !== null && dropAt >= tasks.length ? <DropLine last /> : null}
@@ -359,6 +375,7 @@ function NewCard({ onDone }: { onDone(title: string | null): void }) {
 
 function TaskCard({
   task,
+  columns,
   projects,
   showProject,
   onOpen,
@@ -366,6 +383,7 @@ function TaskCard({
   onArchive,
 }: {
   task: Task;
+  columns: TaskColumn[];
   projects: Project[];
   showProject: boolean;
   onOpen(id: string): void;
@@ -414,11 +432,11 @@ function TaskCard({
               <Icon name="MoreHorizontal" className="size-4" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48" onClick={(event) => event.stopPropagation()}>
+          <DropdownMenuContent align="end" className="max-h-80 w-48 overflow-y-auto" onClick={(event) => event.stopPropagation()}>
             <DropdownMenuLabel className="text-xs text-muted-foreground">Move to</DropdownMenuLabel>
-            {STATUSES.map((status) => (
+            {columns.map(({ id: status, label }) => (
               <DropdownMenuItem key={status} disabled={status === task.status} onSelect={() => onMove(task, status)}>
-                <Icon name={STATUS_ICONS[status]} className="size-4" /> {STATUS_LABELS[status]}
+                <Icon name={STATUS_ICONS[status] ?? "Circle"} className="size-4" /> {label}
               </DropdownMenuItem>
             ))}
             <DropdownMenuSeparator />

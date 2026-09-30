@@ -1876,6 +1876,85 @@ const captures = [
     },
   },
   {
+    id: "studio-tasks-columns",
+    packageDir: "bb-plugin-studio-tasks",
+    fileName: "columns-preview.png",
+    privateSidebar: true,
+    setup: async (client) => {
+      const original = await pluginRpc("studio-tasks", "board", {});
+      const ids = [];
+      const cleanup = async () => {
+        for (const id of ids) await pluginRpc("studio-tasks", "delete", { id });
+        const current = await pluginRpc("studio-tasks", "board", {});
+        await pluginRpc("studio-tasks", "saveColumns", { columns: original.columns, revision: current.revision });
+      };
+      try {
+        await client.navigate("/plugins/studio-tasks/tasks");
+        await client.waitForText("New task");
+        await client.clickButtonText("Columns");
+        await client.waitForText("Customize columns");
+        await client.clickButtonText("Add column");
+        const replaceName = async (label, value) => {
+          await client.evaluate(`(() => {
+            const input = document.querySelector('input[aria-label="' + ${JSON.stringify(label)} + '"]');
+            if (!input) throw new Error('Column name input missing');
+            input.focus(); input.select();
+          })()`);
+          await client.command("Input.insertText", { text: value });
+        };
+        await replaceName("Column 1 name", "Backlog");
+        await replaceName(`Column ${original.columns.length + 1} name`, "Waiting");
+        await client.clickAriaButtonWithPointer("Move Waiting left");
+        await client.clickButtonText("Save columns");
+        await client.waitForText("Columns saved");
+        const saved = await pluginRpc("studio-tasks", "board", {});
+        const waiting = saved.columns.find((column) => column.label === "Waiting");
+        if (!waiting || saved.columns[0].label !== "Backlog" || saved.columns.at(-2).id !== waiting.id)
+          throw new Error("Live column editor did not save names and order");
+        const { task } = await pluginRpc("studio-tasks", "create", { title: "Get design approval", status: waiting.id, projectId });
+        ids.push(task.id);
+        await client.navigate("/plugins/studio-tasks/tasks");
+        await client.waitForText("Get design approval");
+        await client.waitForText("Waiting");
+        await client.clickButtonText("Columns");
+        await client.waitForInputValue("Column 1 name", "Backlog");
+        await client.waitForInputValue(`Column ${saved.columns.length - 1} name`, "Waiting");
+        await client.waitForText("Workflow: To do");
+        await client.waitForText("Save columns");
+        await client.command("Emulation.setDeviceMetricsOverride", {
+          width: 390, height: 844, deviceScaleFactor: 1, mobile: false,
+        });
+        await sleep(300);
+        // BB switches panel shells at its mobile breakpoint, which remounts the board.
+        if (!await client.evaluate(`Boolean(document.querySelector('form[aria-label="Customize columns"]'))`)) {
+          await client.clickButtonText("Columns");
+        }
+        await client.waitForInputValue("Column 1 name", "Backlog");
+        await client.capture(join(tmpdir(), "bb-task-columns-mobile.png"));
+        await client.evaluate(`(() => {
+          if (document.documentElement.scrollWidth > window.innerWidth)
+            throw new Error('Column editor overflows the mobile page');
+          const form = document.querySelector('form[aria-label="Customize columns"]');
+          if (!form || form.getBoundingClientRect().width > window.innerWidth)
+            throw new Error('Column editor is missing or wider than the mobile viewport');
+        })()`);
+        await client.command("Emulation.setDeviceMetricsOverride", {
+          width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false,
+        });
+        await sleep(300);
+        if (!await client.evaluate(`Boolean(document.querySelector('form[aria-label="Customize columns"]'))`)) {
+          await client.clickButtonText("Columns");
+        }
+        await client.waitForInputValue("Column 1 name", "Backlog");
+        await sleep(500);
+      } catch (error) {
+        await cleanup();
+        throw error;
+      }
+      return cleanup;
+    },
+  },
+  {
     id: "ua-fetch",
     packageDir: "bb-plugin-ua-fetch",
     setup: async (client) => {

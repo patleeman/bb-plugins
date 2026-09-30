@@ -11,7 +11,8 @@ export const REALTIME_CHANNEL = "tasks";
 export const TASK_UPDATE_TYPE = "task:updated";
 
 export const STATUSES = ["todo", "in_progress", "review", "done"] as const;
-export type TaskStatus = (typeof STATUSES)[number];
+export type TaskStatus = string;
+export type TaskColumn = { id: string; label: string };
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {
   todo: "To do",
@@ -21,8 +22,11 @@ export const STATUS_LABELS: Record<TaskStatus, string> = {
 };
 
 export function isStatus(value: unknown): value is TaskStatus {
-  return typeof value === "string" && (STATUSES as readonly string[]).includes(value);
+  return typeof value === "string" && /^(todo|in_progress|review|done|col_[0-9a-z]{16})$/.test(value);
 }
+
+export const DEFAULT_COLUMNS: TaskColumn[] = STATUSES.map((id) => ({ id, label: STATUS_LABELS[id]! }));
+export const COLUMNS_UPDATE_TYPE = "columns:updated";
 
 /** Who a task is for: you, an agent (through a handoff), or nobody yet. */
 export type Assignee = "me" | "agent" | null;

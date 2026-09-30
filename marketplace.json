@@ -436,7 +436,7 @@
     {
       "id": "studio-tasks",
       "displayName": "Studio Tasks",
-      "description": "Part of BB Studio. A board of tasks you can hand to agents; each task follows its thread from working to review.",
+      "description": "Part of BB Studio. A customizable board of tasks you can hand to agents; each task follows its thread from working to review.",
       "icon": {
         "url": "./packages/bb-plugin-studio-tasks/assets/icon.svg"
       },

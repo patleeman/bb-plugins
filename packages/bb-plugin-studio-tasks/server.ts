@@ -16,12 +16,11 @@ import { handoffInput } from "./src/server/prompt";
 import { assigneeLabel, registerStudio } from "./src/server/studio";
 import { MIGRATIONS, TaskStore, type HandoffRow, type LinkRow, type TaskRow, type Writer } from "./src/server/store";
 import {
+  COLUMNS_UPDATE_TYPE,
   HANDOFF_LABELS,
   HANDOFF_STATES,
   PLUGIN_ID,
   REALTIME_CHANNEL,
-  STATUSES,
-  STATUS_LABELS,
   TASK_UPDATE_TYPE,
   formatDue,
   isDay,
@@ -38,7 +37,9 @@ const LINKABLE_PLUGINS = ["pages", "talk", "excalidraw", "artifacts"];
 const idSchema = z.string().min(1).max(100);
 const threadIdSchema = z.string().min(1).max(200);
 const projectIdSchema = z.string().min(1).max(200);
-const statusSchema = z.enum(STATUSES);
+const statusSchema = z.string().refine(isStatus, "Invalid column ID.");
+const columnSchema = z.object({ id: statusSchema, label: z.string().trim().min(1).max(60) });
+const configSchema = z.object({ columns: z.array(columnSchema).min(4).max(20), revision: z.number().int().nonnegative() });
 const assigneeSchema = z.enum(["me", "agent"]).nullable();
 const daySchema = z.string().refine(isDay, "Use a day like 2026-10-01.").nullable();
 
@@ -59,6 +60,7 @@ const taskSchema = z.object({
   title: z.string(),
   description: z.string(),
   status: statusSchema,
+  statusLabel: z.string(),
   projectId: z.string().nullable(),
   due: z.string().nullable(),
   assignee: assigneeSchema,
@@ -87,11 +89,15 @@ const linkableSchema = linkSchema.extend({ kind: z.string(), icon: z.string().nu
 export const rpcContract = defineRpcContract({
   board: {
     input: z.object({ includeArchived: z.boolean().optional() }),
-    output: z.object({ tasks: z.array(taskSchema) }),
+    output: z.object({ tasks: z.array(taskSchema), columns: z.array(columnSchema), revision: z.number() }),
   },
   get: {
     input: z.object({ id: idSchema }),
-    output: z.object({ task: taskSchema.nullable(), links: z.array(linkSchema), handoffs: z.array(handoffSchema) }),
+    output: z.object({ task: taskSchema.nullable(), links: z.array(linkSchema), handoffs: z.array(handoffSchema), columns: z.array(columnSchema) }),
+  },
+  saveColumns: {
+    input: configSchema,
+    output: z.object({ ok: z.boolean() }),
   },
   create: {
     input: z.object({
@@ -239,6 +245,7 @@ export default async function plugin(bb: BbPluginApi) {
       title: task.title,
       description: task.description,
       status: task.status,
+      statusLabel: store.statusLabel(task.status),
       projectId: task.project_id,
       due: task.due,
       assignee: task.assignee,
@@ -409,7 +416,7 @@ export default async function plugin(bb: BbPluginApi) {
 
   function taskLine(task: TaskRow): string {
     const handoff = store.latestHandoff(task.id);
-    const parts = [STATUS_LABELS[task.status], assigneeLabel(task)];
+    const parts = [store.statusLabel(task.status), assigneeLabel(task)];
     if (task.due) parts.push(`due ${formatDue(task.due)} (${task.due})`);
     if (handoff) parts.push(HANDOFF_LABELS[handoff.state]);
     return `${task.title || "Untitled"} (id ${task.id}): ${parts.join(", ")}. Link ${taskHref(task.id)}`;
@@ -435,12 +442,22 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.rpc.register(rpcContract, {
     board({ includeArchived }) {
-      return { tasks: store.list({ includeArchived }).map(toDto) };
+      return { tasks: store.list({ includeArchived }).map(toDto), ...store.boardConfig() };
     },
     get({ id }) {
       const task = store.get(id);
-      if (!task) return { task: null, links: [], handoffs: [] };
-      return { task: toDto(task), links: store.links(id).map(toLinkDto), handoffs: store.handoffs(id).map(toHandoffDto) };
+      if (!task) return { task: null, links: [], handoffs: [], columns: store.boardConfig().columns };
+      return { task: toDto(task), links: store.links(id).map(toLinkDto), handoffs: store.handoffs(id).map(toHandoffDto), columns: store.boardConfig().columns };
+    },
+    saveColumns({ columns, revision }) {
+      store.saveColumns(columns, revision);
+      try {
+        bb.realtime.publish(REALTIME_CHANNEL, { type: COLUMNS_UPDATE_TYPE });
+      } catch {
+        // The next fetch still sees the saved configuration.
+      }
+      studioNotifier.changed();
+      return { ok: true };
     },
     create({ title, description, status, projectId, due, assignee }) {
       const task = store.create({ title, description, status, projectId, due, assignee, by: "user" });
@@ -570,7 +587,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "tasks_list",
     description:
-      "List tasks on the user's Studio Tasks board: id, title, status (To do, In progress, Review, Done), assignee, due date, and the handed-off thread's state.",
+      "List tasks and available columns on the user's Studio Tasks board: id, title, status, assignee, due date, and handoff state.",
     parameters: z.object({ status: statusSchema.optional(), query: z.string().max(200).optional() }),
     execute({ status, query }) {
       const needle = query?.trim().toLowerCase();
@@ -578,9 +595,10 @@ export default async function plugin(bb: BbPluginApi) {
         .list()
         .filter((task) => !status || task.status === status)
         .filter((task) => !needle || `${task.title} ${task.description}`.toLowerCase().includes(needle))
-        .sort((a, b) => STATUSES.indexOf(a.status) - STATUSES.indexOf(b.status) || a.rank - b.rank)
+        .sort((a, b) => store.statusOrder(a.status) - store.statusOrder(b.status) || a.rank - b.rank)
         .slice(0, 100);
-      return rows.length ? rows.map((task) => `- ${taskLine(task)}`).join("\n") : "No tasks match.";
+      const columns = store.boardConfig().columns.map((column) => `${column.label} (${column.id})`).join(", ");
+      return `Columns: ${columns}\n\n${rows.length ? rows.map((task) => `- ${taskLine(task)}`).join("\n") : "No tasks match."}`;
     },
   });
 
@@ -603,7 +621,7 @@ export default async function plugin(bb: BbPluginApi) {
     parameters: z.object({
       title: z.string().trim().min(1).max(300),
       description: z.string().max(20_000).optional(),
-      status: z.enum(["todo", "in_progress", "review"]).optional(),
+      status: statusSchema.refine((value) => value !== "done", "Only the user marks tasks done.").optional(),
       due: z.string().optional().describe("A day, like 2026-10-01."),
       assignee: z.enum(["me", "agent"]).optional().describe('"me" is the user.'),
     }),
@@ -623,7 +641,7 @@ export default async function plugin(bb: BbPluginApi) {
       "(Studio items, e.g. an artifact's id with pluginId \"artifacts\"). Only the user marks a task done.",
     parameters: z.object({
       id: idSchema.optional(),
-      status: z.enum(["todo", "in_progress", "review"]).optional(),
+      status: statusSchema.refine((value) => value !== "done", "Only the user marks tasks done.").optional(),
       note: z.string().max(2000).optional(),
       title: z.string().trim().min(1).max(300).optional(),
       description: z.string().max(20_000).optional(),
@@ -634,6 +652,7 @@ export default async function plugin(bb: BbPluginApi) {
       const task = id ? store.get(id) : threadTask(context.threadId);
       if (!task) return { content: [{ type: "text", text: id ? `Task ${id} not found.` : "This thread isn't working on a task. Pass an id." }], isError: true };
       if (due && !isDay(due)) return { content: [{ type: "text", text: "Give `due` as a day, like 2026-10-01." }], isError: true };
+      if (status && !store.hasStatus(status)) throw new Error("Column not found.");
       if (title !== undefined || description !== undefined || due !== undefined) store.update(task.id, { title, description, due }, "agent");
       for (const link of addLinks ?? []) {
         store.link(task.id, { target: "item", plugin_id: link.pluginId, item_id: link.itemId, label: link.label, href: studioHref(link.pluginId, link.itemId) });
@@ -661,7 +680,7 @@ export default async function plugin(bb: BbPluginApi) {
         .filter((task) => task.status !== "done")
         .filter((task) => !needle || task.title.toLowerCase().includes(needle))
         .slice(0, 50)
-        .map((task) => ({ id: task.id, title: task.title || "Untitled", subtitle: `${STATUS_LABELS[task.status]} · ${assigneeLabel(task)}` }));
+        .map((task) => ({ id: task.id, title: task.title || "Untitled", subtitle: `${store.statusLabel(task.status)} · ${assigneeLabel(task)}` }));
     },
     resolve(itemId) {
       const task = mustGet(itemId);
@@ -672,6 +691,7 @@ export default async function plugin(bb: BbPluginApi) {
           title: task.title,
           description: task.description,
           status: task.status,
+          statusLabel: store.statusLabel(task.status),
           due: task.due,
           assignee: task.assignee,
           handoff: handoff ? { state: handoff.state, note: handoff.note } : null,
@@ -683,10 +703,10 @@ export default async function plugin(bb: BbPluginApi) {
 
   // CLI: `bb studio-tasks …`
   const usage = {
-    list: "bb studio-tasks list [--status todo|in_progress|review|done]",
+    list: "bb studio-tasks list [--status <column-id>]",
     add: "bb studio-tasks add <title> [--description <text>] [--due <YYYY-MM-DD>] [--me]",
     show: "bb studio-tasks show <id>",
-    move: "bb studio-tasks move <id> <todo|in_progress|review|done>",
+    move: "bb studio-tasks move <id> <column-id>",
     hand: "bb studio-tasks hand <id> [--note <text>] [--folder]",
     done: "bb studio-tasks done <id>",
   };
@@ -709,14 +729,14 @@ export default async function plugin(bb: BbPluginApi) {
         switch (cmd) {
           case "list": {
             const status = flags.values.status;
-            if (status !== undefined && !isStatus(status)) return fail(`usage: ${usage.list}`);
+            if (status !== undefined && !store.hasStatus(status)) return fail(`usage: ${usage.list}`);
             const rows = store.list().filter((task) => !status || task.status === status);
             if (!rows.length) return { exitCode: 0, stdout: "No tasks.\n" };
             const lines = rows
-              .sort((a, b) => STATUSES.indexOf(a.status) - STATUSES.indexOf(b.status) || a.rank - b.rank)
+              .sort((a, b) => store.statusOrder(a.status) - store.statusOrder(b.status) || a.rank - b.rank)
               .map((task) => {
                 const handoff = store.latestHandoff(task.id);
-                return [task.id, STATUS_LABELS[task.status], task.title || "Untitled", task.due ?? "", handoff ? HANDOFF_LABELS[handoff.state] : ""].join("\t");
+                return [task.id, store.statusLabel(task.status), task.title || "Untitled", task.due ?? "", handoff ? HANDOFF_LABELS[handoff.state] : ""].join("\t");
               });
             return { exitCode: 0, stdout: `${lines.join("\n")}\n` };
           }
@@ -745,9 +765,9 @@ export default async function plugin(bb: BbPluginApi) {
           case "done": {
             const [id, target] = flags.positional;
             const status = cmd === "done" ? "done" : target;
-            if (!id || !store.get(id) || !isStatus(status)) return fail(`usage: ${usage[cmd]}`);
+            if (!id || !store.get(id) || !store.hasStatus(status)) return fail(`usage: ${usage[cmd]}`);
             const { archivedThreads } = await move(id, status, "agent");
-            return { exitCode: 0, stdout: `${id}\t${STATUS_LABELS[status]}${archivedThreads ? `\tarchived ${archivedThreads} thread(s)` : ""}\n` };
+            return { exitCode: 0, stdout: `${id}\t${store.statusLabel(status)}${archivedThreads ? `\tarchived ${archivedThreads} thread(s)` : ""}\n` };
           }
           case "hand": {
             const id = flags.positional[0];

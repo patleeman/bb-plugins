@@ -5,8 +5,12 @@ description: Use when the user asks to track, add, list or update a task or to-d
 
 # Studio Tasks
 
-Studio Tasks is a board of tasks in four columns: **To do**, **In
-progress**, **Review** and **Done**. A task has a title, a Markdown
+Studio Tasks starts with four workflow columns: **To do**, **In
+progress**, **Review** and **Done**. The user can rename and reorder them
+and add custom columns with **Columns** on the board. `tasks_list` returns
+the current column labels and IDs. Use those IDs for custom statuses; the
+workflow IDs (`todo`, `in_progress`, `review`, `done`) stay the same after
+renaming. A task has a title, a Markdown
 description, a due day, an assignee (the user, an agent, or nobody), a
 project (or none, for global), and links to threads and Studio items (pages,
 artifacts, drawings, recordings). Link to a task as
@@ -53,7 +57,7 @@ line in your reply and the user sees a card that opens the task.
 ## CLI (works in every agent session)
 
 ```sh
-bb studio-tasks list [--status todo|in_progress|review|done]
+bb studio-tasks list [--status <column-id>]
 bb studio-tasks add <title> [--description <text>] [--due <YYYY-MM-DD>] [--me]
 bb studio-tasks show <id>
 bb studio-tasks move <id> <todo|in_progress|review|done>

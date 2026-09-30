@@ -7,6 +7,7 @@ export interface MentionTask {
   title: string;
   description: string;
   status: TaskStatus;
+  statusLabel?: string;
   due: string | null;
   assignee: Assignee;
   handoff: { state: HandoffState; note: string | null } | null;
@@ -16,7 +17,7 @@ export interface MentionTask {
 
 export function mentionContext(task: MentionTask, now = new Date()): string {
   const title = task.title || "Untitled";
-  const facts = [STATUS_LABELS[task.status]];
+  const facts = [task.statusLabel ?? STATUS_LABELS[task.status] ?? task.status];
   if (task.assignee) facts.push(task.assignee === "me" ? "assigned to the user" : "assigned to an agent");
   if (task.due) facts.push(`due ${formatDue(task.due, now)} (${task.due})`);
   const lines = [

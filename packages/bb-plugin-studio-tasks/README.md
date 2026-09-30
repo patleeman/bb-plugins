@@ -14,7 +14,12 @@ next, such as "Needs your input" or "Ready for review". You mark it done.
 The Tasks board in a staged BB with five seeded tasks in the "Acme app"
 project: two in To do (one of them yours, due Oct 6), one each in In progress
 and Review assigned to an agent, and a finished one in Done. The header has
-the project and assignee filters, the Board/List toggle and New task.
+the project and assignee filters, the Board/List toggle, Columns, and New task.
+
+![Live BB column editor](assets/columns-preview.png)
+
+The saved column editor with To do renamed to Backlog, a custom Waiting
+column moved before Done, and a seeded task waiting for design approval.
 
 ## What you get
 
@@ -23,7 +28,11 @@ the project and assignee filters, the Board/List toggle and New task.
   top of a column, and filter by project and assignee (both remembered).
   Cards show the handoff's state, the agent's last note, the due day (red
   when overdue), the assignee, links and project. Done shows 20 at a time.
-  **List** switches to the same tasks as a sortable Studio collection.
+  **Columns** opens an editor to add, rename, reorder, and remove empty custom
+  columns. Names and order are saved for all projects. The four workflow
+  columns can be renamed and reordered but stay available for agent handoffs.
+  Move tasks out of a custom column before removing it, including archived
+  tasks. **List** switches to the same tasks as a sortable Studio collection.
 - **A task** (`/plugins/studio-tasks/tasks/<id>`): editable title, status,
   assignee, due day and project; a Markdown description; links to threads,
   pages, artifacts, drawings and recordings; and the agent section. The
@@ -55,7 +64,7 @@ the project and assignee filters, the Board/List toggle and New task.
 ## How it works
 
 - Tasks, links and handoffs live in the plugin's SQLite database
-  (`src/server/store.ts`). Board order is a fractional rank per column.
+  (`src/server/store.ts`), along with column names and order. Board order is a fractional rank per column.
 - BB's thread events (`thread.active`, `thread.idle`, `thread.failed`,
   archive and delete, and `interaction.pending`) become signals that
   `src/server/handoff.ts` turns into the handoff's next state and the task's

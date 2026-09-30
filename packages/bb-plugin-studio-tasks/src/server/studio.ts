@@ -7,8 +7,8 @@ import {
   HANDOFF_SHORT,
   HANDOFF_TONES,
   PLUGIN_ID,
-  STATUSES,
-  STATUS_LABELS,
+  DEFAULT_COLUMNS,
+  type TaskColumn,
   TASK_ICON,
   formatDue,
   isOpenHandoff,
@@ -52,15 +52,15 @@ export function assigneeLabel(task: Pick<TaskRow, "assignee">): string {
   return task.assignee === "me" ? "Me" : task.assignee === "agent" ? "Agent" : "Unassigned";
 }
 
-export function taskBadge(task: TaskRow, handoff: HandoffRow | null): StudioBadge {
+export function taskBadge(task: TaskRow, handoff: HandoffRow | null, columns: TaskColumn[] = DEFAULT_COLUMNS): StudioBadge {
   if (handoff && task.status !== "done" && isOpenHandoff(handoff.state) && LOUD.has(handoff.state)) {
     return { label: HANDOFF_SHORT[handoff.state], tone: HANDOFF_TONES[handoff.state] };
   }
   if (task.due && isOverdue(task.due, task.status)) return { label: "Overdue", tone: "danger" };
-  return { label: STATUS_LABELS[task.status], tone: STATUS_TONES[task.status] };
+  return { label: columns.find((column) => column.id === task.status)?.label ?? task.status, tone: STATUS_TONES[task.status] ?? "neutral" };
 }
 
-export function toStudioItem(task: TaskRow, handoff: HandoffRow | null): StudioItem {
+export function toStudioItem(task: TaskRow, handoff: HandoffRow | null, columns: TaskColumn[] = DEFAULT_COLUMNS): StudioItem {
   return {
     id: task.id,
     kind: TASK_KIND.id,
@@ -73,11 +73,11 @@ export function toStudioItem(task: TaskRow, handoff: HandoffRow | null): StudioI
     updatedBy: task.updated_by === "user" || task.updated_by === "agent" ? task.updated_by : null,
     preview: firstLine(task.description) ?? handoff?.note ?? null,
     facts: [
-      { id: "status", value: STATUS_LABELS[task.status], sort: STATUSES.indexOf(task.status) },
+      { id: "status", value: columns.find((column) => column.id === task.status)?.label ?? task.status, sort: columns.findIndex((column) => column.id === task.status) },
       { id: "due", value: task.due ? formatDue(task.due) : "", sort: task.due ? Date.parse(`${task.due}T00:00:00Z`) : null },
       { id: "assignee", value: assigneeLabel(task), sort: task.assignee === "me" ? 0 : task.assignee === "agent" ? 1 : null },
     ],
-    badge: taskBadge(task, handoff),
+    badge: taskBadge(task, handoff, columns),
     thumbnailUrl: null,
     href: taskHref(task.id),
     archived: task.archived_at !== null,
@@ -104,7 +104,7 @@ export function registerStudio(
   registerStudioProvider(bb, schemas, {
     studio_describe: () => ({ pluginId: PLUGIN_ID, version: 1, panel: "tasks", kinds: [TASK_KIND] }),
     studio_list: () => ({
-      items: store.list({ includeArchived: true }).map((task) => toStudioItem(task, store.latestHandoff(task.id))),
+      items: store.list({ includeArchived: true }).map((task) => toStudioItem(task, store.latestHandoff(task.id), store.boardConfig().columns)),
     }),
     // Studio matches titles itself; this finds descriptions and handoff notes.
     studio_search: ({ query }) => {
@@ -125,7 +125,7 @@ export function registerStudio(
       if (kind !== TASK_KIND.id) throw new Error(`Tasks can't make a "${kind}".`);
       const task = store.create({ title: "", projectId, by: "user" });
       deps.changed(task.id);
-      return { item: toStudioItem(task, null) };
+      return { item: toStudioItem(task, null, store.boardConfig().columns) };
     },
     studio_move: ({ ids, projectId }) =>
       eachId(ids, (id) => {

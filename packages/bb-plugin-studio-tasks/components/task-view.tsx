@@ -35,8 +35,8 @@ import {
   HANDOFF_LABELS,
   HANDOFF_TONES,
   REALTIME_CHANNEL,
-  STATUSES,
-  STATUS_LABELS,
+  COLUMNS_UPDATE_TYPE,
+  type TaskColumn,
   TASK_UPDATE_TYPE,
   isOpenHandoff,
   taskHref,
@@ -47,7 +47,7 @@ import { HandoffPanel } from "./handoff-panel";
 import { ASSIGNEE_OPTIONS, DueChip, STATUS_ICONS } from "./pieces";
 import { SPIN, useTasksRpc, type Handoff, type Link, type Linkable, type Task, type TaskEvent } from "./types";
 
-type Loaded = { task: Task; links: Link[]; handoffs: Handoff[] };
+type Loaded = { task: Task; links: Link[]; handoffs: Handoff[]; columns: TaskColumn[] };
 
 export function TaskView({ taskId, onBack }: { taskId: string; onBack: (replace?: boolean) => void }) {
   const rpc = useTasksRpc();
@@ -69,7 +69,7 @@ export function TaskView({ taskId, onBack }: { taskId: string; onBack: (replace?
             onBackRef.current(true);
             return;
           }
-          setLoaded({ task: result.task, links: result.links, handoffs: result.handoffs });
+          setLoaded({ task: result.task, links: result.links, handoffs: result.handoffs, columns: result.columns });
           setError(null);
         },
         (failure) => setError(errorMessage(failure)),
@@ -81,7 +81,7 @@ export function TaskView({ taskId, onBack }: { taskId: string; onBack: (replace?
   }, [load]);
   useRealtime(REALTIME_CHANNEL, (payload) => {
     const event = payload as TaskEvent;
-    if (event?.type === TASK_UPDATE_TYPE && event.taskId === taskId) void load();
+    if (event?.type === COLUMNS_UPDATE_TYPE || (event?.type === TASK_UPDATE_TYPE && event.taskId === taskId)) void load();
   });
 
   if (!loaded) {
@@ -99,7 +99,7 @@ export function TaskView({ taskId, onBack }: { taskId: string; onBack: (replace?
     );
   }
 
-  const { task, links, handoffs } = loaded;
+  const { task, links, handoffs, columns } = loaded;
   const latest = handoffs[0] ?? null;
   const openThreads = handoffs.filter((handoff) => isOpenHandoff(handoff.state)).length;
 
@@ -232,7 +232,7 @@ export function TaskView({ taskId, onBack }: { taskId: string; onBack: (replace?
             <Select
               label="Status"
               value={task.status}
-              options={STATUSES.map((status) => ({ value: status, label: STATUS_LABELS[status], icon: STATUS_ICONS[status] }))}
+              options={columns.map(({ id, label }) => ({ value: id, label, icon: STATUS_ICONS[id] ?? "Circle" }))}
               onChange={(status) => void move(status as TaskStatus)}
             />
           </Property>

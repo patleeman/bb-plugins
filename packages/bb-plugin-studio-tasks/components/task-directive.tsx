@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Icon } from "@bb-studio/kit/app";
 import { useBbNavigate, useRealtime, type PluginMessageDirectiveProps } from "@get-bb/plugin-sdk/app";
-import { PANEL_PATH, REALTIME_CHANNEL, STATUS_LABELS, TASK_UPDATE_TYPE, isTaskId } from "../src/shared";
+import { PANEL_PATH, REALTIME_CHANNEL, COLUMNS_UPDATE_TYPE, TASK_UPDATE_TYPE, isTaskId } from "../src/shared";
 import { AssigneeChip, DueChip, HandoffBadge, STATUS_ICONS } from "./pieces";
 import { useTasksRpc, type Task, type TaskEvent } from "./types";
 
@@ -24,7 +24,7 @@ export function TaskDirective({ attributes }: PluginMessageDirectiveProps) {
   useEffect(load, [load]);
   useRealtime(REALTIME_CHANNEL, (payload) => {
     const event = payload as TaskEvent;
-    if (event?.type === TASK_UPDATE_TYPE && event.taskId === id) load();
+    if (event?.type === COLUMNS_UPDATE_TYPE || (event?.type === TASK_UPDATE_TYPE && event.taskId === id)) load();
   });
 
   if (!valid || task === null) {
@@ -44,12 +44,12 @@ export function TaskDirective({ attributes }: PluginMessageDirectiveProps) {
       className="group my-2 flex w-full max-w-md items-center gap-3 rounded-lg border border-border/70 bg-background px-3 py-2.5 text-left hover:border-border hover:bg-state-hover"
     >
       <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-        <Icon name={STATUS_ICONS[task.status]} className="size-4" />
+        <Icon name={STATUS_ICONS[task.status] ?? "Circle"} className="size-4" />
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium">{task.title || "Untitled"}</div>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          <span>{STATUS_LABELS[task.status]} · Studio Tasks</span>
+          <span>{task.statusLabel} · Studio Tasks</span>
           <HandoffBadge handoff={task.handoff} status={task.status} />
           <DueChip due={task.due} status={task.status} />
           <AssigneeChip assignee={task.assignee} />

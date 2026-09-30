@@ -2,7 +2,7 @@
 // the threads they were handed to.
 import { randomBytes } from "node:crypto";
 import type Database from "better-sqlite3";
-import type { Assignee, HandoffState, TaskStatus } from "../shared";
+import { DEFAULT_COLUMNS, STATUSES, isStatus, type TaskColumn, type Assignee, type HandoffState, type TaskStatus } from "../shared";
 
 /**
  * Append-only: statement index is the migration id, and BB checks each
@@ -46,6 +46,7 @@ export const MIGRATIONS = [
        updated_at INTEGER NOT NULL
      );
    CREATE INDEX IF NOT EXISTS task_handoffs_task ON task_handoffs (task_id, created_at);`,
+  `CREATE TABLE task_board_config (id INTEGER PRIMARY KEY CHECK (id = 1), columns_json TEXT NOT NULL, revision INTEGER NOT NULL);`,
 ];
 
 export type TaskRow = {
@@ -127,6 +128,53 @@ export class TaskStore {
     db.pragma("foreign_keys = ON");
   }
 
+  boardConfig(): { columns: TaskColumn[]; revision: number } {
+    const row = this.db.prepare("SELECT columns_json, revision FROM task_board_config WHERE id = 1").get() as
+      { columns_json: string; revision: number } | undefined;
+    return row ? { columns: JSON.parse(row.columns_json), revision: row.revision } :
+      { columns: DEFAULT_COLUMNS.map((column) => ({ ...column })), revision: 0 };
+  }
+
+  statusLabel(status: TaskStatus): string {
+    return this.boardConfig().columns.find((column) => column.id === status)?.label ?? status;
+  }
+
+  statusOrder(status: TaskStatus): number {
+    return this.boardConfig().columns.findIndex((column) => column.id === status);
+  }
+
+  hasStatus(status: unknown): status is TaskStatus {
+    return this.boardConfig().columns.some((column) => column.id === status);
+  }
+
+  /** Save atomically; never orphan tasks or overwrite another open editor. */
+  saveColumns(columns: TaskColumn[], revision: number): void {
+    this.db.transaction(() => {
+      const current = this.boardConfig();
+      if (current.revision !== revision) throw new Error("Columns changed elsewhere. Close this editor and try again.");
+      if (columns.length < 4 || columns.length > 20 || new Set(columns.map((column) => column.id)).size !== columns.length ||
+          columns.some((column) => !isStatus(column.id) || !column.label.trim() || column.label.trim().length > 60) ||
+          STATUSES.some((id) => !columns.some((column) => column.id === id))) {
+        throw new Error("Keep the four workflow columns, use unique column IDs, and names of 1 to 60 characters (20 columns maximum).");
+      }
+      const labels = columns.map((column) => column.label.trim().toLowerCase());
+      if (new Set(labels).size !== labels.length) throw new Error("Use a different name for each column.");
+      for (const column of current.columns) {
+        if (!columns.some((next) => next.id === column.id) &&
+            this.db.prepare("SELECT 1 FROM tasks WHERE status = ? LIMIT 1").get(column.id)) {
+          throw new Error(`Move all tasks out of "${column.label}" before removing it, including archived tasks.`);
+        }
+      }
+      this.db.prepare(`INSERT INTO task_board_config (id, columns_json, revision) VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET columns_json = excluded.columns_json, revision = excluded.revision`)
+        .run(JSON.stringify(columns.map((column) => ({ id: column.id, label: column.label.trim() }))), revision + 1);
+    })();
+  }
+
+  private requireStatus(status: TaskStatus): void {
+    if (!this.hasStatus(status)) throw new Error("Column not found. Refresh the board and try again.");
+  }
+
   get(id: string): TaskRow | null {
     return (this.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as TaskRow | undefined) ?? null;
   }
@@ -142,6 +190,7 @@ export class TaskStore {
   create(input: NewTask): TaskRow {
     const at = this.now();
     const status = input.status ?? "todo";
+    this.requireStatus(status);
     const task: TaskRow = {
       id: newTaskId(),
       title: input.title.trim(),
@@ -190,6 +239,7 @@ export class TaskStore {
    * when the status doesn't change.
    */
   move(id: string, status: TaskStatus, by: Writer, index?: number): TaskRow {
+    this.requireStatus(status);
     const task = this.mustGet(id);
     return this.db.transaction(() => {
       let rank = task.rank;

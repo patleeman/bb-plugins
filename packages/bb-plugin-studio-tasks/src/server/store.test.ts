@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_COLUMNS } from "../shared";
+import { TaskStore } from "./store";
 import { memoryStore } from "../test/db";
 
 function clock() {
@@ -106,5 +108,54 @@ describe("the task store", () => {
     store.delete(task.id);
     expect(db.prepare("SELECT count(*) AS n FROM task_handoffs").get()).toEqual({ n: 0 });
     expect(db.prepare("SELECT count(*) AS n FROM task_links").get()).toEqual({ n: 0 });
+  });
+});
+
+
+describe("custom board columns", () => {
+  const waiting = { id: "col_0123456789abcdef", label: "Waiting" };
+
+  it("preserves existing tasks while renaming, adding and reordering columns across restart", () => {
+    const { db, store } = memoryStore(clock());
+    const task = store.create({ title: "Existing task", status: "review", by: "agent" });
+    const columns = [...DEFAULT_COLUMNS].reverse().map((column) => column.id === "review" ? { ...column, label: "Check" } : column);
+    store.saveColumns([waiting, ...columns], 0);
+    const restarted = new TaskStore(db);
+    expect(restarted.boardConfig()).toEqual({ columns: [waiting, ...columns], revision: 1 });
+    expect(restarted.get(task.id)).toEqual(task);
+    expect(restarted.statusLabel("review")).toBe("Check");
+    expect(restarted.statusOrder(waiting.id)).toBe(0);
+    const custom = restarted.create({ title: "Waiting on a reply", status: waiting.id, by: "user" });
+    expect(custom.done_at).toBeNull();
+    expect(restarted.move(custom.id, "done", "user").done_at).not.toBeNull();
+    expect(restarted.move(custom.id, waiting.id, "user").done_at).toBeNull();
+  });
+
+  it("blocks removing occupied columns, including archived tasks, then allows an empty column", () => {
+    const { store } = memoryStore(clock());
+    store.saveColumns([...DEFAULT_COLUMNS, waiting], 0);
+    const task = store.create({ title: "Keep me", status: waiting.id, by: "user" });
+    store.setArchived(task.id, true);
+    expect(() => store.saveColumns(DEFAULT_COLUMNS, 1)).toThrow(/including archived tasks/);
+    expect(store.boardConfig().revision).toBe(1);
+    expect(store.get(task.id)?.status).toBe(waiting.id);
+    store.move(task.id, "todo", "user");
+    store.saveColumns(DEFAULT_COLUMNS, 1);
+    expect(store.boardConfig().revision).toBe(2);
+    expect(() => store.move(task.id, waiting.id, "user")).toThrow(/Column not found/);
+    expect(() => store.create({ title: "Invalid", status: waiting.id, by: "user" })).toThrow(/Column not found/);
+  });
+
+  it("rejects stale edits and invalid configurations without changing the board", () => {
+    const { store } = memoryStore();
+    store.saveColumns([...DEFAULT_COLUMNS, waiting], 0);
+    const saved = store.boardConfig();
+    expect(() => store.saveColumns(DEFAULT_COLUMNS, 0)).toThrow(/changed elsewhere/);
+    expect(() => store.saveColumns([waiting], 1)).toThrow(/four workflow/);
+    expect(() => store.saveColumns([...DEFAULT_COLUMNS, waiting, waiting], 1)).toThrow(/unique column IDs/);
+    expect(() => store.saveColumns([...DEFAULT_COLUMNS, { ...waiting, label: " to DO " }], 1)).toThrow(/different name/);
+    expect(() => store.saveColumns([...DEFAULT_COLUMNS, { ...waiting, label: " " }], 1)).toThrow(/1 to 60/);
+    expect(() => store.saveColumns([...DEFAULT_COLUMNS, { ...waiting, id: "unknown" }], 1)).toThrow(/unique column IDs/);
+    expect(store.boardConfig()).toEqual(saved);
   });
 });

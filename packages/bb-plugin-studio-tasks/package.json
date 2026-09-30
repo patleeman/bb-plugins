@@ -2,14 +2,14 @@
   "name": "bb-plugin-studio-tasks",
   "version": "0.1.0",
   "type": "module",
-  "description": "Part of BB Studio. A board of tasks you can hand to agents; each task follows its thread from working to review.",
+  "description": "Part of BB Studio. A customizable board of tasks you can hand to agents; each task follows its thread from working to review.",
   "engines": {
     "bb": ">=0.44",
     "bbPluginSdk": ">=0.5.29"
   },
   "bb": {
     "name": "Studio Tasks",
-    "description": "Part of BB Studio. A board of tasks you can hand to agents; each task follows its thread from working to review.",
+    "description": "Part of BB Studio. A customizable board of tasks you can hand to agents; each task follows its thread from working to review.",
     "branding": {
       "icon": "./assets/icon.svg",
       "experimental_icons": {
