@@ -9,7 +9,7 @@ import { applyEdits, mentionsIn, readMarkdown, restoreFromState, seedMarkdown, t
 import { PageHub, type Actor, type LivePage } from "./hub";
 import { shortId } from "./markdown";
 import { PageStore, type PageMeta, type RequestRow } from "./store";
-import { absorbAgentChange, emptySeen, markSeen, unseen, type Seen } from "./watch";
+import { absorbAgentChange, emptySeen, markSeen, notePresent, unseen, type Seen } from "./watch";
 
 const SNAPSHOT_GAP_MS = 10 * 60_000;
 const WATCH_DELAY_MS = 2500;
@@ -111,7 +111,11 @@ export class PagesService {
       opened: (page) => (this.watch.has(page.id) ? this.scheduleWatch(page) : void this.state(page)),
       changed: (page, origin) => {
         if (typeof origin === "string") this.absorb(page);
-        else if (origin !== "load") this.scheduleWatch(page);
+        else if (origin !== "load") {
+          const state = this.watch.get(page.id);
+          if (state) notePresent(state, this.found(page));
+          this.scheduleWatch(page);
+        }
       },
     });
   }
@@ -312,7 +316,9 @@ export class PagesService {
     if (!state) {
       state = { ...emptySeen(), timer: null };
       this.watch.set(page.id, state);
-      markSeen(state, this.found(page));
+      const found = this.found(page);
+      markSeen(state, found);
+      notePresent(state, found);
     }
     return state;
   }

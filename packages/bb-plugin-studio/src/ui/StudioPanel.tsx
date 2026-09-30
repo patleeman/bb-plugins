@@ -129,7 +129,7 @@ export function StudioPanel({ subPath }: { subPath: string }) {
     () => providers.filter((provider) => provider.state === "ready").flatMap((provider) => provider.kinds.map((kind) => ({ ...kind, pluginId: provider.pluginId }))),
     [providers],
   );
-  const requested = decodeURIComponent(subPath.split("/").filter(Boolean)[0] ?? "") || "all";
+  const requested = decodeSegment(subPath.split("/").filter(Boolean)[0] ?? "") || "all";
   const kind = requested === "all" || !data || kinds.some((candidate) => candidate.id === requested) ? requested : "all";
   const setKind = useCallback((next: string) => navigate.toPluginPanel("studio", { subPath: next === "all" ? "" : encodeURIComponent(next) }), [navigate]);
   const nameOf = useCallback((pluginId: string) => providers.find((provider) => provider.pluginId === pluginId)?.name ?? pluginId, [providers]);
@@ -174,7 +174,10 @@ export function StudioPanel({ subPath }: { subPath: string }) {
         refetch();
         return result;
       },
-      onSearch: async (query) => new Set((await rpc.call("search", { query })).keys),
+      onSearch: async (query) => {
+        const { keys, snippets } = await rpc.call("search", { query });
+        return new Map(keys.map((key) => [key, snippets[key] ?? null]));
+      },
       onTag: async (items, add, remove) => {
         // Show the change now; the refetch confirms it.
         const keys = new Set(items.map((item) => `${item.pluginId}:${item.id}`));
@@ -311,4 +314,13 @@ export function StudioPanel({ subPath }: { subPath: string }) {
       handlers={handlers}
     />
   );
+}
+
+/** A path segment, or "" for a malformed one like `100%`. */
+function decodeSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return "";
+  }
 }

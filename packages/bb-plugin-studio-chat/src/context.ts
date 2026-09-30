@@ -71,7 +71,7 @@ export function withItemPill(
   const text: TextInput = {
     ...first,
     text: `${label} ${first.text}`,
-    mentions: [mention, ...first.mentions.map((each) => ({ ...each, start: each.start + shift, end: each.end + shift }))],
+    mentions: [mention, ...(first.mentions ?? []).map((each) => ({ ...each, start: each.start + shift, end: each.end + shift }))],
   };
   return input.map((item, index) => (index === at ? text : item));
 }

@@ -307,26 +307,33 @@ export default async function plugin(bb: BbPluginApi) {
     }
   });
 
+  /**
+   * Moves a handoff to its thread's current state, for events it missed. A
+   * thread just spawned may read idle before its first turn starts, so `fresh`
+   * doesn't count idle as finished.
+   */
+  async function catchUp(handoff: { thread_id: string; state: string }, fresh = false) {
+    try {
+      const thread = await bb.sdk.threads.get({ threadId: handoff.thread_id });
+      if (thread.deletedAt !== null) apply(thread.id, { type: "deleted" });
+      else if (thread.archivedAt !== null) apply(thread.id, { type: "archived" });
+      else if (thread.status === "error") apply(thread.id, { type: "failed", error: null });
+      else if (thread.status === "active" || thread.status === "starting" || thread.status === "pending") {
+        apply(thread.id, { type: "active" });
+        if (await hasPendingInput(thread.id)) apply(thread.id, { type: "needs-input" });
+      } else if (!fresh && thread.status === "idle" && (handoff.state === "working" || handoff.state === "needs-input" || handoff.state === "starting")) {
+        apply(thread.id, { type: "idle", text: null });
+      }
+      relabel(thread);
+    } catch (error) {
+      if (/not found|404/i.test(String(error))) apply(handoff.thread_id, { type: "deleted" });
+      else bb.log.warn(`couldn't reconcile handoff ${handoff.thread_id}: ${String(error)}`);
+    }
+  }
+
   /** Events aren't replayed while the plugin is off: catch up on every open handoff. */
   async function reconcile() {
-    for (const handoff of store.openHandoffs()) {
-      try {
-        const thread = await bb.sdk.threads.get({ threadId: handoff.thread_id });
-        if (thread.deletedAt !== null) apply(thread.id, { type: "deleted" });
-        else if (thread.archivedAt !== null) apply(thread.id, { type: "archived" });
-        else if (thread.status === "error") apply(thread.id, { type: "failed", error: null });
-        else if (thread.status === "active" || thread.status === "starting" || thread.status === "pending") {
-          apply(thread.id, { type: "active" });
-          if (await hasPendingInput(thread.id)) apply(thread.id, { type: "needs-input" });
-        } else if (thread.status === "idle" && (handoff.state === "working" || handoff.state === "needs-input" || handoff.state === "starting")) {
-          apply(thread.id, { type: "idle", text: null });
-        }
-        relabel(thread);
-      } catch (error) {
-        if (/not found|404/i.test(String(error))) apply(handoff.thread_id, { type: "deleted" });
-        else bb.log.warn(`couldn't reconcile handoff ${handoff.thread_id}: ${String(error)}`);
-      }
-    }
+    for (const handoff of store.openHandoffs()) await catchUp(handoff);
   }
   void reconcile();
 
@@ -368,6 +375,9 @@ export default async function plugin(bb: BbPluginApi) {
       pluginMetadata: { taskId: task.id },
     });
     store.addHandoff(task.id, thread.id, await agentLabel(thread.providerId, input.model ?? null));
+    // The thread may have started, or failed, before the handoff was recorded.
+    const recorded = store.handoff(thread.id);
+    if (recorded) void catchUp(recorded, true);
     store.link(task.id, { target: "thread", plugin_id: null, item_id: thread.id, label: thread.title ?? (task.title || "Thread"), href: `/threads/${thread.id}` });
     if (task.status !== "in_progress") store.move(task.id, "in_progress", input.by);
     store.update(task.id, { assignee: "agent" }, input.by);
@@ -607,7 +617,8 @@ export default async function plugin(bb: BbPluginApi) {
       due: z.string().optional().describe("A day, like 2026-10-01."),
       assignee: z.enum(["me", "agent"]).optional().describe('"me" is the user.'),
     }),
-    execute({ title, description, status, due, assignee }, context) {
+    execute({ title, description, status, due: rawDue, assignee }, context) {
+      const due = rawDue?.trim() || undefined;
       if (due && !isDay(due)) return { content: [{ type: "text", text: "Give `due` as a day, like 2026-10-01." }], isError: true };
       const task = store.create({ title, description, status, due: due ?? null, assignee: assignee ?? null, projectId: context.projectId ?? null, by: "agent" });
       changed(task.id);
@@ -630,7 +641,9 @@ export default async function plugin(bb: BbPluginApi) {
       due: z.string().nullable().optional(),
       addLinks: z.array(linkInput).max(20).optional(),
     }),
-    async execute({ id, status, note, title, description, due, addLinks }, context) {
+    async execute({ id, status, note, title, description, due: rawDue, addLinks }, context) {
+      // An empty day clears the due date.
+      const due = rawDue === undefined ? undefined : rawDue?.trim() || null;
       const task = id ? store.get(id) : threadTask(context.threadId);
       if (!task) return { content: [{ type: "text", text: id ? `Task ${id} not found.` : "This thread isn't working on a task. Pass an id." }], isError: true };
       if (due && !isDay(due)) return { content: [{ type: "text", text: "Give `due` as a day, like 2026-10-01." }], isError: true };
@@ -703,7 +716,7 @@ export default async function plugin(bb: BbPluginApi) {
     ],
     async run(argv, ctx) {
       const [cmd, ...rest] = argv;
-      const flags = parseFlags(rest);
+      const flags = parseFlags(rest, ["me", "folder"]);
       const fail = (message: string) => ({ exitCode: 1, stderr: `${message}\n` });
       try {
         switch (cmd) {
@@ -771,14 +784,18 @@ export default async function plugin(bb: BbPluginApi) {
 }
 
 /** `--name value` flags and positional arguments. A flag with no value is "". */
-export function parseFlags(argv: readonly string[]): { positional: string[]; values: Record<string, string | undefined> } {
+/** `booleans` name the flags that take no value, so the word after them stays positional. */
+export function parseFlags(
+  argv: readonly string[],
+  booleans: readonly string[] = [],
+): { positional: string[]; values: Record<string, string | undefined> } {
   const positional: string[] = [];
   const values: Record<string, string | undefined> = {};
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
     if (arg.startsWith("--")) {
       const next = argv[index + 1];
-      if (next !== undefined && !next.startsWith("--")) {
+      if (next !== undefined && !next.startsWith("--") && !booleans.includes(arg.slice(2))) {
         values[arg.slice(2)] = next;
         index += 1;
       } else {

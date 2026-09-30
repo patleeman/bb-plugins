@@ -481,7 +481,7 @@ export default async function plugin(bb: BbPluginApi) {
         usage: "bb excalidraw remove-elements <id> <element-id> [<element-id>…]",
       },
     ],
-    async run(argv) {
+    async run(argv, ctx) {
       const [cmd, ...rest] = argv;
       switch (cmd) {
         case "list": {
@@ -550,6 +550,9 @@ export default async function plugin(bb: BbPluginApi) {
           if (!id) {
             return { exitCode: 1, stderr: "usage: bb excalidraw delete <id>\n" };
           }
+          if (!store.get(id)) {
+            return { exitCode: 1, stderr: `Drawing ${id} not found\n` };
+          }
           remove(id, "cli");
           return { exitCode: 0, stdout: `deleted ${id}\n` };
         }
@@ -568,7 +571,10 @@ export default async function plugin(bb: BbPluginApi) {
           let parsed: unknown;
           try {
             parsed = JSON.parse(
-              await (await import("node:fs/promises")).readFile(filePath, "utf8"),
+              await (await import("node:fs/promises")).readFile(
+                (await import("node:path")).resolve(ctx.cwd ?? process.cwd(), filePath),
+                "utf8",
+              ),
             );
           } catch (error) {
             return {

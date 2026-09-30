@@ -121,15 +121,16 @@ export function ChatOverlay() {
   useItemChat(rpc, viewed);
   useFloatEvent();
 
-  // Remember which thread the user keeps on this item.
+  // Remember the thread the user starts or brings up on this item. Moving to
+  // another item with a chat floating doesn't tie that chat to it.
   const linked = useRef<string | null>(null);
   useEffect(() => {
-    if (!viewed || !threadId || mode === "closed") return;
-    const link = `${itemKey(viewed)}>${threadId}`;
-    if (linked.current === link) return;
-    linked.current = link;
-    rpc.call("link", { pluginId: viewed.pluginId, id: viewed.id, threadId }).catch(() => {});
-  }, [rpc, viewed, threadId, mode]);
+    if (!threadId || threadId === linked.current || mode === "closed") return;
+    linked.current = threadId;
+    if (viewed) rpc.call("link", { pluginId: viewed.pluginId, id: viewed.id, threadId }).catch(() => {});
+    // Only a new thread links; `viewed` is read, not watched.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rpc, threadId, mode]);
 
   const routeThread = path.startsWith("/plugins/") ? null : (THREAD_IN_PATH.exec(path)?.[1] ?? null);
   const hasThread = Boolean(threadId) && routeThread !== threadId;

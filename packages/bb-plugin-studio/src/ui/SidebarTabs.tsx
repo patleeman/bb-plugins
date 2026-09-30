@@ -87,7 +87,10 @@ export function SidebarTabs() {
       ({ tab }) => {
         if (tab) setTabs((current) => (current && !current.some((each) => each.pluginId === tab.pluginId && each.id === tab.id) ? [...current, tab] : current));
       },
-      () => {},
+      // Try again the next time this effect runs, e.g. when the tabs refresh.
+      () => {
+        if (visited.current === path) visited.current = null;
+      },
     );
   }, [hosted, path, tabs, rpc, setTabs]);
 

@@ -20,7 +20,7 @@ export const TOOL_NAMES = [
 ] as const;
 
 export const AGENT_INSTRUCTIONS = [
-  "BB Pages are collaborative documents the user edits live. Read a page with pages_read before changing it; it returns Markdown with a `<!-- ^id -->` marker after each block.",
+  "BB Pages are collaborative documents the user edits live. Read a page with pages_read before changing it; it returns Markdown with a `<!-- ^id -->` marker on the line before each block, naming the block below it.",
   "Edit with pages_edit using small, targeted operations that reference those block ids, so you don't overwrite the user's concurrent typing. Use replace_all only when asked to rewrite a whole page.",
   "Pages Markdown supports GFM plus: ```chart / ```stats / ```embed fenced JSON blocks, ```mermaid diagrams, `> [!NOTE]` callouts (NOTE, TIP, WARNING, CAUTION, IMPORTANT), and mentions like @[Name](bot:bot_id), @[Title](page:pg_id), @[Title](item:plugin:id), @[2026-10-01](date:2026-10-01).",
   'Chart JSON: {"type":"bar|line|area|pie","title":"…","x":"label","series":["Revenue"],"unit":"$","data":[{"label":"Q1","Revenue":10}]}. Stats JSON: [{"label":"ARR","value":"$1.2M","delta":"+8%","trend":"up"}] (1–6 items). Embed JSON: {"kind":"bookmark|thread|page|drawing|artifact|recording|task|item","target":"https://… or an id","title":"…"}; item targets are plugin:id from studio_list_items.',
@@ -84,7 +84,7 @@ export function registerTools(bb: BbPluginApi, service: PagesService): void {
   bb.agents.registerTool({
     name: "pages_read",
     description:
-      "Read a BB Page as Markdown with a `<!-- ^id -->` block-id marker after each block, plus its open comment threads. Always read right before editing: the user may have changed it.",
+      "Read a BB Page as Markdown with a `<!-- ^id -->` block-id marker on the line before each block (it names the block below it), plus its open comment threads. Always read right before editing: the user may have changed it.",
     parameters: z.object({ page: ref }),
     execute({ page }, ctx) {
       const meta = service.requirePage(page, ctx.projectId);

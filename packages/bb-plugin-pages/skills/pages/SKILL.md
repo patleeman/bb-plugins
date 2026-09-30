@@ -18,7 +18,7 @@ Pages belong to a project or are global, and nest into a tree. Link to one as
 | Tool | Use it to |
 | --- | --- |
 | `pages_list` | List this project's pages and global pages as a tree. Pass `query` to search titles and content. |
-| `pages_read` | Read a page as Markdown. Each block ends with a `<!-- ^id -->` marker you use in edits. |
+| `pages_read` | Read a page as Markdown. Each block is preceded by a `<!-- ^id -->` marker naming it; use those ids in edits. |
 | `pages_create` | Create a page from Markdown. Set `global` for a global page, `parent` to nest it. |
 | `pages_edit` | Apply small edit operations to a page (see below). |
 | `pages_comments` | List comment threads with their ids, commented text, and replies. |

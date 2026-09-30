@@ -540,7 +540,7 @@ export default async function plugin(bb: BbPluginApi) {
     ],
     async run(argv, ctx) {
       const [cmd, ...rest] = argv;
-      const flags = parseFlags(rest);
+      const flags = parseFlags(rest, ["thread"]);
       switch (cmd) {
         case "save": {
           const [path] = flags.positional;
@@ -620,14 +620,18 @@ export default async function plugin(bb: BbPluginApi) {
 }
 
 /** `--name value` flags and positional arguments. A flag with no value is "". */
-export function parseFlags(argv: readonly string[]): { positional: string[]; values: Record<string, string | undefined> } {
+/** `booleans` name the flags that take no value, so the word after them stays positional. */
+export function parseFlags(
+  argv: readonly string[],
+  booleans: readonly string[] = [],
+): { positional: string[]; values: Record<string, string | undefined> } {
   const positional: string[] = [];
   const values: Record<string, string | undefined> = {};
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
     if (arg.startsWith("--")) {
       const next = argv[index + 1];
-      if (next !== undefined && !next.startsWith("--")) {
+      if (next !== undefined && !next.startsWith("--") && !booleans.includes(arg.slice(2))) {
         values[arg.slice(2)] = next;
         index += 1;
       } else {

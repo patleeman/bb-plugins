@@ -1,10 +1,10 @@
 // Studio search: a quick-open box over any page, opened by the "Studio:
 // Search" command (Mod+Shift+K). Titles match as you type; content matches
 // come from the add-ons, with the text that matched.
-import { Icon, ItemTile, cn, openAppPath, projectName, useProjects } from "@bb-studio/kit/app";
+import { Highlight, Icon, ItemTile, cn, openAppPath, projectName, useProjects } from "@bb-studio/kit/app";
 import { errorMessage, untitled } from "@bb-studio/kit/format";
 import { useRpc } from "@get-bb/plugin-sdk/app";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { ProviderView, rpcContract } from "../contract";
 import { QUICK_OPEN_EVENT } from "../ids";
 import { studioMatches, type ContentMatches } from "../search";
@@ -93,6 +93,8 @@ function QuickOpenDialog({ onClose }: { onClose: () => void }) {
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
+    // Enter confirms an IME candidate; it doesn't open an item.
+    if (event.nativeEvent.isComposing) return;
     const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
     if (step && matches.length) setSelected((index) => (index + step + matches.length) % matches.length);
     else if (event.key === "Enter") open(matches[selected]?.item);
@@ -181,19 +183,4 @@ function QuickOpenDialog({ onClose }: { onClose: () => void }) {
       </div>
     </div>
   );
-}
-
-/** `text` with each match of `query` in bold. */
-function Highlight({ text, query }: { text: string; query: string }): ReactNode {
-  if (!query) return text;
-  const needle = query.toLowerCase();
-  const parts: ReactNode[] = [];
-  const lower = text.toLowerCase();
-  let from = 0;
-  for (let at = lower.indexOf(needle); at >= 0; at = lower.indexOf(needle, from)) {
-    parts.push(text.slice(from, at), <mark key={at} className="bg-transparent font-semibold text-foreground">{text.slice(at, at + needle.length)}</mark>);
-    from = at + needle.length;
-  }
-  parts.push(text.slice(from));
-  return parts;
 }
