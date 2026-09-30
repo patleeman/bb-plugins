@@ -21,6 +21,8 @@ export interface OutboxSegment {
    * isn't silently lost, but the uploader skips it.
    */
   rejected?: string;
+  /** Sent again from the recovery view after being set aside. */
+  retried?: boolean;
   parts: ArrayBuffer[];
 }
 
@@ -63,6 +65,47 @@ export function isUploadable(segment: Pick<OutboxSegment, "complete" | "rejected
 export function isPermanentRejection(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
   return code === "invalid_input" || code === "invalid_json";
+}
+
+/** A set-aside segment as the recovery view lists it, without its audio. */
+export interface SetAsideSegment extends OutboxKey {
+  startedAt: number;
+  durationMs: number | null;
+  mimeType: string;
+  bytes: number;
+  reason: string;
+}
+
+/** The set-aside segments among `segments`, in their order. */
+export function setAsideOf(segments: readonly OutboxSegment[]): SetAsideSegment[] {
+  return segments.flatMap((segment) =>
+    segment.rejected
+      ? [
+          {
+            recordingId: segment.recordingId,
+            sessionId: segment.sessionId,
+            index: segment.index,
+            startedAt: segment.startedAt,
+            durationMs: segment.durationMs,
+            mimeType: segment.mimeType,
+            bytes: segment.parts.reduce((sum, part) => sum + part.byteLength, 0),
+            reason: segment.rejected,
+          },
+        ]
+      : [],
+  );
+}
+
+export function sameKey(a: OutboxKey, b: OutboxKey): boolean {
+  return a.recordingId === b.recordingId && a.sessionId === b.sessionId && a.index === b.index;
+}
+
+/** A file name for a segment's audio, e.g. `talk-rec_ab12-2026-09-30-14-05-09.webm`. */
+export function audioFileName(segment: Pick<OutboxSegment, "recordingId" | "startedAt" | "mimeType">): string {
+  const stamp = new Date(segment.startedAt).toISOString().slice(0, 19).replace(/[T:]/g, "-");
+  const type = segment.mimeType.split(";")[0]!.trim();
+  const extension = type === "audio/mp4" ? "m4a" : type === "audio/ogg" ? "ogg" : type === "audio/wav" ? "wav" : "webm";
+  return `talk-${segment.recordingId}-${stamp}.${extension}`;
 }
 
 function keyOf(key: OutboxKey): IDBValidKey {
@@ -175,6 +218,21 @@ export class Outbox {
       current.rejected = reason;
       await request(store.put(current));
     });
+  }
+
+  /** Puts a set-aside segment back in line for upload. */
+  retry(key: OutboxKey): Promise<void> {
+    return this.tx("readwrite", async (store) => {
+      const current = (await request(store.get(keyOf(key)))) as OutboxSegment | undefined;
+      if (!current?.rejected) return;
+      delete current.rejected;
+      current.retried = true;
+      await request(store.put(current));
+    });
+  }
+
+  get(key: OutboxKey): Promise<OutboxSegment | undefined> {
+    return this.tx("readonly", (store) => request(store.get(keyOf(key))) as Promise<OutboxSegment | undefined>);
   }
 
   remove(key: OutboxKey): Promise<void> {

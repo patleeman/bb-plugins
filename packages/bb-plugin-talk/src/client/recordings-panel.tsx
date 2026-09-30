@@ -37,6 +37,7 @@ import type { Recording, Segment, TalkRpcContract } from "../shared/contract";
 import {
   PANEL_PATH,
   RECORDING_CHANGED,
+  UNSENT_PATH,
   formatClock,
   formatLength,
   joinTranscript,
@@ -46,6 +47,7 @@ import {
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { talk, useTalkState } from "./controller";
+import { sameKey, type SetAsideSegment } from "./outbox";
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -64,7 +66,153 @@ function RecordingList() {
   const call = useCallback<ProviderCall>((method, input) => rpc.call(method, input as never) as never, [rpc]);
   const [version, setVersion] = useState(0);
   useChangedSignal(() => setVersion((value) => value + 1));
-  return <AddOnCollection pluginId="talk" title="Recordings" kind="recording" call={call} refreshKey={version} />;
+  const { setAside } = useTalkState();
+  // Studio's collection can't show unsent audio, so this page stays while
+  // there is some.
+  if (setAside === null) return null;
+  return (
+    <div className="flex h-full flex-col">
+      <UnsentNotice className="mx-10 mt-6 max-md:mx-4" />
+      <div className="min-h-0 flex-1">
+        <AddOnCollection
+          pluginId="talk"
+          title="Recordings"
+          kind="recording"
+          call={call}
+          refreshKey={version}
+          handOver={setAside.length === 0}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── Unsent audio ─────────────────────────────────────────────────────────
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Points at audio this device kept because the server refused it. */
+function UnsentNotice({ recordingId, className }: { recordingId?: string; className?: string }) {
+  const setAside = useTalkState().setAside ?? [];
+  const navigate = useBbNavigate();
+  const count = setAside.filter((segment) => !recordingId || segment.recordingId === recordingId).length;
+  if (count === 0) return null;
+  const what = count === 1 ? "A piece of audio" : `${count} pieces of audio`;
+  return (
+    <div className={cn("flex items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/5 px-4 py-3 text-sm max-md:flex-wrap", className)}>
+      <Icon name="CloudOff" className="size-4 shrink-0 text-amber-600" />
+      <span className="min-w-0 flex-1">
+        {what}
+        {recordingId ? " from this recording" : ""} couldn't be uploaded and {count === 1 ? "is" : "are"} kept on this device.
+      </span>
+      <button type="button" className={OUTLINE_BUTTON} onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: UNSENT_PATH })}>
+        Review
+      </button>
+    </div>
+  );
+}
+
+function UnsentAudio() {
+  const setAside = useTalkState().setAside ?? [];
+  const navigate = useBbNavigate();
+  const studio = useStudioPresent();
+  const [busy, setBusy] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState<readonly SetAsideSegment[] | null>(null);
+  const act = (work: () => Promise<unknown>) => {
+    setBusy(true);
+    void work()
+      .catch((cause: unknown) => toast.error(message(cause)))
+      .finally(() => setBusy(false));
+  };
+  const toCollection = () => (studio ? openAppPath(studioPath("recording")) : navigate.toPluginPanel(PANEL_PATH));
+  return (
+    <div className="relative h-full">
+      <ItemHeader backLabel={studio ? "Studio" : "Recordings"} onBack={toCollection} />
+      <PageColumn className="max-w-3xl">
+        <h1 className="text-2xl font-semibold tracking-tight">Unsent audio</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          The server refused these pieces of audio, so Talk kept them on this device instead of losing them. Retry
+          after updating Talk, download them, or discard them.
+        </p>
+        {setAside.length === 0 ? (
+          <p className="mt-8 text-sm text-muted-foreground">Nothing here: every piece of audio was uploaded.</p>
+        ) : (
+          <>
+            <div className="mt-6 flex flex-wrap gap-2">
+              <button type="button" className={OUTLINE_BUTTON} disabled={busy} onClick={() => act(() => talk.retrySetAside(setAside))}>
+                <Icon name="RotateCcw" /> Retry all
+              </button>
+              <button type="button" className={GHOST_BUTTON} disabled={busy} onClick={() => setConfirmDiscard(setAside)}>
+                <Icon name="Trash2" /> Discard all…
+              </button>
+            </div>
+            {confirmDiscard ? (
+              <div className="mt-4 flex items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm max-md:flex-wrap">
+                <span className="min-w-0 flex-1">
+                  Delete {confirmDiscard.length === 1 ? "this audio" : `these ${confirmDiscard.length} pieces of audio`} from this
+                  device? This can't be undone.
+                </span>
+                <button
+                  type="button"
+                  className={DANGER_BUTTON}
+                  onClick={() => {
+                    const keys = confirmDiscard;
+                    setConfirmDiscard(null);
+                    act(() => talk.discardSetAside(keys));
+                  }}
+                >
+                  Discard
+                </button>
+                <button type="button" className={GHOST_BUTTON} onClick={() => setConfirmDiscard(null)}>
+                  Cancel
+                </button>
+              </div>
+            ) : null}
+            <ul className="mt-4 divide-y divide-border rounded-lg border border-border">
+              {setAside.map((segment) => (
+                <li key={`${segment.recordingId}:${segment.sessionId}:${segment.index}`} className="flex items-center gap-3 px-4 py-3 text-sm max-md:flex-wrap">
+                  <div className="min-w-0 flex-1">
+                    <button
+                      type="button"
+                      className="font-medium hover:underline"
+                      onClick={() => navigate.toPluginPanel(PANEL_PATH, { subPath: segment.recordingId })}
+                    >
+                      {shortDateTime(segment.startedAt)}
+                    </button>
+                    <span className="text-muted-foreground">
+                      {" · "}
+                      {segment.durationMs === null ? "unknown length" : formatLength(segment.durationMs)} · {formatBytes(segment.bytes)}
+                    </span>
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground" title={segment.reason}>
+                      {segment.reason}
+                    </p>
+                  </div>
+                  <button type="button" aria-label="Retry" title="Retry" className={ICON_BUTTON} disabled={busy} onClick={() => act(() => talk.retrySetAside([segment]))}>
+                    <Icon name="RotateCcw" className="size-4" />
+                  </button>
+                  <button type="button" aria-label="Download" title="Download" className={ICON_BUTTON} onClick={() => act(() => talk.downloadSetAside(segment))}>
+                    <Icon name="Download" className="size-4" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Discard"
+                    title="Discard"
+                    className={ICON_BUTTON}
+                    disabled={busy}
+                    onClick={() => setConfirmDiscard(setAside.filter((other) => sameKey(other, segment)))}
+                  >
+                    <Icon name="Trash2" className="size-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </PageColumn>
+    </div>
+  );
 }
 
 // ── One recording ────────────────────────────────────────────────────────
@@ -289,6 +437,8 @@ function RecordingDetail({ id }: { id: string }) {
           ) : null}
         </div>
 
+        <UnsentNotice recordingId={id} className="mt-6" />
+
         {confirmDelete ? (
           <div className="mt-6 flex items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm max-md:flex-wrap">
             <span className="min-w-0 flex-1">Delete this recording and its audio? This can't be undone.</span>
@@ -424,5 +574,6 @@ function SegmentText({ segment, playing, onPlay }: { segment: Segment; playing: 
 
 export function RecordingsPanel({ subPath }: PluginNavPanelProps) {
   const id = subPath.split("/")[0] ?? "";
+  if (id === UNSENT_PATH) return <UnsentAudio />;
   return /^rec_[a-z0-9]{8,32}$/.test(id) ? <RecordingDetail id={id} /> : <RecordingList />;
 }

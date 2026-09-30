@@ -21,9 +21,19 @@ import type {
   PluginRpcClient,
 } from "@get-bb/plugin-sdk/app";
 import type { Recording, RecordingKind, TalkRpcContract } from "../shared/contract";
-import { PANEL_PATH, isEmptyRecording, joinTranscript } from "../shared/format";
+import { PANEL_PATH, UNSENT_PATH, isEmptyRecording, joinTranscript } from "../shared/format";
 import { findComposer, insertIntoComposer, type MicState } from "./composer-dom";
-import { Outbox, isOrphan, isPermanentRejection, isUploadable, toBase64, type OutboxKey } from "./outbox";
+import {
+  Outbox,
+  audioFileName,
+  isOrphan,
+  isPermanentRejection,
+  isUploadable,
+  setAsideOf,
+  toBase64,
+  type OutboxKey,
+  type SetAsideSegment,
+} from "./outbox";
 import {
   FIELD_PENDING_PREFIX,
   findField,
@@ -81,6 +91,8 @@ export interface TalkState {
   /** Segments not yet confirmed by the server. */
   pendingUploads: number;
   uploadError: string | null;
+  /** Segments the server refused for good, kept on this device; null until read. */
+  setAside: SetAsideSegment[] | null;
   recording: Recording | null;
   transcript: string;
 }
@@ -140,6 +152,7 @@ const INITIAL: TalkState = {
   captureStartedAt: null,
   pendingUploads: 0,
   uploadError: null,
+  setAside: null,
   recording: null,
   transcript: "",
 };
@@ -366,6 +379,7 @@ export class TalkController {
     } catch (error) {
       toast.error(`Talk cannot use local storage: ${message(error)}`);
     }
+    await this.refreshSetAside();
     void this.kickUpload();
     const saved = this.readPersisted();
     if (!saved) return;
@@ -1072,7 +1086,7 @@ export class TalkController {
     this.composePath = null;
     this.insertOnDone = false;
     this.persist(null);
-    this.set({ ...INITIAL, pendingUploads: this.state.pendingUploads });
+    this.set({ ...INITIAL, pendingUploads: this.state.pendingUploads, setAside: this.state.setAside });
   }
 
   /** Stops waiting for a dictation's transcript; it stays in recordings. */
@@ -1094,7 +1108,46 @@ export class TalkController {
       } while (this.uploadAgain);
     } finally {
       this.uploading = false;
+      await this.refreshSetAside();
     }
+  }
+
+  // ── Set-aside audio (the recovery view) ────────────────────────────────
+  private async refreshSetAside(): Promise<void> {
+    const setAside = setAsideOf(await this.outbox.all().catch(() => []));
+    const signature = (list: readonly SetAsideSegment[]) => list.map((s) => `${keyString(s)} ${s.reason}`).join("\n");
+    const current = this.state.setAside;
+    if (!current || signature(setAside) !== signature(current)) this.set({ setAside });
+  }
+
+  /** Sends set-aside segments again, e.g. after a Talk update. */
+  async retrySetAside(keys: readonly OutboxKey[]): Promise<void> {
+    for (const key of keys) await this.outbox.retry(key);
+    await this.kickUpload();
+  }
+
+  /** Saves a set-aside segment's audio as a file. */
+  async downloadSetAside(key: OutboxKey): Promise<void> {
+    const segment = await this.outbox.get(key);
+    if (!segment) return;
+    const url = URL.createObjectURL(new Blob(segment.parts, { type: segment.mimeType }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = audioFileName(segment);
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
+  /** Deletes a set-aside segment's audio from this device. */
+  async discardSetAside(keys: readonly OutboxKey[]): Promise<void> {
+    for (const key of keys) await this.outbox.remove(key);
+    await this.refreshSetAside();
+  }
+
+  private showSetAside(): void {
+    this.navigate?.toPluginPanel(PANEL_PATH, { subPath: UNSENT_PATH });
   }
 
   private async drain(): Promise<void> {
@@ -1118,7 +1171,9 @@ export class TalkController {
           // Retrying can't help, and would hold up every segment behind it.
           // Keep the audio locally, set aside, and move on.
           console.warn(`Talk set aside a segment the server refused: ${message(error)}`, segment);
-          toast.error(`Talk couldn't upload part of a recording and kept it on this device: ${message(error)}`);
+          toast.error(`Talk couldn't upload part of a recording and kept it on this device: ${message(error)}`, {
+            action: this.navigate ? { label: "Review", onClick: () => this.showSetAside() } : undefined,
+          });
           await this.outbox.reject(segment, message(error));
           segments = segments.filter((s) => s !== segment);
           continue;
@@ -1127,6 +1182,12 @@ export class TalkController {
           this.set({ uploadError: message(error) });
           this.scheduleUpload();
           return;
+        }
+        if (segment.retried) {
+          // Sent again by hand: keep it, so the audio can still be downloaded.
+          await this.outbox.reject(segment, "Its recording was deleted.");
+          segments = segments.filter((s) => s !== segment);
+          continue;
         }
         // The recording was deleted: its audio has nowhere to go.
       }

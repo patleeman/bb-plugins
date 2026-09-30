@@ -13,6 +13,9 @@ export const TALK_ICON = "talk/talk";
 /** The nav panel path; recordings live at /plugins/talk/recordings/<id>. */
 export const PANEL_PATH = "recordings";
 
+/** Audio the server refused, kept on this device: /plugins/talk/recordings/unsent. */
+export const UNSENT_PATH = "unsent";
+
 /**
  * Finished with no words and nothing left to retry. Talk does not keep
  * these: the server deletes them as soon as they get here.

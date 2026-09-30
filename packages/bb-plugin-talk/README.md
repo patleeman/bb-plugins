@@ -84,7 +84,10 @@ afterwards.
   unsaved audio alone, and upload it only once that window is gone.
 - **Refused pieces don't block the rest.** If the server rejects a piece as
   invalid, Talk keeps its audio on the device, says so, and uploads the
-  pieces after it. A laptop that sleeps mid-recording doesn't count the
+  pieces after it. **Unsent audio** (the toast's *Review*, or the notice on
+  the recording's page and the Recordings list) lists what the device kept:
+  retry each piece or all of them (after a Talk update, say), download one
+  as an audio file, or discard it. A laptop that sleeps mid-recording doesn't count the
   sleep as recorded time.
 - **Deleting.** A recording that a window is still capturing can't be
   deleted. Stop it first.

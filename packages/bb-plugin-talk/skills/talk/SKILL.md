@@ -67,7 +67,9 @@ or failed. Say so instead of guessing at the missing part.
   server before it is transcribed. A page reload resumes the same recording,
   and offline audio uploads when the connection returns. A capture that
   vanished (a closed laptop, a killed app) shows as *Interrupted*, and
-  *Resume recording* on its page continues it.
+  *Resume recording* on its page continues it. Audio the server refuses as
+  invalid stays on that device, listed at `/plugins/talk/recordings/unsent`,
+  where the user can retry, download or discard it. Agents can't reach it.
 - **Mobile.** Recording runs while the BB app is in the foreground. If the
   app goes to the background, the microphone stops; Talk resumes when it
   returns, or shows *Resume* if the system needs a tap first.
