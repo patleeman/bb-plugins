@@ -53,9 +53,9 @@ export function codexAuth(codexHome = join(homedir(), ".codex")): DotAuth {
 const profileSchema = z.object({ id: z.string().min(1), messaging_room_id: z.string().min(1), active_root_thread_id: z.string().min(1), is_paused: z.boolean() });
 export type DotRoom = { agentId: string; roomId: string; rootId: string; memberId: string; paused: boolean };
 export const dotMessageSchema = z.object({
-  id: z.string().min(1), account_user_id: z.string().nullable().optional(),
+  id: z.string().min(1), created_at: z.string().optional(), account_user_id: z.string().nullable().optional(),
   request_id: z.string().nullable().optional(), deleted_at: z.string().nullable().optional(),
-  content: z.object({ text: z.string().optional() }),
+  content: z.object({ text: z.string().nullable().optional() }),
   reply_to: z.object({ message_id: z.string() }).nullable().optional(),
 });
 export type DotMessage = z.infer<typeof dotMessageSchema>;
@@ -70,7 +70,9 @@ export const dotHttpRequest: typeof fetch = async (input, init) => {
   const url = new URL(String(input));
   if (url.origin !== "https://chatgpt.com") throw new DotError("Invalid Dot API origin.");
   return new Promise<Response>((resolve, reject) => {
-    const request = httpsRequest(url, { method: init?.method, headers: Object.fromEntries(new Headers(init?.headers)), signal: init?.signal ?? undefined }, response => {
+    const headers = Object.fromEntries(new Headers(init?.headers));
+    if (typeof init?.body === "string") headers["content-length"] = String(Buffer.byteLength(init.body));
+    const request = httpsRequest(url, { method: init?.method, headers, signal: init?.signal ?? undefined }, response => {
       const chunks: Buffer[] = []; let size = 0;
       response.on("data", (chunk: Buffer) => {
         size += chunk.length;
@@ -106,7 +108,13 @@ export class DotClient {
         if ((await this.auth.read()).access_token === tokens.access_token) await this.auth.refresh();
         continue;
       }
-      if (!response.ok) { await response.body?.cancel(); throw new DotError(`Dot API rejected the request (HTTP ${response.status}).`, response.status); }
+      if (!response.ok) {
+        let detail = "";
+        if (response.status === 422) {
+          try { const body = await response.json() as { detail?: { loc?: unknown[]; type?: string }[] }; if (Array.isArray(body.detail)) detail = body.detail.map(value => `${value.loc?.join(".")}: ${value.type}`).join("; "); } catch {}
+        } else await response.body?.cancel();
+        throw new DotError(`Dot API rejected the request (HTTP ${response.status}).${detail ? ` Validation: ${detail}` : ""}`, response.status);
+      }
       try { return await response.json(); } catch { throw new DotError("Dot returned an invalid response."); }
     }
     throw new DotError("Dot authentication was rejected after refresh.", 401);
@@ -123,7 +131,7 @@ export class DotClient {
     } catch (error) { if (error instanceof DotError) throw error; throw new DotError("Dot discovery returned an unsupported response. Its private API may have changed."); }
   }
   async messages(room: DotRoom, signal?: AbortSignal): Promise<DotMessage[]> {
-    try { return z.object({ items: z.array(dotMessageSchema) }).parse(await this.http(`/messaging/rooms/${encodeURIComponent(room.roomId)}/messages?limit=100`, undefined, signal)).items; }
+    try { return z.object({ items: z.array(dotMessageSchema) }).parse(await this.http(`/messaging/rooms/${encodeURIComponent(room.roomId)}/messages?limit=32`, undefined, signal)).items; }
     catch (error) { if (error instanceof DotError) throw error; throw new DotError("Dot returned an unsupported message list."); }
   }
   async submit(room: DotRoom, text: string, requestId: string, replyTo?: string, signal?: AbortSignal): Promise<DotMessage> {

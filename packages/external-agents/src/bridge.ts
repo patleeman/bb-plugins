@@ -1,3 +1,4 @@
+import { createDotBridge } from "./dot-bridge.js";
 import { experimental_acpProviderBridge } from "@get-bb/plugin-sdk/provider-bridge/acp";
 import { createBridgeIo, experimental_defineProviderBridge, type ProviderBridgeEntry, type ProviderBridgeContext } from "@get-bb/plugin-sdk/provider-bridge";
 import { z } from "zod";
@@ -17,7 +18,8 @@ const prepare = dependencies.prepare ?? prepareOpenClaw;
 const health = dependencies.health ?? openclawHealth;
 const hermes = dependencies.hermes ?? createHermesBridge(dependencies.write);
 const io = createBridgeIo<unknown>({ write: dependencies.write });
-const routes = new Map<string, "hermes" | "openclaw">();
+const dot = createDotBridge(dependencies.write);
+const routes = new Map<string, "hermes" | "openclaw" | "dot">();
 const launches = new Map<string, Awaited<ReturnType<typeof prepareOpenClaw>>>();
 let context: ProviderBridgeContext | undefined;
 let activeProvider = "hermes";
@@ -33,6 +35,7 @@ async function handleLine(line: string) {
   const provider = options?.provider ?? routes.get(params.threadId) ?? activeProvider;
   // Both provider implementations support these minimum common capabilities.
   if (request.method === "initialize") { hermes.handleLine(line); return; }
+  if (provider === "dot") { activeProvider = "dot"; if (params.threadId) routes.set(params.threadId, "dot"); dot.handleLine(line); return; }
   if (provider !== "openclaw") { hermes.handleLine(line); return; }
   activeProvider = "openclaw";
   try {
@@ -89,6 +92,7 @@ async function handleLine(line: string) {
 }
 function close() {
   hermes.onClose?.();
+  dot.onClose?.();
   acp.onClose?.();
   for (const client of launches.values()) void client.dispose();
   launches.clear(); routes.clear(); selectedModels.clear();

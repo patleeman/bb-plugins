@@ -444,6 +444,7 @@ const captures = [
     setup: async (client) => {
       await client.navigate("/settings/plugins/external-agents");
       await client.waitForText("Enable Hermes");
+      await client.waitForText("Enable Dot (experimental");
       await client.waitForText("Hermes API URL");
       await client.waitForText("OpenClaw Gateway URL");
       await client.waitForText("OpenClaw paired client state directory");

@@ -214,3 +214,14 @@ README. It combines one in-flight BB request per Dot, verified member identity,
 server timestamps, and a cloud turn boundary; concurrent messages from another
 client require an uncertainty note. That fallback is not yet implemented and
 does not change the observations above about missing correlation fields.
+
+
+## Registered provider
+
+The experimental provider is now registered when `dotEnabled=true` (default
+false). Its BB bridge implements the documented best-effort fallback, tools
+and assistant stream events, the cross-process room queue, and cloud interrupt.
+History requests use the observed maximum `limit=32` and accept null text on
+non-text messages. The staged token round trip and cloud-confirmed interruption
+have passed. Earlier implementation-status paragraphs above describe milestones,
+not the final state.

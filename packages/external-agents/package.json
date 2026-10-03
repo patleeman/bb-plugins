@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "External Agents",
-    "description": "Hermes and OpenClaw providers running on a remote agent host.",
+    "description": "Remote Hermes and OpenClaw providers, plus experimental ChatGPT Dot.",
     "branding": {
       "icon": "Network"
     },
