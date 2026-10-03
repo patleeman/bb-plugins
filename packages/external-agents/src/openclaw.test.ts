@@ -1,8 +1,10 @@
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { stat, readFile } from "node:fs/promises";
 import { agentId, sessionKey, mapAgents, prepareOpenClaw, openclawHealth } from "./openclaw.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+afterEach(() => vi.unstubAllEnvs());
 
 it("maps Gateway agents to BB models with the declared default", () => {
   const models = mapAgents({ defaultId: "worker", agents: [{ id: "main" }, { id: "worker", name: "Worker" }] });
@@ -28,6 +30,8 @@ it("keeps the credential out of ACP argv and removes private temporary files", a
   } finally { await client.dispose(); delete process.env.BB_TEST_OPENCLAW_TOKEN; }
 });
 it.runIf(process.env.BB_EXTERNAL_LIVE === "1")("discovers red4 Gateway agents and authenticated health", async () => {
+  // The installed CLI intentionally suppresses stdout under VITEST unless opted in.
+  vi.stubEnv("OPENCLAW_TEST_RUNTIME_LOG", "1");
   const config = { enabled: true, baseUrl: "ws://100.69.111.53:18789", tokenEnv: "RED4_OPENCLAW_TOKEN", stateDir: join(homedir(), ".config/agent-keys/openclaw-client"), allowPrivateWs: true };
   const client = await prepareOpenClaw(config);
   try { expect((await client.agents()).length).toBeGreaterThan(0); }

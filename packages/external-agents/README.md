@@ -29,7 +29,7 @@ the exact Hermes request ID and never broaden the choices the server offers.
 
 ## Remaining verification
 
-- Verify OpenClaw ACP through staged BB.
+- Diagnose the empty completion from OpenClaw ACP in staged BB.
 - Complete successful live prompts after upstream credentials are configured.
 - Implement the experimental Dot provider using the preserved
   [transport notes and probes](docs/dot-transport.md).
@@ -71,10 +71,14 @@ Optional live catalog test (load the token variables into the shell first):
 BB_EXTERNAL_LIVE=1 npm test
 ```
 
-Current red4 check: Gateway authentication succeeds, but `agents.list` reports
-that the paired client lacks `operator.read`. Infrastructure remediation is
-pending. Both agents also need upstream model credentials before the required
-successful prompt checks can pass.
+Current red4 check: Gateway authentication, `agents.list`, and the health RPC
+pass with the existing paired device. A staged ACP prompt starts and completes
+but has no assistant output; the cause is under investigation. Hermes still
+reports missing upstream model credentials. Neither required prompt has passed.
+
+Run staged BB with access to the paired OpenClaw state and its cache directory.
+An inherited worker sandbox prevented device identity loading and caused a
+misleading `operator.read` rejection. No pairing upgrade was needed.
 
 ## Staged preview
 
@@ -96,8 +100,9 @@ additional tools on the remote agent itself.
 
 Staged evidence: the plugin installs from Git on stable BB 0.45.0. A real
 Hermes BB thread reaches red4 and records the remote missing-credentials
-error as a failed turn. OpenClaw's live probe currently reports the missing
-`operator.read` scope. Neither required `ok` prompt has succeeded yet.
+error as a failed turn. OpenClaw's live catalog and authenticated health checks
+pass. Its staged ACP turn completes without an answer; neither required `ok`
+prompt has succeeded yet.
 
 Hermes also passes the published BB provider-bridge conformance suite using
 an HTTP fixture. OpenClaw routing tests cover cancellation during preflight
