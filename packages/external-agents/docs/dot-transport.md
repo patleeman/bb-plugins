@@ -208,3 +208,9 @@ uses any externally rotated token before requesting another refresh.
 and six fixture tests without submitting a message. This is transport evidence;
 the Dot BB bridge, cross-process queue, stream recovery, and staged prompt/cancel
 checks are still pending. Dot remains unregistered and disabled.
+
+The subsequently approved best-effort fallback is documented in the provider
+README. It combines one in-flight BB request per Dot, verified member identity,
+server timestamps, and a cloud turn boundary; concurrent messages from another
+client require an uncertainty note. That fallback is not yet implemented and
+does not change the observations above about missing correlation fields.

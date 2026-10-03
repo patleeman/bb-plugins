@@ -114,3 +114,23 @@ through the full staged BB 0.45.0 runtime: a pending interaction appeared,
 Allow once reached the exact Hermes request ID, and the thread completed with
 `ok`. This fixture executes no commands. This verifies BB integration independently
 of the pending red4 model credentials.
+
+## Experimental Dot: planned best-effort correlation
+
+Dot remains disabled and unregistered. Its transport and queue foundations are
+present, but the BB bridge is not complete. The private ChatGPT routes may break.
+All BB Dot threads will share one persistent agent and one conversation.
+
+Prefer an exact `request_id` or `reply_to` match. When neither is echoed, the
+approved fallback requires one BB request in flight per Dot across provider
+processes. Accept a candidate reply only from the Dot's verified member ID,
+created after the submitted message's **server timestamp**, and received before
+the matching cloud WebSocket turn completes. Use the `turn/started` →
+`turn/completed` pair after submission as the correlation window.
+
+This is best-effort correlation, not proof of causality. If another client sends
+a message during that window, mark the BB turn uncertain and display the candidate
+reply with a note explaining that it may respond to the other client's message.
+Do not silently discard it or label it confidently as the BB request's answer.
+The fallback and uncertainty display are requirements for the unfinished bridge;
+the current HTTP helper implements only exact correlation.
