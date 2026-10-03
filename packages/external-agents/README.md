@@ -1,8 +1,8 @@
 # External Agents
 
 Work in progress: Hermes HTTP and OpenClaw ACP providers for stable BB 0.45.0
-and Plugin SDK 0.6.15. Provider registration and live verification are not
-complete yet.
+and Plugin SDK 0.6.15. Hermes registration and fixture integration are implemented. OpenClaw
+and live verification are not complete yet.
 
 The provider process runs on the selected BB host and connects to a remote
 agent server. The intended provider IDs are `hermes` and `openclaw`.
@@ -29,7 +29,21 @@ the exact Hermes request ID and never broaden the choices the server offers.
 
 ## Remaining verification
 
-- Connect both providers to the BB bridge lifecycle and settings.
-- Verify session continuity, stop, steering, and BB pending interactions.
+- Add OpenClaw registration and the ACP bridge.
+- Validate Hermes integration in a live BB thread.
 - Run both providers against red4 in staged stable BB.
 - Capture the staged provider surface and add its screenshot here.
+
+## Settings and health
+
+Hermes uses `hermesEnabled`, `hermesBaseUrl`, and `hermesTokenEnv`.
+The token variable defaults to `RED4_HERMES_TOKEN` on the selected BB host.
+The provider is disabled by default until its endpoint is configured.
+
+The plugin RPC `health` accepts `{ hostId, provider: "hermes" }` and returns
+`{ online, status, message }`. It runs the authenticated model probe on that
+host. The office UI can use `online: false` for its Offline state.
+
+The fixture integration test covers session start/resume, run creation,
+BB approval response routing, steering, and remote stop. These checks do not
+substitute for the pending red4 live tests.
