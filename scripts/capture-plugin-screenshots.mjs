@@ -439,6 +439,24 @@ const threadUrl = `/projects/${projectId}/threads/${threadId}`;
 
 const captures = [
   {
+    id: "external-agents",
+    packageDir: "external-agents",
+    setup: async (client) => {
+      await client.navigate("/settings/plugins/external-agents");
+      await client.waitForText("Enable Hermes");
+      await client.waitForText("Hermes API URL");
+      await client.waitForText("OpenClaw Gateway URL");
+      await client.waitForText("OpenClaw paired client state directory");
+      const configured = await client.evaluate(`(() => {
+        const values = [...document.querySelectorAll('input')].map(input => input.value);
+        return values.includes('http://100.69.111.53:8642') &&
+          values.includes('ws://100.69.111.53:18789') &&
+          values.includes('RED4_HERMES_TOKEN') && values.includes('RED4_OPENCLAW_TOKEN');
+      })()`);
+      if (!configured) throw new Error("External Agents staged endpoints and token variable names are missing");
+    },
+  },
+  {
     id: "automation-calendar",
     packageDir: "bb-plugin-automation-calendar",
     showSidebar: true,

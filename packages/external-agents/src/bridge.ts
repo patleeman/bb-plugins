@@ -43,6 +43,8 @@ async function handleLine(line: string) {
       routes.set(params.threadId, "openclaw");
       params.options.providerOptions = { acpDialect: "generic", acpLaunchSpec: client.launch(params.threadId, params.options.model) };
       delete params.options.model; // The BB model selects a Gateway agent, not an LLM model in ACP.
+      // OpenClaw explicitly rejects per-session MCP servers; tools run on its Gateway.
+      params.dynamicTools = [];
       experimental_acpProviderBridge.handleLine(JSON.stringify(request));
       // Old children have consumed the token file; deleting it cannot change their credentials.
       await previous?.dispose();

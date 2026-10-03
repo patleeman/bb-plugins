@@ -1,3 +1,4 @@
+import { resolveToken } from "./credentials.js";
 import { z } from "zod";
 
 export const connectionSchema = z.object({
@@ -7,6 +8,7 @@ export const connectionSchema = z.object({
   }, "Use an HTTP URL without credentials, query, or fragment"),
   tokenEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
   enabled: z.boolean(),
+  tokenEnvFile: z.string().optional(),
 });
 export type Connection = z.infer<typeof connectionSchema>;
 export type HermesEvent = Record<string, unknown> & { event: string };
@@ -22,7 +24,7 @@ export class HermesClient {
   private readonly token: string;
   constructor(connection: Connection, secret?: string, env: NodeJS.ProcessEnv = process.env) {
     this.connection = connectionSchema.parse(connection);
-    this.token = secret || env[connection.tokenEnv] || "";
+    this.token = secret || resolveToken(connection.tokenEnv, connection.tokenEnvFile, env);
   }
   private async request(path: string, body?: unknown, signal?: AbortSignal, stream = false): Promise<Response> {
     if (!this.connection.enabled) throw new AgentConnectionError("Hermes is disabled in External Agents settings.");

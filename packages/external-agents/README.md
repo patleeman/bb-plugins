@@ -32,7 +32,7 @@ the exact Hermes request ID and never broaden the choices the server offers.
 - Verify OpenClaw ACP through staged BB.
 - Validate Hermes integration in a live BB thread.
 - Run both providers against red4 in staged stable BB.
-- Capture the staged provider surface and add its screenshot here.
+- Complete successful live prompts after upstream credentials are configured.
 
 ## Settings and health
 
@@ -73,3 +73,26 @@ Current red4 check: Gateway authentication succeeds, but `agents.list` reports
 that the paired client lacks `operator.read`. Infrastructure remediation is
 pending. Both agents also need upstream model credentials before the required
 successful prompt checks can pass.
+
+## Staged preview
+
+![External Agents settings in stable BB](assets/staged-preview.png)
+
+Captured from the full BB 0.45.0 application with both providers enabled,
+the red4 Tailscale URLs, token variable names, and paired OpenClaw client
+state configured. The screenshot contains paths and variable names, not
+credential values.
+
+If the BB host does not inherit the token variable, set `hermesTokenEnvFile`
+or `openclawTokenEnvFile` to a dotenv file on that host. Only the named
+assignment is used. The parser does not execute shell code or expand values;
+the process environment takes precedence.
+
+Both agents run tools remotely. OpenClaw rejects per-session MCP servers,
+so its bridge does not pass BB's dynamic tool server to the Gateway. Configure
+additional tools on the remote agent itself.
+
+Staged evidence: the plugin installs from Git on stable BB 0.45.0. A real
+Hermes BB thread reaches red4 and records the remote missing-credentials
+error as a failed turn. OpenClaw's live probe currently reports the missing
+`operator.read` scope. Neither required `ok` prompt has succeeded yet.

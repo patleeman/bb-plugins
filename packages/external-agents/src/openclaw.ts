@@ -1,3 +1,4 @@
+import { resolveToken } from "./credentials.js";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -10,6 +11,7 @@ import { AgentConnectionError } from "./hermes-client.js";
 export const openclawConnectionSchema = z.object({
   baseUrl: z.string().url().refine(value => { const u = new URL(value); return ["ws:", "wss:"].includes(u.protocol) && !u.username && !u.password && !u.search && !u.hash; }, "Use a Gateway WebSocket URL without credentials"),
   tokenEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/), enabled: z.boolean(),
+  tokenEnvFile: z.string().optional(),
   stateDir: z.string().default(""), allowPrivateWs: z.boolean().default(false),
 });
 export type OpenClawConnection = z.infer<typeof openclawConnectionSchema>;
@@ -30,7 +32,7 @@ export function mapAgents(value: unknown): AvailableModel[] {
 export async function prepareOpenClaw(connection: OpenClawConnection, root = tmpdir()) {
   const config = openclawConnectionSchema.parse(connection);
   if (!config.enabled) throw new AgentConnectionError("OpenClaw is disabled in External Agents settings.");
-  const token = process.env[config.tokenEnv];
+  const token = resolveToken(config.tokenEnv, config.tokenEnvFile);
   if (!token) throw new AgentConnectionError(`OpenClaw token is missing. Set ${config.tokenEnv} on the BB host.`);
   const directory = await mkdtemp(join(root, "bb-openclaw-"));
   const tokenFile = join(directory, "token");
