@@ -68,8 +68,19 @@ it("shows a candidate reply with an uncertainty note when another client interve
       }); return sent;
     } } as unknown as DotClient;
     const factory: DotLiveFactory = (_, n) => { notify = n; return { connect: async () => ({ status: { type: "idle" } }), own() {}, interrupt: async () => {}, close() {} }; };
-    await expect(new DotRun(client, new DotQueue(root), d => deltas.push(...d), factory, 1, 1000).execute("hello")).rejects.toThrow("uncertain");
+    await new DotRun(client, new DotQueue(root), d => deltas.push(...d), factory, 1, 1000).execute("hello");
+    expect(deltas.at(-1)).toMatchObject({ kind: "turn.boundary", status: "completed" });
     expect(deltas.find(d => d.kind === "item.textClose")).toMatchObject({ text: expect.stringContaining("[Uncertain reply:") });
     const lease = await new DotQueue(root).acquire(room.roomId, new AbortController().signal); await lease.release();
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it("marks an unlinked first reply uncertain without other clients, and rejects foreign reply links", () => {
+  const sent = { id: "sent", content: { text: "hello" }, created_at: new Date(1000).toISOString() };
+  const first = { id: "reply", account_user_id: room.memberId, content: { text: "ok" }, created_at: new Date(1500).toISOString() };
+  const windows = [{ start: 1100, end: 2000 }];
+  expect(selectDotReplies([first], room, sent, "request", windows, new Set())).toMatchObject({ uncertain: true, replies: [first] });
+  expect(selectDotReplies([{ ...first, reply_to: { message_id: "other" }, request_id: "request" }], room, sent, "request", windows, new Set()).replies).toEqual([]);
+  expect(selectDotReplies([first], room, sent, "request", [{ start: 1600, end: 2000 }], new Set()).replies).toEqual([]);
+  expect(selectDotReplies([{ ...first, reply_to: { message_id: "sent" } }], room, sent, "request", windows, new Set()).uncertain).toBe(false);
 });

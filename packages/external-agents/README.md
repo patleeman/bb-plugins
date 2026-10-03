@@ -126,6 +126,11 @@ created after the submitted message's **server timestamp**, and received before
 the matching cloud WebSocket turn completes. Use the `turn/started` →
 `turn/completed` pair after submission as the correlation window.
 
+Every accepted unlinked reply is displayed with an uncertainty note, even if no
+other client was observed. A reply linked to another message is ignored; the
+fallback cannot override that link. Replies outside the turn window are ignored.
+The visible candidate answer completes the BB turn with its note.
+
 This is best-effort correlation, not proof of causality. If another client sends
 a message during that window, mark the BB turn uncertain and display the candidate
 reply with a note explaining that it may respond to the other client's message.

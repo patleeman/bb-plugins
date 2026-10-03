@@ -61,7 +61,7 @@ export const dotMessageSchema = z.object({
 export type DotMessage = z.infer<typeof dotMessageSchema>;
 export function isDotReply(message: DotMessage, room: DotRoom, requestId: string, submittedMessageId: string): boolean {
   return !message.deleted_at && message.id !== submittedMessageId && message.account_user_id === room.memberId
-    && (message.request_id === requestId || message.reply_to?.message_id === submittedMessageId);
+    && (message.reply_to ? message.reply_to.message_id === submittedMessageId : message.request_id === requestId);
 }
 
 // Live discovery succeeds with native HTTPS; Node fetch returned HTTP 403.

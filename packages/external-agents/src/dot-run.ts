@@ -8,10 +8,15 @@ import { DotQueue } from "./dot-queue.js";
 export function selectDotReplies(messages: DotMessage[], room: DotRoom, sent: DotMessage, requestId: string, windows: { start: number; end?: number }[], seen: Set<string>) {
   const sentAt = Date.parse(sent.created_at ?? "");
   const fresh = messages.filter(message => !seen.has(message.id) && message.id !== sent.id && !message.deleted_at && Date.parse(message.created_at ?? "") >= sentAt);
+  const replies = fresh.filter(message => message.account_user_id === room.memberId && (
+    isDotReply(message, room, requestId, sent.id) ||
+    !message.reply_to && !message.request_id && Date.parse(message.created_at ?? "") > sentAt &&
+      windows.some(window => Date.parse(message.created_at!) >= window.start && Date.parse(message.created_at!) <= (window.end ?? Infinity))
+  ));
   return {
-    uncertain: fresh.some(message => message.account_user_id !== room.memberId),
-    replies: fresh.filter(message => message.account_user_id === room.memberId && (isDotReply(message, room, requestId, sent.id) ||
-      Date.parse(message.created_at ?? "") > sentAt && windows.some(window => Date.parse(message.created_at!) >= window.start && Date.parse(message.created_at!) <= (window.end ?? Infinity)))),
+    uncertain: fresh.some(message => message.account_user_id !== room.memberId) ||
+      replies.some(message => !isDotReply(message, room, requestId, sent.id)),
+    replies,
   };
 }
 export type DotLiveFactory = (room: DotRoom, notify: (event: DotNotification) => void, disconnected: () => void) => Pick<DotLive, "connect" | "own" | "interrupt" | "close">;
@@ -99,14 +104,14 @@ export class DotRun {
         const result = selectDotReplies(await this.client.messages(room), room, sent, requestId, windows, baseline);
         uncertain ||= result.uncertain;
         if (this.cancelled && activeTurn && interruptedTurn !== activeTurn) {
-          if (uncertain) throw new DotError("Dot's turn is uncertain because another client or a stream gap was observed. Stop it in ChatGPT.");
+          if (uncertain) throw new DotError("Dot's turn correlation is uncertain. Stop it in ChatGPT.");
           live.own(activeTurn); interruptedTurn = activeTurn; await live.interrupt(activeTurn);
         }
         if (completed && !activeTurn && (result.replies.length || interrupted || remoteError)) {
           settled = true;
           const text = result.replies.sort((a, b) => Date.parse(a.created_at!) - Date.parse(b.created_at!)).map(message => message.content.text ?? "").filter(Boolean).join("\n\n");
-          if (text) this.emit([{ kind: "item.textClose", key: { channel: "dot-answer" }, channel: "agentMessage", text: text + (uncertain ? "\n\n[Uncertain reply: another client sent a message or the live stream reconnected. This answer may belong to other Dot activity.]" : "") }]);
-          if (remoteError || uncertain) throw new DotError(remoteError || "Dot reply correlation is uncertain; see the note with the reply.");
+          if (text) this.emit([{ kind: "item.textClose", key: { channel: "dot-answer" }, channel: "agentMessage", text: text + (uncertain ? "\n\n[Uncertain reply: matched by the active turn window without a reply link, or another client/stream gap was observed. This answer may belong to other Dot activity.]" : "") }]);
+          if (remoteError) throw new DotError(remoteError);
           this.emit([{ kind: "turn.boundary", status: interrupted ? "interrupted" : "completed" }]);
           return;
         }
