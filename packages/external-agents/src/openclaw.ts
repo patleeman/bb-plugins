@@ -1,3 +1,4 @@
+import { openclawAcpGuard } from "./openclaw-acp-guard.js";
 import { resolveToken } from "./credentials.js";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -37,8 +38,10 @@ export async function prepareOpenClaw(connection: OpenClawConnection, root = tmp
   const directory = await mkdtemp(join(root, "bb-openclaw-"));
   const tokenFile = join(directory, "token");
   const configFile = join(directory, "config.json");
+  const guardFile = join(directory, "acp-guard.mjs");
   const dispose = () => rm(directory, { recursive: true, force: true });
   try {
+    await writeFile(guardFile, openclawAcpGuard, { mode: 0o600, flag: "wx" });
     await writeFile(tokenFile, token, { mode: 0o600, flag: "wx" });
     await writeFile(configFile, JSON.stringify({ gateway: { mode: "remote", remote: { url: config.baseUrl, token } } }), { mode: 0o600, flag: "wx" });
   } catch (error) { await dispose(); throw error; }
@@ -50,7 +53,7 @@ export async function prepareOpenClaw(connection: OpenClawConnection, root = tmp
   return {
     dispose,
     launch(threadId: string, model: unknown): HostDaemonAcpLaunchSpec {
-      return { displayName: "OpenClaw", command: "openclaw", args: ["acp", "--url", config.baseUrl, "--token-file", tokenFile, "--session", sessionKey(threadId, model), "--no-prefix-cwd"], env };
+      return { displayName: "OpenClaw", command: process.execPath, args: [guardFile, "acp", "--url", config.baseUrl, "--token-file", tokenFile, "--session", sessionKey(threadId, model), "--no-prefix-cwd"], env };
     },
     async agents(): Promise<AvailableModel[]> {
       const output = await new Promise<string>((resolve, reject) => {
