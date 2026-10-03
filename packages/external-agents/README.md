@@ -152,3 +152,5 @@ including Dot’s reply tool event. A separate BB Stop test left the cloud turn
 Initial history reads exposed the private API’s 32-message limit and nullable
 text fields; both are handled. Fixture tests cover exact/fallback correlation,
 queueing, interruption, reconnect setup, token refresh, and error handling.
+
+Provider logos are official upstream SVG marks. See [sources and license notices](icons/README.md).

@@ -32,7 +32,7 @@ export default async function plugin(bb: BbPluginApi) {
     providers.forEach(provider => provider.dispose());
     providers = [];
     if (config.dotEnabled) providers.push(bb.providers.register({
-      id: "dot", displayName: "Dot (experimental)", icon: "Network",
+      id: "dot", displayName: "Dot (experimental)", icon: "./icons/openai.svg",
       strings: { signInHint: "Sign in with Codex on this Mac. Dot uses its existing auth.json.", expiredHint: "Sign in again with Codex on this Mac.", installUrl: "https://chatgpt.com" },
       experimental_bridgeOptions: { provider: "dot", enabled: true },
       maintenance: { health: true, usage: false, installation: false },
@@ -44,7 +44,7 @@ export default async function plugin(bb: BbPluginApi) {
     if (!config[`${provider}Enabled`]) continue;
     const displayName = provider === "hermes" ? "Hermes" : "OpenClaw";
     providers.push(bb.providers.register({
-      id: provider, displayName, icon: "Network",
+      id: provider, displayName, icon: `./icons/${provider}.svg`,
       strings: { signInHint: `Set the ${displayName} token environment variable on the BB host.`, expiredHint: `Update the ${displayName} token on the BB host.`, installUrl: provider === "hermes" ? "https://github.com/NousResearch/hermes-agent" : "https://docs.openclaw.ai" },
       experimental_bridgeOptions: { ...connection(provider), provider },
       maintenance: { health: true, usage: false, installation: false },
