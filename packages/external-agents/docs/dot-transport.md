@@ -183,3 +183,28 @@ try{
 
 ```
 
+
+## Provider implementation observations
+
+Read-only checks on 3 October 2026 verified that `/tbo/primary` wraps the
+selection and profile in `{selection, profile}`. Resolve `selection.thread_id`
+through `/tbo/by-thread/{root}` before using the active root and room. Native
+Node HTTPS succeeds for discovery; Node `fetch` returned HTTP 403 in the same
+environment. The provider client uses native HTTPS with bounded responses.
+
+The first proof reply has neither `request_id` nor `reply_to`. The continuation
+reply does contain `reply_to.message_id` equal to its incoming message ID.
+Sender identity alone is insufficient correlation: the implementation accepts
+only the verified Dot member plus an exact request ID or direct reply reference.
+Unlinked messages must not be assigned to the next BB turn.
+
+Authentication refresh delegates to Codex `app-server` via `account/read` with
+`refreshToken: true`, using its existing local auth storage. See the upstream
+[GetAccountParams schema](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/schema/json/v2/GetAccountParams.json).
+The client rereads credentials before each HTTP request, retries a 401 once, and
+uses any externally rotated token before requesting another refresh.
+
+`BB_DOT_LIVE_READONLY=1 npm test -- src/dot-client.test.ts` passed discovery
+and six fixture tests without submitting a message. This is transport evidence;
+the Dot BB bridge, cross-process queue, stream recovery, and staged prompt/cancel
+checks are still pending. Dot remains unregistered and disabled.
