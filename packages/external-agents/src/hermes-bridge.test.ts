@@ -40,6 +40,7 @@ it("runs a BB session, routes approval, steers, stops, and resumes the same Herm
   events!.write(`data: ${JSON.stringify({ event: "approval.request", request_id: "request-1", command: "echo ok", choices: ["once", "deny"] })}\n\n`);
   await expect.poll(() => messages.find(m => m.method === "interaction/request")).toBeDefined();
   const approval = messages.find(m => m.method === "interaction/request")!;
+  expect(approval.params).toMatchObject({ turnId: "run-1", providerNativeIds: true });
   bridge.handleLine(JSON.stringify({ jsonrpc: "2.0", id: approval.id, result: { decision: "allow_once" } }));
   await expect.poll(() => calls.find(c => c.url.endsWith("/approval"))?.body).toEqual({ request_id: "request-1", choice: "once" });
   send(4, "turn/steer", { threadId: "bb-thread", providerThreadId, clientRequestId: "creq_23456789ac", input: [{ type: "text", text: "Use uppercase" }], options, expectedTurnId: "turn-1" });

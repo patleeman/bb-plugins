@@ -41,7 +41,7 @@ export function createHermesBridge(write?: (line: string) => void) {
   const pending = new Map<string, { session: Session; event: HermesEvent; runId: string }>();
   const send = (method: string, params: unknown) => io.send({ jsonrpc: "2.0", method, params });
   const deltas = (threadId: string, value: ThreadDelta[]) => { if (value.length) send("thread/delta", { threadId, deltas: value }); };
-  const fail = (session: Session, error: unknown) => deltas(session.threadId, [{ kind: "provider.error", message: error instanceof AgentConnectionError ? error.message : "Hermes bridge failed.", settlesTurn: true }]);
+  const fail = (session: Session, error: unknown) => deltas(session.threadId, [{ kind: "provider.error", message: error instanceof AgentConnectionError ? error.message : "Hermes bridge failed.", settlesTurn: true, providerTurnId: session.active?.id }]);
   function current(threadId: string) {
     const session = sessions.get(threadId);
     if (!session) throw new AgentConnectionError("Hermes session is not open. Resume the BB thread.");
@@ -57,8 +57,8 @@ export function createHermesBridge(write?: (line: string) => void) {
         await session.client.control(active.id, "stop");
         return;
       }
-      if (clientRequestId) deltas(session.threadId, [{ kind: "input.accepted", clientRequestId }]);
-      deltas(session.threadId, [{ kind: "turn.open" }]);
+      if (clientRequestId) deltas(session.threadId, [{ kind: "input.accepted", clientRequestId, providerTurnId: active.id }]);
+      deltas(session.threadId, [{ kind: "turn.open", providerTurnId: active.id }]);
       void (async () => {
         try {
           for await (const event of session.client.events(active.id!, active.abort.signal)) {
@@ -66,8 +66,8 @@ export function createHermesBridge(write?: (line: string) => void) {
               const payload = approvalPayload(event, session.cwd);
               const id = `hermes-approval-${randomUUID()}`;
               pending.set(id, { session, event, runId: active.id! });
-              io.send({ jsonrpc: "2.0", id, method: "interaction/request", params: { threadId: session.threadId, providerThreadId: session.providerThreadId, payload } });
-            } else deltas(session.threadId, active.mapper.translate(event));
+              io.send({ jsonrpc: "2.0", id, method: "interaction/request", params: { threadId: session.threadId, providerThreadId: session.providerThreadId, turnId: active.id, providerNativeIds: true, payload } });
+            } else deltas(session.threadId, active.mapper.translate(event).map(delta => ({ ...delta, providerTurnId: active.id })));
           }
           if (!active.mapper.terminal && !active.abort.signal.aborted) throw new AgentConnectionError("Hermes event stream ended before the run completed.");
         } catch (error) {
@@ -86,7 +86,7 @@ export function createHermesBridge(write?: (line: string) => void) {
     active.abort.abort();
     session.active = undefined;
     for (const [id, request] of pending) if (request.session === session) pending.delete(id);
-    if (interrupt) deltas(session.threadId, [{ kind: "turn.boundary", status: "interrupted" }]);
+    if (interrupt) deltas(session.threadId, [{ kind: "turn.boundary", status: "interrupted", providerTurnId: active.id }]);
   }
   async function handle(raw: Record<string, unknown>) {
     const id = raw.id;
@@ -155,7 +155,7 @@ export function createHermesBridge(write?: (line: string) => void) {
           const session = current(p.threadId);
           if (!session.active?.id) throw new AgentConnectionError("Hermes has no active run to steer.");
           await session.client.control(session.active.id, "steer", { input: prompt(p.input) });
-          deltas(p.threadId, [{ kind: "input.accepted", clientRequestId: p.clientRequestId }]);
+          deltas(p.threadId, [{ kind: "input.accepted", clientRequestId: p.clientRequestId, providerTurnId: session.active.id }]);
           io.sendResult(id, {});
           break;
         }

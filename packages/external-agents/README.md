@@ -1,8 +1,8 @@
 # External Agents
 
 Work in progress: Hermes HTTP and OpenClaw ACP providers for stable BB 0.45.0
-and Plugin SDK 0.6.15. Both provider bridges are implemented. Staged BB and successful live prompt
-verification are not complete yet.
+and Plugin SDK 0.6.15. Both provider bridges are implemented and installed in
+staged stable BB. Successful red4 prompt verification remains incomplete.
 
 The provider process runs on the selected BB host and connects to a remote
 agent server. The intended provider IDs are `hermes` and `openclaw`.
@@ -30,9 +30,9 @@ the exact Hermes request ID and never broaden the choices the server offers.
 ## Remaining verification
 
 - Verify OpenClaw ACP through staged BB.
-- Validate Hermes integration in a live BB thread.
-- Run both providers against red4 in staged stable BB.
 - Complete successful live prompts after upstream credentials are configured.
+- Implement the experimental Dot provider using the preserved
+  [transport notes and probes](docs/dot-transport.md).
 
 ## Settings and health
 
@@ -103,3 +103,9 @@ Hermes also passes the published BB provider-bridge conformance suite using
 an HTTP fixture. OpenClaw routing tests cover cancellation during preflight
 and rejection of a model change that would otherwise keep using the old
 Gateway agent. Start a new BB thread to select another OpenClaw agent.
+
+The deterministic `scripts/hermes-fixture.mjs` also passed an approval round-trip
+through the full staged BB 0.45.0 runtime: a pending interaction appeared,
+Allow once reached the exact Hermes request ID, and the thread completed with
+`ok`. This fixture executes no commands. This verifies BB integration independently
+of the pending red4 model credentials.
