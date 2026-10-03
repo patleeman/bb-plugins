@@ -1,0 +1,31 @@
+{
+  "name": "bb-plugin-external-agents",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "bb": ">=0.45.0",
+    "bbPluginSdk": ">=0.6.15"
+  },
+  "bb": {
+    "name": "External Agents",
+    "description": "Hermes and OpenClaw providers running on a remote agent host.",
+    "branding": {
+      "icon": "Network"
+    },
+    "server": "./server.ts",
+    "host": "./host.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@get-bb/plugin-sdk": "0.6.15",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3",
+    "vitest": "4.1.1"
+  }
+}

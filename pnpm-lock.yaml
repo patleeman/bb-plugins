@@ -644,6 +644,25 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
+  packages/external-agents:
+    dependencies:
+      '@get-bb/plugin-sdk':
+        specifier: 0.6.15
+        version: 0.6.15(@testing-library/react@16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@types/better-sqlite3@7.6.13)(@types/react@19.2.18)(better-sqlite3@12.11.1)(cron-parser@5.10.1)(hono@4.13.9)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 4.1.1
+        version: 4.1.1(@types/node@22.20.1)(jsdom@29.0.1)(vite@8.2.0(@types/node@22.20.1)(esbuild@0.28.2)(tsx@4.23.11))
+
 packages:
 
   '@asamuzakjp/css-color@5.1.11':
@@ -1084,6 +1103,35 @@ packages:
 
   '@get-bb/plugin-sdk@0.5.29':
     resolution: {integrity: sha512-eRIUeZUu3Q4gESo10ajF58yd32+6QdKRGJMPz2/WjxK7DAGNfY5kO2ZAKP+pWS7Bo1l92GrlcO29C15CCvg1aA==}
+    peerDependencies:
+      '@testing-library/react': ^16.3.2
+      '@types/better-sqlite3': ^7.6.12
+      '@types/react': ^19.0.0
+      better-sqlite3: '>=12'
+      cron-parser: ^5.5.0
+      hono: ^4.11.9
+      react: ^19.0.0
+      react-dom: ^19.0.0
+    peerDependenciesMeta:
+      '@testing-library/react':
+        optional: true
+      '@types/better-sqlite3':
+        optional: true
+      '@types/react':
+        optional: true
+      better-sqlite3:
+        optional: true
+      cron-parser:
+        optional: true
+      hono:
+        optional: true
+      react:
+        optional: true
+      react-dom:
+        optional: true
+
+  '@get-bb/plugin-sdk@0.6.15':
+    resolution: {integrity: sha512-S7UUC+mfY1V9wTU1NiWw+VyP1STcWm4+Cgoi/rzHhj1kfCuxnVdTozJ7XedKMeDM9vVGYU4y3+r/CpEWIdsiRg==}
     peerDependencies:
       '@testing-library/react': ^16.3.2
       '@types/better-sqlite3': ^7.6.12
@@ -2829,6 +2877,9 @@ packages:
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
+  zod@4.6.5:
+    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
+
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
@@ -3112,6 +3163,20 @@ snapshots:
       hono: 4.13.0
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)
+
+  '@get-bb/plugin-sdk@0.6.15(@testing-library/react@16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@types/better-sqlite3@7.6.13)(@types/react@19.2.18)(better-sqlite3@12.11.1)(cron-parser@5.10.1)(hono@4.13.9)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+    dependencies:
+      cross-spawn: 7.0.6
+      zod: 4.6.5
+    optionalDependencies:
+      '@testing-library/react': 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.4(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@types/better-sqlite3': 7.6.13
+      '@types/react': 19.2.18
+      better-sqlite3: 12.11.1
+      cron-parser: 5.10.1
+      hono: 4.13.9
+      react: 19.2.8
+      react-dom: 19.2.8(react@19.2.8)
 
   '@hugeicons/core-free-icons@4.2.3': {}
 
@@ -4763,5 +4828,7 @@ snapshots:
   xmlchars@2.2.0: {}
 
   zod@4.4.3: {}
+
+  zod@4.6.5: {}
 
   zwitch@2.0.4: {}

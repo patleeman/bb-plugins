@@ -136,7 +136,7 @@
     {
       "id": "emoji-react",
       "displayName": "Emoji React",
-      "description": "Emoji reactions in the assistant-message text-selection menu and per-message action bar. Select text, pick a reaction from the menu (or use the action-bar buttons), and it drafts a reply — the reaction list is configurable in settings. Optional smart reactions let the assistant suggest the reactions that fit each reply.",
+      "description": "Emoji reactions in the assistant-message text-selection menu and per-message action bar. Select text, pick a reaction from the menu (or use the action-bar buttons), and it drafts a reply \u2014 the reaction list is configurable in settings. Optional smart reactions let the assistant suggest the reactions that fit each reply.",
       "icon": {
         "url": "./packages/bb-plugin-emoji-react/assets/icon.svg"
       },
@@ -152,6 +152,27 @@
         "git": {
           "url": "https://github.com/patleeman/bb-plugins.git",
           "subdir": "packages/bb-plugin-emoji-react",
+          "ref": "main"
+        }
+      }
+    },
+    {
+      "id": "external-agents",
+      "displayName": "External Agents",
+      "description": "Hermes and OpenClaw providers running on a remote agent host.",
+      "icon": "Network",
+      "tags": [
+        "agents",
+        "providers"
+      ],
+      "author": {
+        "name": "Patrick Lee",
+        "github": "patleeman"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/patleeman/bb-plugins.git",
+          "subdir": "packages/external-agents",
           "ref": "main"
         }
       }
@@ -182,7 +203,7 @@
     {
       "id": "omp",
       "displayName": "OhMyPi (Pi-style)",
-      "description": "Pi-style OhMyPi provider with provider/model grouping (openai-codex/gpt-5, openrouter/…) — replace the bundled ACP omp.",
+      "description": "Pi-style OhMyPi provider with provider/model grouping (openai-codex/gpt-5, openrouter/\u2026) \u2014 replace the bundled ACP omp.",
       "icon": {
         "url": "./packages/bb-plugin-omp/icons/omp.svg"
       },
@@ -267,7 +288,7 @@
     {
       "id": "tok-speed",
       "displayName": "Tok Speed",
-      "description": "Paints a small visible provider-output tokens-per-second figure in every assistant message's hover menu — hidden reasoning and host tool time excluded.",
+      "description": "Paints a small visible provider-output tokens-per-second figure in every assistant message's hover menu \u2014 hidden reasoning and host tool time excluded.",
       "icon": "Gauge",
       "tags": [
         "metrics",
@@ -309,7 +330,7 @@
     {
       "id": "ua-fetch",
       "displayName": "UA Fetch",
-      "description": "Web fetch tool with adaptive User-Agent spoofing — probes AI-crawler/bot UAs on block and learns per-domain winners.",
+      "description": "Web fetch tool with adaptive User-Agent spoofing \u2014 probes AI-crawler/bot UAs on block and learns per-domain winners.",
       "icon": "Globe",
       "tags": [
         "web",
