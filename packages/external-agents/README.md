@@ -40,9 +40,11 @@ Hermes uses `hermesEnabled`, `hermesBaseUrl`, and `hermesTokenEnv`.
 The token variable defaults to `RED4_HERMES_TOKEN` on the selected BB host.
 The provider is disabled by default until its endpoint is configured.
 
-The plugin RPC `health` accepts `{ hostId, provider: "hermes" }` and returns
+The plugin RPC `health` accepts `{ hostId?, provider: "hermes" }` and returns
 `{ online, status, message }`. It runs the authenticated model probe on that
-host. The office UI can use `online: false` for its Offline state.
+host. If `hostId` is omitted, it uses BB's local server host. Disabled providers
+return `status: "disabled"` without a network probe. The office UI can use
+`online: false` for its Offline state.
 
 The fixture integration test covers session start/resume, run creation,
 BB approval response routing, steering, and remote stop. These checks do not
@@ -96,3 +98,8 @@ Staged evidence: the plugin installs from Git on stable BB 0.45.0. A real
 Hermes BB thread reaches red4 and records the remote missing-credentials
 error as a failed turn. OpenClaw's live probe currently reports the missing
 `operator.read` scope. Neither required `ok` prompt has succeeded yet.
+
+Hermes also passes the published BB provider-bridge conformance suite using
+an HTTP fixture. OpenClaw routing tests cover cancellation during preflight
+and rejection of a model change that would otherwise keep using the old
+Gateway agent. Start a new BB thread to select another OpenClaw agent.

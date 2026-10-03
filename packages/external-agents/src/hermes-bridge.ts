@@ -82,7 +82,7 @@ export function createHermesBridge(write?: (line: string) => void) {
   async function stop(session: Session, interrupt: boolean) {
     const active = session.active;
     if (!active) return;
-    if (interrupt && active.id) await session.client.control(active.id, "stop");
+    if (active.id) await session.client.control(active.id, "stop");
     active.abort.abort();
     session.active = undefined;
     for (const [id, request] of pending) if (request.session === session) pending.delete(id);
@@ -142,6 +142,7 @@ export function createHermesBridge(write?: (line: string) => void) {
         case "turn/start": {
           const p = turnStartParamsSchema.parse(params);
           const session = current(p.threadId);
+          if (session.active) throw new AgentConnectionError("Hermes already has an active run for this thread.");
           session.model = p.options.model;
           session.instructions = p.options.instructions;
           session.client = new HermesClient(connection(p.options.providerOptions));
@@ -179,7 +180,7 @@ export function createHermesBridge(write?: (line: string) => void) {
       io.sendError(id, error instanceof z.ZodError ? -32602 : -32000, error instanceof z.ZodError ? `Invalid params for ${raw.method}` : error instanceof AgentConnectionError ? error.message : "Hermes bridge request failed.");
     }
   }
-  function close() { for (const session of sessions.values()) void stop(session, false); sessions.clear(); }
+  function close() { for (const session of sessions.values()) void stop(session, false).catch(() => session.active?.abort.abort()); sessions.clear(); }
   return experimental_defineProviderBridge({
     handleLine(line) { let raw: unknown; try { raw = JSON.parse(line); } catch { return; } if (raw && typeof raw === "object") void handle(raw as Record<string, unknown>); },
     onClose: close, onSigint: close, onSigterm: close,

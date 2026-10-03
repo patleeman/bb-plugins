@@ -49,6 +49,13 @@ it("runs a BB session, routes approval, steers, stops, and resumes the same Herm
   expect(calls.some(c => c.url.endsWith("/stop"))).toBe(true);
   send(6, "thread/resume", { threadId: "bb-thread", providerThreadId, cwd: "/tmp", instructionMode: "append", options });
   expect((await reply(6)).providerThreadId).toBe(providerThreadId);
+  send(7, "turn/start", { threadId: "bb-thread", providerThreadId, clientRequestId: "creq_23456789ad", input: [{ type: "text", text: "Continue" }], options });
+  await reply(7);
+  const beforeRelease = messages.length;
+  send(8, "thread/stop", { threadId: "bb-thread", providerThreadId, activeTurnId: "turn-2", intent: "release" });
+  await reply(8);
+  expect(calls.filter(c => c.url.endsWith("/stop"))).toHaveLength(2);
+  expect(messages.slice(beforeRelease).flatMap(m => m.params?.deltas ?? []).some(d => d.kind === "turn.boundary")).toBe(false);
 });
 it("rejects unknown methods and invalid parameters", async () => {
   const messages: Record<string, any>[] = [];

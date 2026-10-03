@@ -18,7 +18,14 @@ export default async function plugin(bb: BbPluginApi) {
   let config = await settings.get();
   const connection = (provider: "hermes" | "openclaw") => ({ baseUrl: config[`${provider}BaseUrl`], tokenEnv: config[`${provider}TokenEnv`], tokenEnvFile: config[`${provider}TokenEnvFile`], enabled: config[`${provider}Enabled`], ...(provider === "openclaw" ? { stateDir: config.openclawStateDir, allowPrivateWs: config.openclawAllowPrivateWs } : {}) });
   const host = bb.hosts.experimental_client({ contract: hostContract });
-  bb.rpc.register(rpcContract, { health: async ({ hostId, provider }) => host.call("health", { provider, connection: connection(provider) }, { hostId }) });
+  bb.rpc.register(rpcContract, { health: async ({ hostId, provider }) => {
+    const target = connection(provider);
+    if (!target.enabled) return { online: false, status: "disabled" as const, message: `${provider === "hermes" ? "Hermes" : "OpenClaw"} is disabled.` };
+    const selectedHostId = hostId ?? (await bb.sdk.system.config()).primaryHostId;
+    if (!selectedHostId) return { online: false, status: "unknown" as const, message: "The BB server host is not enrolled." };
+    try { return await host.call("health", { provider, connection: target }, { hostId: selectedHostId }); }
+    catch { return { online: false, status: "unknown" as const, message: "The BB host could not run the agent health check." }; }
+  } });
   let providers: { dispose(): void }[] = [];
   function register() {
     providers.forEach(provider => provider.dispose());
