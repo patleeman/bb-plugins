@@ -400,4 +400,42 @@ describe("Agent Plugins settings", () => {
     }));
     await slot.findByRole("button", { name: "Authenticate fastmail" });
   });
+
+  it("finishes remote sign-in with a pasted localhost callback without showing the code in a message", async () => {
+    const callbackUrl = "http://localhost:38886/api/v1/plugins/agent-plugins/http/oauth/callback?pluginId=plugin-1&serverId=fastmail&code=one-use-secret&state=nonce";
+    let snapshot = {
+      plugins: [{
+        id: "plugin-1", name: "Fastmail", version: "1.0.0", specVersion: "1.0.0",
+        sourceType: "path", sourceIntent: "path:/tmp/fastmail", sourceResolved: null,
+        status: "active", approval: "approved", lastError: null,
+      }],
+      skills: [],
+      mcpServers: [{
+        pluginId: "plugin-1", serverId: "fastmail", type: "streamable-http", status: "needs-auth",
+        authStatus: "authorizing", lastError: null as string | null, approved: 1, enabled: true,
+        configJson: JSON.stringify({ type: "streamable-http", url: "https://api.fastmail.com/mcp" }),
+      }],
+      dataDir: "/tmp/bb",
+    };
+    const calls: unknown[] = [];
+    const slot = renderSlot(panel, { subPath: "" }, {
+      rpc: {
+        snapshot: () => snapshot,
+        checkUpdates: () => ({ updates: [] }),
+        finishAuthentication: (input: unknown) => {
+          calls.push(input);
+          snapshot = { ...snapshot, mcpServers: [{ ...snapshot.mcpServers[0]!, status: "ready", authStatus: "authenticated" }] };
+          return { authenticated: true };
+        },
+      } as never,
+    });
+
+    fireEvent.click(await slot.findByRole("button", { name: /Fastmail/ }));
+    const field = await slot.findByRole("textbox", { name: "Callback URL for fastmail" });
+    fireEvent.change(field, { target: { value: callbackUrl } });
+    fireEvent.click(slot.getByRole("button", { name: "Finish sign-in" }));
+    await waitFor(() => expect(calls).toEqual([{ id: "plugin-1", serverId: "fastmail", callbackUrl }]));
+    await waitFor(() => expect(slot.queryByRole("textbox", { name: "Callback URL for fastmail" })).toBeNull());
+    expect(slot.queryByText(/one-use-secret/)).toBeNull();
+  });
 });

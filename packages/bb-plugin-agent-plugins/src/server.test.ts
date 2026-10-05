@@ -14,6 +14,20 @@ afterEach(async () => {
   while (tempDirs.length > 0) await rimraf(tempDirs.pop()!);
 });
 
+describe("Agent Plugins OAuth route", () => {
+  it("accepts provider redirects without BB browser authentication and rejects missing context", async () => {
+    const host = createFakePluginHost({ pluginId: "agent-plugins" });
+    hosts.push(host);
+    await plugin(host.bb);
+    const callback = host.harness.registrations.httpRoutes.find((route) => route.path === "/oauth/callback");
+    expect(callback?.auth).toBe("none");
+    const route = callback!;
+    const response = await route.handler({ req: { url: "https://bb.example.test/api/v1/plugins/agent-plugins/http/oauth/callback" } } as Parameters<typeof route.handler>[0]);
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("Missing Agent Plugins OAuth callback context");
+  });
+});
+
 describe("Agent Plugins update flow", () => {
   it("keeps the installed identity, data path, and disabled skill state across an update", async () => {
     const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-plugins-data-"));

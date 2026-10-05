@@ -277,6 +277,32 @@ function InstallBar({ onDone }: { onDone: () => void }) {
   );
 }
 
+function CallbackPasteForm({
+  pluginId, serverId, busy, onFinish,
+}: {
+  pluginId: string;
+  serverId: string;
+  busy: boolean;
+  onFinish: (url: string) => Promise<boolean>;
+}) {
+  const [callbackUrl, setCallbackUrl] = useState("");
+  return (
+    <form className="mt-3 space-y-2" onSubmit={(event) => {
+      event.preventDefault();
+      if (!callbackUrl.trim()) return;
+      void onFinish(callbackUrl.trim()).then((completed) => { if (completed) setCallbackUrl(""); });
+    }}>
+      <label className="block text-[11px] leading-snug text-muted-foreground" htmlFor={`mcp-callback-${pluginId}-${serverId}`}>
+        If your browser cannot open localhost after sign-in, copy its full address and paste it here. The URL contains a one-use code; do not paste it into chat.
+      </label>
+      <div className="flex flex-wrap gap-2">
+        <Input id={`mcp-callback-${pluginId}-${serverId}`} aria-label={`Callback URL for ${serverId}`} type="url" className="min-w-0 flex-1 text-xs" value={callbackUrl} onChange={(event) => setCallbackUrl(event.target.value)} autoComplete="off" spellCheck={false} disabled={busy} />
+        <Button type="submit" size="sm" variant="outline" disabled={busy || !callbackUrl.trim()}>{busy ? "Finishing…" : "Finish sign-in"}</Button>
+      </div>
+    </form>
+  );
+}
+
 function PluginRow({
   plugin,
   update,
@@ -288,6 +314,7 @@ function PluginRow({
   onReconnect,
   onReauthorize,
   onDisconnect,
+  onFinishAuthentication,
   onSkillEnabledChange,
   onMcpEnabledChange,
   onUpdate,
@@ -303,6 +330,7 @@ function PluginRow({
   onReconnect: (p: string, s: string) => void;
   onReauthorize: (p: string, s: string) => void;
   onDisconnect: (p: string, s: string) => void;
+  onFinishAuthentication: (p: string, s: string, url: string) => Promise<boolean>;
   onSkillEnabledChange: (pluginId: string, skillName: string, enabled: boolean) => void;
   onMcpEnabledChange: (pluginId: string, serverId: string, enabled: boolean) => void;
   onUpdate: (pluginId: string) => void;
@@ -475,6 +503,9 @@ function PluginRow({
                               <Button size="sm" variant="outline" className="mt-2 h-7 text-xs" disabled={isAuthBusy} onClick={() => onAuthenticate(plugin.id, srv.serverId)}>
                                 {authStatus === "authorizing" ? "Continue authentication" : "Authenticate"} {srv.serverId}
                               </Button>
+                            )}
+                            {canManageAuth && srv.enabled && authStatus === "authorizing" && (
+                              <CallbackPasteForm pluginId={plugin.id} serverId={srv.serverId} busy={isAuthBusy} onFinish={(url) => onFinishAuthentication(plugin.id, srv.serverId, url)} />
                             )}
                             {canManageAuth && srv.enabled && (srv.status === "ready" || srv.status === "error" || (srv.status === "idle" && authStatus === "authenticated")) && (
                               <Button size="sm" variant="outline" className="mt-2 h-7 text-xs" disabled={isAuthBusy} onClick={() => onReconnect(plugin.id, srv.serverId)}>
@@ -746,6 +777,25 @@ function AgentPluginsView() {
     }
   };
 
+  const finishAuthentication = async (p: string, s: string, callbackUrl: string): Promise<boolean> => {
+    const key = `mcp-auth:${p}:${s}`;
+    setPendingAction(key);
+    setLocalErr(null);
+    try {
+      await rpc.call("finishAuthentication", { id: p, serverId: s, callbackUrl });
+      toast.success(`${s} connected`, { duration: 4000 });
+      return true;
+    } catch {
+      const message = "Could not finish sign-in. Check that you pasted the full, most recent localhost URL and try again.";
+      setLocalErr(message);
+      notifyError(message, `agent-plugins:${key}:error`);
+      return false;
+    } finally {
+      setPendingAction(null);
+      await load();
+    }
+  };
+
   const authenticate = (p: string, s: string) => { void runAuthAction("authenticate", p, s); };
   const reconnect = (p: string, s: string) => { void runAuthAction("reconnect", p, s); };
   const reauthorize = (p: string, s: string) => { void runAuthAction("reauthorize", p, s); };
@@ -834,6 +884,7 @@ function AgentPluginsView() {
                   onReconnect={reconnect}
                   onReauthorize={reauthorize}
                   onDisconnect={disconnect}
+                  onFinishAuthentication={finishAuthentication}
                   onSkillEnabledChange={setSkillEnabled}
                   onMcpEnabledChange={setMcpEnabled}
                   onUpdate={updatePlugin}

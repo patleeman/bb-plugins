@@ -11,6 +11,7 @@ import { McpGateway, type McpStdioCatalog, type McpStdioHost } from "./src/gatew
 import { mcpHostContract, mcpHostSignals } from "./src/host-contract.js";
 import { DEFAULT_TOOL_SEARCH_LIMIT, MAX_DESCRIBE_TOOLS, MAX_TOOL_SEARCH_LIMIT, describeTools, searchTools } from "./src/tool-search.js";
 import { DeferredOAuthCredentialStore, McpOAuthProvider, type OAuthCredentialRecord } from "./src/oauth.js";
+import { oauthCallbackUrl, validatePastedCallback } from "./src/callback-url.js";
 import { parseSource, fetchSource, probeSource } from "./src/source.js";
 import { materializeSkill, unmaterializeSkill } from "./src/skills-impl.js";
 import { ensureDir, hashDirectory, rimraf, atomicRename, LIMITS } from "./src/safe-fs.js";
@@ -257,8 +258,7 @@ export default async function plugin(bb: BbPluginApi) {
     stdioHost,
     oauth: {
       async getProvider(pluginId, serverId, serverUrl) {
-        const redirect = new URL(`/api/v1/plugins/${encodeURIComponent(bb.pluginId)}/http/oauth/callback`, bb.server.loopbackBaseUrl);
-        redirect.search = new URLSearchParams({ pluginId, serverId }).toString();
+        const redirect = oauthCallbackUrl(bb.server.loopbackBaseUrl, bb.pluginId, pluginId, serverId);
         return new McpOAuthProvider(`${pluginId}:${serverId}`, serverUrl, redirect, oauthCredentialStore);
       },
     },
@@ -362,6 +362,8 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
+  // Provider redirects have no BB browser session. OAuth state and PKCE, not
+  // route authentication, authorize this one-use callback.
   bb.http.route("GET", "/oauth/callback", async (context) => {
     const url = new URL(context.req.url);
     const pluginId = url.searchParams.get("pluginId");
@@ -375,7 +377,7 @@ export default async function plugin(bb: BbPluginApi) {
       bb.log.warn(`[agent-plugins] OAuth callback failed for ${serverId}: ${errorText(e)}`);
       return new Response("<p>Authentication failed. Return to BB and try again.</p>", { status: 400, headers: { "content-type": "text/html; charset=utf-8" } });
     }
-  });
+  }, { auth: "none" });
 
   async function approveServer(id: string, serverId: string): Promise<void> {
     const p = store.getPlugin(id) ?? store.getPluginByName(id);
@@ -1129,8 +1131,9 @@ export default async function plugin(bb: BbPluginApi) {
     async finishAuthentication({ id, serverId, callbackUrl }) {
       const p = store.getPlugin(id) ?? store.getPluginByName(id);
       if (!p) throw new Error(`not found: ${id}`);
-      const callback = new URL(callbackUrl);
-      await withDeferredOAuthPersistence(() => gateway.finishAuth(p.id, serverId, callback.searchParams));
+      const expected = oauthCallbackUrl(bb.server.loopbackBaseUrl, bb.pluginId, p.id, serverId);
+      const params = validatePastedCallback(callbackUrl, expected);
+      await withDeferredOAuthPersistence(() => gateway.finishAuth(p.id, serverId, params));
       await publishChanged({ kind: "oauth", id: p.id, serverId });
       return { authenticated: true };
     },

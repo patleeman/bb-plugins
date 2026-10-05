@@ -38,6 +38,8 @@ bb plugin install git:https://github.com/patleeman/bb-plugins.git --subdirectory
 
 The MCP client delegates authentication to the official SDK, including protected-resource/authorization-server discovery, dynamic client registration, PKCE, refresh, `WWW-Authenticate`, insufficient-scope step-up, and OAuth callback completion. Tokens and PKCE state are stored in a BB secret setting; they are never placed in the database snapshot or frontend payload.
 
+For OAuth-protected MCP servers such as Fastmail, the registered redirect uses `http://localhost` on BB's port. If BB runs on another machine, sign in with your normal browser, then copy the **full** localhost URL from its address bar after the connection fails and paste it into the matching server's **Finish sign-in** field in BB. The URL contains a short-lived, one-use authorization code: paste it only into BB, never into chat or logs. BB verifies the callback URL, state and PKCE grant before exchanging the code. If the browser runs on the BB host or you have a port forward, the callback completes normally without pasting. Fastmail's MCP dynamic registration does not accept arbitrary public HTTPS redirect URIs; setting `BB_APP_URL` does not change this callback.
+
 This v0 release installs one package instance at a time. Remove an existing
 plugin before installing the same package name again; removal keeps its data
 unless you choose to purge it.

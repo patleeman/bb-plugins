@@ -173,7 +173,11 @@ describe("MCP SDK OAuth integration", () => {
     const state = new URL(url!).searchParams.get("state");
     expect(state).toBeTruthy();
 
+    await expect(gateway.finishAuth(plugin.id, "fastmail", new URLSearchParams({ code: "fixture-code" }))).rejects.toThrow("state mismatch");
+    await expect(gateway.finishAuth(plugin.id, "fastmail", new URLSearchParams({ code: "fixture-code", state: "wrong" }))).rejects.toThrow("state mismatch");
+    expect(tokenRequests).toBe(0);
     await gateway.finishAuth(plugin.id, "fastmail", new URLSearchParams({ code: "fixture-code", state: state! }));
+    await expect(gateway.finishAuth(plugin.id, "fastmail", new URLSearchParams({ code: "fixture-code", state: state! }))).rejects.toThrow("state mismatch");
     const tools = await gateway.listTools();
     expect(tools.map((tool) => tool.name)).toEqual(["oauth-tool"]);
     expect(tokenRequests).toBe(1);
