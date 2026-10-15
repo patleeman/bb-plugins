@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-agent-checklists",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "engines": {
     "node": ">=22.19.0",

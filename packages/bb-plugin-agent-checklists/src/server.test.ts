@@ -1075,3 +1075,98 @@ describe("Checklists server", () => {
     ).rejects.toThrow();
   });
 });
+
+function agentContext(threadId: string): Parameters<TestHost["harness"]["resolveAgentConfiguration"]>[0] {
+  return {
+    thread: { id: threadId, title: null, parentThreadId: null, sourceThreadId: null },
+    project: { id: "project-1", kind: "standard", name: "Project", gitRemoteUrl: null },
+    environment: {
+      id: "env-1",
+      name: null,
+      path: null,
+      workspaceProvisionType: "personal",
+      branchName: null,
+    },
+    host: { id: "host-1", name: "Host" },
+    provider: { id: "codex", model: "test", capabilities: { supportsNativeUserQuestion: false } },
+    origin: { kind: null, pluginId: null },
+  };
+}
+
+async function resolveFor(host: TestHost, threadId: string) {
+  const resolved = await host.harness.resolveAgentConfiguration(agentContext(threadId));
+  const toolInstructions = resolved.tools.map((tool) => tool.instructions ?? "").join("\n");
+  return {
+    toolNames: resolved.tools.map((tool) => tool.name).sort(),
+    instructions: resolved.instructions,
+    surface: `${resolved.instructions ?? ""}\n${toolInstructions}`,
+  };
+}
+
+describe("Checklists agent activation", () => {
+  it("gives a thread without a Checklist no checklist tools or instructions", async () => {
+    const host = await startHost();
+    const resolved = await resolveFor(host, "thread-1");
+    expect(resolved.toolNames).toEqual([]);
+    expect(resolved.instructions).toBeNull();
+    expect(resolved.surface).not.toMatch(/checklist/i);
+  });
+
+  it("gives an attached thread its tools and instructions", async () => {
+    const host = await startHost();
+    await host.harness.callRpc("attach", { threadId: "thread-1", templateId: softwareTemplateId(host) });
+    const resolved = await resolveFor(host, "thread-1");
+    expect(resolved.toolNames).toEqual(["agent_checklist_get", "agent_checklist_update"]);
+    expect(resolved.instructions).toContain("Checklist is attached");
+    expect(resolved.surface).toContain("Read the checklist before starting work");
+  });
+
+  it("follows attach, detach, and replacement on the next resolution", async () => {
+    const host = await startHost();
+    expect((await resolveFor(host, "thread-1")).toolNames).toEqual([]);
+
+    const first = (await host.harness.callRpc("attach", {
+      threadId: "thread-1",
+      templateId: softwareTemplateId(host),
+    })) as Checklist;
+    expect((await resolveFor(host, "thread-1")).toolNames).toHaveLength(2);
+
+    await host.harness.callRpc("detach", { checklistId: first.id });
+    const detached = await resolveFor(host, "thread-1");
+    expect(detached.toolNames).toEqual([]);
+    expect(detached.surface).not.toMatch(/checklist/i);
+
+    await host.harness.callRpc("attach", { threadId: "thread-1", templateId: researchTemplateId(host) });
+    expect((await resolveFor(host, "thread-1")).toolNames).toHaveLength(2);
+    const read = await host.harness.callAgentTool("agent_checklist_get", {}, {
+      threadId: "thread-1",
+      projectId: "project-1",
+    });
+    expect(String(read)).toContain("Research to technical document");
+    expect(String(read)).not.toContain("Software delivery");
+  });
+
+  it("resolves each thread independently and survives a reload", async () => {
+    const host = await startHost();
+    await host.harness.callRpc("attach", { threadId: "thread-1", templateId: softwareTemplateId(host) });
+    expect((await resolveFor(host, "thread-1")).toolNames).toHaveLength(2);
+    expect((await resolveFor(host, "thread-2")).toolNames).toEqual([]);
+
+    const reloaded = await host.harness.lifecycle.reload(plugin);
+    hosts.push(reloaded);
+    expect((await resolveFor(reloaded, "thread-1")).toolNames).toHaveLength(2);
+    expect((await resolveFor(reloaded, "thread-2")).toolNames).toEqual([]);
+  });
+
+  it("answers a stale tool call in an unattached thread without a Checklist", async () => {
+    const host = await startHost();
+    const read = await host.harness.callAgentTool("agent_checklist_get", {}, {
+      threadId: "thread-1",
+      projectId: "project-1",
+    });
+    expect(JSON.parse(String(read))).toEqual({
+      checklist: null,
+      message: "No Checklist is attached to this thread.",
+    });
+  });
+});

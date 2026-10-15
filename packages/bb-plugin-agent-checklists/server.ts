@@ -696,7 +696,11 @@ export default async function plugin(bb: BbPluginApi) {
     },
     parameters: z.object({}).strict(),
     execute(_input, context) {
-      return JSON.stringify({ checklist: store.getChecklistForThread(context.threadId) });
+      const checklist = store.getChecklistForThread(context.threadId);
+      if (!checklist) {
+        return JSON.stringify({ checklist: null, message: "No Checklist is attached to this thread." });
+      }
+      return JSON.stringify({ checklist });
     },
   });
 
@@ -725,12 +729,21 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
-  bb.agents.configure(() => ({
-    tools: ["agent_checklist_get", "agent_checklist_update"],
-    skills: [],
-    instructions:
-      "When a checklist is attached to this thread, use its tools to read the steps and persist checkbox updates, notes, and evidence as you work.",
-  }));
+  // Resolved per thread at every thread.start / turn.submit. A thread without an
+  // attached Checklist gets no checklist tools, so neither the tools nor their
+  // registered `instructions` reach the model. The store is read on every
+  // resolution, so attach, detach, and replacement take effect on the next turn
+  // without a plugin reload or a cached copy.
+  bb.agents.configure(({ thread }) =>
+    store.getChecklistForThread(thread.id)
+      ? {
+          tools: ["agent_checklist_get", "agent_checklist_update"],
+          skills: [],
+          instructions:
+            "A Checklist is attached to this thread. Use its tools to read the steps and persist checkbox updates, notes, and evidence as you work.",
+        }
+      : { tools: [], skills: [] },
+  );
 
   bb.events.on("thread.idle", ({ thread }) => {
     void (async () => {
