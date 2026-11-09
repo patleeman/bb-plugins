@@ -37,7 +37,8 @@ import type {
 import { optionalMcpCall } from "./mcp-compat.js";
 
 export interface McpRuntime {
-  listTools(): Promise<CatalogTool[]>;
+  listTools(serverId?: string): Promise<CatalogTool[]>;
+  resolveTools(opaqueIds: string[]): Promise<CatalogTool[]>;
   call(opaqueId: string, args: JsonRecord, signal?: AbortSignal): Promise<McpCallResult>;
   listPrompts(): Promise<CatalogPrompt[]>;
   getPrompt(opaqueId: string, args?: JsonRecord, signal?: AbortSignal): Promise<JsonRecord>;
@@ -115,6 +116,7 @@ const FETCH_TIMEOUT_GRACE_MS = 1_000;
 const CLOSE_TIMEOUT_MS = 2_000;
 const RETRY_AFTER_MS = 5_000;
 const CATALOG_TTL_MS = 5 * 60_000;
+const CATALOG_CONCURRENCY = 4;
 
 function errorText(e: unknown): string { return e instanceof Error ? e.message : String(e); }
 function isOAuthStateMismatch(error: unknown): boolean { return errorText(error) === "MCP OAuth state mismatch"; }
@@ -315,6 +317,8 @@ export class McpGateway implements McpRuntime {
   private readonly providers = new Map<string, McpOAuthProvider>();
   private readonly failures = new Map<string, Failure>();
   private readonly catalogCache = new Map<string, CatalogCache>();
+  // Routing hints only: every use rechecks the server gates and current catalog.
+  private readonly toolOwners = new Map<string, string>();
   private readonly catalogLoads = new Map<string, Promise<CatalogCache>>();
   private readonly catalogGenerations = new Map<string, number>();
   private readonly dirtyCatalogs = new Set<string>();
@@ -353,6 +357,7 @@ export class McpGateway implements McpRuntime {
     this.conns.clear();
     this.oauthPending.clear();
     this.failures.clear();
+    this.toolOwners.clear();
     await Promise.all([...all.entries()].map(async ([key, value]) => {
       try {
         if ("expectedClose" in value) await this.closeConnected(key, value);
@@ -711,32 +716,69 @@ export class McpGateway implements McpRuntime {
     finally { if (this.catalogLoads.get(key) === load) this.catalogLoads.delete(key); }
   }
 
-  async listTools(): Promise<CatalogTool[]> {
-    const result: CatalogTool[] = [];
-    for (const record of this.enabledApprovedServers()) {
-      const cfg = parseServerConfig(record.configJson);
-      if (!cfg) continue;
-      let catalog: CatalogCache;
-      try { catalog = await this.getCatalog(record); }
-      catch (error) {
-        this.log.warn(`listTools skip ${record.serverId}: ${errorText(error)}`);
-        result.push(this.toolError(record, cfg, error));
+  async listTools(serverId?: string): Promise<CatalogTool[]> {
+    const scope = serverId?.trim();
+    return this.toolsForServers(this.enabledApprovedServers().filter((record) => !scope || record.serverId === scope));
+  }
+
+  async resolveTools(opaqueIds: string[]): Promise<CatalogTool[]> {
+    const ids = new Set(opaqueIds);
+    const servers = this.enabledApprovedServers();
+    const owners = new Set<string>();
+    for (const id of ids) {
+      const known = this.toolOwners.get(id);
+      if (known) {
+        owners.add(known);
         continue;
       }
-      const pluginName = this.store.getPlugin(record.pluginId)?.name ?? record.pluginId;
-      for (const tool of catalog.tools) result.push(this.catalogTool(record, cfg, pluginName, tool));
+      // A cached ID can outlive this gateway instance. Use its stable prefix
+      // only to select a server, never as authority to execute a tool. Slugs
+      // are lossy (and may contain '__'), so ambiguous cold IDs fail closed;
+      // scoped discovery records the exact owner for those IDs.
+      if (!/^[a-z0-9_-]+_[a-f0-9]{10}$/u.test(id)) continue;
+      const candidates = servers.filter((record) => id.startsWith(`${slug(record.pluginId)}__${slug(record.serverId)}__`));
+      if (candidates.length === 1) owners.add(keyOf(candidates[0]!.pluginId, candidates[0]!.serverId));
     }
-    return result;
+    const catalog = await this.toolsForServers(servers.filter((record) => owners.has(keyOf(record.pluginId, record.serverId))));
+    // Exact full-ID comparison (including the hash) rejects stale/forged IDs.
+    return catalog.filter((tool) => ids.has(tool.opaqueId));
+  }
+
+  private async toolsForServers(records: ReturnType<McpGateway["enabledApprovedServers"]>): Promise<CatalogTool[]> {
+    const catalogs: CatalogTool[][] = new Array(records.length);
+    let next = 0;
+    // Per-request workers avoid a broad discovery queue blocking targeted calls.
+    // getCatalog still coalesces concurrent loads and backs off per server.
+    await Promise.all(Array.from({ length: Math.min(CATALOG_CONCURRENCY, records.length) }, async () => {
+      while (next < records.length) {
+        const index = next++;
+        const record = records[index]!;
+        const cfg = parseServerConfig(record.configJson);
+        if (!cfg) { catalogs[index] = []; continue; }
+        try {
+          const catalog = await this.getCatalog(record);
+          const pluginName = this.store.getPlugin(record.pluginId)?.name ?? record.pluginId;
+          catalogs[index] = catalog.tools.map((tool) => this.catalogTool(record, cfg, pluginName, tool));
+        } catch (error) {
+          this.log.warn(`listTools skip ${record.serverId}: ${errorText(error)}`);
+          catalogs[index] = [this.toolError(record, cfg, error)];
+        }
+        for (const tool of catalogs[index]!) this.toolOwners.set(tool.opaqueId, keyOf(record.pluginId, record.serverId));
+      }
+    }));
+    // Preserve store/catalog order regardless of connection completion order.
+    return catalogs.flat();
   }
 
   async call(opaqueId: string, args: JsonRecord, signal?: AbortSignal): Promise<McpCallResult> {
-    const catalog = await this.listTools();
+    const catalog = await this.resolveTools([opaqueId]);
     const definition = catalog.find((item) => item.opaqueId === opaqueId);
     if (!definition) throw new Error(`Tool not found: ${opaqueId}`);
     if (definition.status === "error") throw new Error(definition.error ?? "tool in error state");
     const conn = await this.ensureServer(definition.pluginId, definition.serverId);
     if (!conn) throw new Error(`MCP server unavailable: ${definition.serverId}`);
     const tool = conn.tools.find((item) => item.name === definition.name);
+    if (!tool) throw new Error(`Tool not found: ${opaqueId}`);
     const result = await this.withAuthState(definition.pluginId, definition.serverId, () => this.callTool(conn!, definition.name, args, tool, signal));
     return contentResult(result);
   }
@@ -924,6 +966,7 @@ export class McpGateway implements McpRuntime {
     const key = keyOf(pluginId, serverId);
     const record = this.serverRecord(pluginId, serverId);
     if (record.enabled !== 1) throw new Error(`MCP server ${serverId} is disabled`);
+    if (record.approved !== 1) throw new Error(`MCP server ${serverId} not approved (approval gate)`);
     const existing = this.conns.get(key);
     if (existing) return existing;
     if (this.oauthPending.has(key)) {
@@ -932,7 +975,6 @@ export class McpGateway implements McpRuntime {
     }
     const inFlight = this.pending.get(key);
     if (inFlight) return inFlight;
-    if (record.approved !== 1) throw new Error(`MCP server ${serverId} not approved (approval gate)`);
     const failure = this.failures.get(key);
     if (failure && Date.now() - failure.at < RETRY_AFTER_MS) throw new Error(failure.message);
     const cfg = this.validatedConfig(record);

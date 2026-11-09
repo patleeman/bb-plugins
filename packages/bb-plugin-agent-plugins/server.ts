@@ -559,7 +559,7 @@ export default async function plugin(bb: BbPluginApi) {
       limit: z.number().int().min(1).max(MAX_TOOL_SEARCH_LIMIT).optional().describe(`Max tools to return (default ${DEFAULT_TOOL_SEARCH_LIMIT}).`),
       offset: z.number().int().min(0).optional().describe("Skip this many matches, for paging."),
     }).strict(),
-    async execute(input) { return JSON.stringify(searchTools(await gateway.listTools(), input), null, 2); },
+    async execute(input) { return JSON.stringify(searchTools(await gateway.listTools(input.serverId), input), null, 2); },
   });
   bb.agents.registerTool({
     name: "agent_plugins_describe_tool",
@@ -567,7 +567,7 @@ export default async function plugin(bb: BbPluginApi) {
     instructions: "Pass opaqueIds returned by agent_plugins_list_tools; read inputSchema before calling agent_plugins_call.",
     presentation: { label: { pending: "Describing Agent Plugins tools", completed: "Tools described" } },
     parameters: z.object({ opaqueIds: z.array(z.string().min(1)).min(1).max(MAX_DESCRIBE_TOOLS) }).strict(),
-    async execute(input) { return JSON.stringify(describeTools(await gateway.listTools(), input.opaqueIds), null, 2); },
+    async execute(input) { return JSON.stringify(describeTools(await gateway.resolveTools(input.opaqueIds), input.opaqueIds), null, 2); },
   });
   bb.agents.registerTool({
     name: "agent_plugins_call",
@@ -1270,7 +1270,7 @@ export default async function plugin(bb: BbPluginApi) {
         };
         const query = flag("--query"); const serverId = flag("--server");
         const limit = flag("--limit"); const offset = flag("--offset");
-        const tools = await gateway.listTools();
+        const tools = await gateway.listTools(serverId);
         if (query === undefined && serverId === undefined && limit === undefined && offset === undefined) {
           return { exitCode: 0, stdout: (asJson ? JSON.stringify({ tools }, null, 2) : tools.map((t: CatalogTool) => `${t.opaqueId} — ${t.description} [${t.serverType}]`).join("\n")) + "\n" };
         }
@@ -1288,7 +1288,7 @@ export default async function plugin(bb: BbPluginApi) {
       if (cmd === "describe") {
         const ids = rest.filter((arg) => arg !== "--json");
         if (ids.length === 0) return { exitCode: 2, stderr: "Usage: bb agent-plugins describe <opaqueId>… [--json]\n" };
-        const result = describeTools(await gateway.listTools(), ids);
+        const result = describeTools(await gateway.resolveTools(ids), ids);
         const text = [
           ...result.tools.map((t) => `${t.opaqueId}\n${t.description}\ninputSchema: ${JSON.stringify(t.inputSchema)}`),
           ...result.notFound.map((id) => `Not found: ${id}`),
