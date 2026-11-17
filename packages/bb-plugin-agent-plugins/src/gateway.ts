@@ -13,6 +13,9 @@ import {
   Client,
   SSEClientTransport,
   StreamableHTTPClientTransport,
+  UnauthorizedError,
+  auth,
+  extractWWWAuthenticateParams,
   type ClientCapabilities,
   type ClientOptions,
   type OAuthClientProvider,
@@ -115,6 +118,7 @@ const FETCH_TIMEOUT_GRACE_MS = 1_000;
 const CLOSE_TIMEOUT_MS = 2_000;
 const RETRY_AFTER_MS = 5_000;
 const CATALOG_TTL_MS = 5 * 60_000;
+const oauthAttempts = new WeakMap<McpOAuthProvider, Promise<void>>();
 
 function errorText(e: unknown): string { return e instanceof Error ? e.message : String(e); }
 function isOAuthStateMismatch(error: unknown): boolean { return errorText(error) === "MCP OAuth state mismatch"; }
@@ -293,6 +297,48 @@ export function redirectGuardFetch(url: URL, baseHeaders: Record<string, string>
   };
 }
 
+/** Coordinate the SDK's OAuth flow, without serializing authenticated reads. */
+function coordinatedOAuthFetch(provider: McpOAuthProvider, serverUrl: URL, fetchFn: typeof fetch): typeof fetch {
+  return async (input, init) => {
+    // Keep a replayable Request when a transport supplies one instead of init.body.
+    const retryInput = input instanceof Request ? input.clone() : input;
+    const response = await fetchFn(input, init);
+    const requestUrl = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (response.status !== 401 || !isMcpRequest(requestUrl, serverUrl, input, init)) return response;
+    const rejectedAuthorization = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get("authorization");
+    await response.body?.cancel();
+    let attempt = oauthAttempts.get(provider);
+    if (!attempt) {
+      attempt = (async () => {
+        // An invalid grant has already requested consent. Other callers must not
+        // replay it or overwrite the pending PKCE state with another auth flow.
+        if (await provider.authorizationUrlValue()) throw new UnauthorizedError("MCP authorization is required");
+        const current = await provider.tokens();
+        // A late 401 can arrive after the winning refresh has been persisted.
+        if (current?.access_token && rejectedAuthorization !== `Bearer ${current.access_token}`) return;
+        const { resourceMetadataUrl, scope } = extractWWWAuthenticateParams(response);
+        if (await auth(provider, { serverUrl, resourceMetadataUrl, scope, fetchFn }) !== "AUTHORIZED") {
+          throw new UnauthorizedError("MCP authorization is required");
+        }
+      })();
+      oauthAttempts.set(provider, attempt);
+    }
+    try { await attempt; }
+    finally { if (oauthAttempts.get(provider) === attempt) oauthAttempts.delete(provider); }
+    const tokens = await provider.tokens();
+    if (!tokens?.access_token) throw new UnauthorizedError("MCP authorization is required");
+    const headers = new Headers(init?.headers ?? (retryInput instanceof Request ? retryInput.headers : undefined));
+    headers.set("authorization", `Bearer ${tokens.access_token}`);
+    const retried = await fetchFn(retryInput, { ...init, headers });
+    // Stop before the transport starts a second OAuth flow for this request.
+    if (retried.status === 401) {
+      await retried.body?.cancel();
+      throw new UnauthorizedError("MCP server rejected refreshed credentials");
+    }
+    return retried;
+  };
+}
+
 function contentResult(result: unknown): McpCallResult {
   const record = asRecord(result) ?? {};
   return omitUndefined({
@@ -462,7 +508,11 @@ export class McpGateway implements McpRuntime {
   async status(): Promise<Record<string, string>> {
     const result: Record<string, string> = {};
     for (const [key, failure] of this.failures) result[key] = failure.message;
-    for (const [key, conn] of this.conns) result[key] = `ready ${conn.tools.length} tools`;
+    for (const [key, conn] of this.conns) {
+      const [pluginId, serverId] = key.split(":", 2);
+      const record = this.store.listMcpServers(pluginId).find(item => item.serverId === serverId);
+      result[key] = record?.status === "needs-auth" ? "needs-auth" : `ready ${conn.tools.length} tools`;
+    }
     for (const [key, pending] of this.oauthPending) result[key] = `needs-auth ${pending.provider.serverOrigin}`;
     return result;
   }
@@ -487,7 +537,8 @@ export class McpGateway implements McpRuntime {
     const cfg = this.validatedConfig(record);
     if (cfg.type === "stdio") return "authenticated";
     const provider = await this.providerFor(pluginId, serverId, new URL(cfg.url!));
-    return provider.status();
+    const status = await provider.status();
+    return record.status === "needs-auth" && status === "authenticated" ? "unauthenticated" : status;
   }
 
   /**
@@ -682,7 +733,7 @@ export class McpGateway implements McpRuntime {
         if (needsRefresh && cached) {
           const controller = new AbortController();
           await withTimeout(
-            this.refreshCatalog(connection, controller.signal),
+            this.withAuthState(record.pluginId, record.serverId, () => this.refreshCatalog(connection, controller.signal)),
             CONNECT_TIMEOUT_MS,
             `refresh MCP catalog ${record.serverId}`,
             () => controller.abort(new Error(`MCP catalog refresh timed out for ${record.serverId}`)),
@@ -1050,7 +1101,7 @@ export class McpGateway implements McpRuntime {
         throw new AuthenticationRequiredError(authorizationUrl);
       }
       this.failures.set(key, { message, at: Date.now() });
-      this.persistStatus(pluginId, serverId, "error", message);
+      this.persistStatus(pluginId, serverId, provider && error instanceof UnauthorizedError ? "needs-auth" : "error", message);
       if (connection) try { await this.closeConnected(key, connection); } catch {}
       else if (client) try { await withTimeout(client.close(), CLOSE_TIMEOUT_MS, `close ${serverId}`); } catch {}
       this.conns.delete(key);
@@ -1217,7 +1268,7 @@ export class McpGateway implements McpRuntime {
     const serverUrl = new URL(cfg.url!);
     const requestTimeout = this.options.requestTimeoutMs
       ?? (this.options.oauthTimeoutMs === undefined ? OAUTH_TIMEOUT_MS + FETCH_TIMEOUT_GRACE_MS : this.options.oauthTimeoutMs + FETCH_TIMEOUT_GRACE_MS);
-    const fetchWithGuard = redirectGuardFetch(serverUrl, cfg.headers, requestTimeout);
+    const fetchWithGuard = coordinatedOAuthFetch(provider, serverUrl, redirectGuardFetch(serverUrl, cfg.headers, requestTimeout));
     if (cfg.type === "streamable-http") {
       return new StreamableHTTPClientTransport(serverUrl, {
         authProvider: provider as OAuthClientProvider,
@@ -1242,12 +1293,15 @@ export class McpGateway implements McpRuntime {
   }
 
   private async withAuthState<T>(pluginId: string, serverId: string, operation: () => Promise<T>): Promise<T> {
+    if (this.serverRecord(pluginId, serverId).status === "needs-auth") {
+      throw new UnauthorizedError("MCP authorization is required");
+    }
     try {
       return await operation();
     } catch (error) {
       const provider = this.providers.get(keyOf(pluginId, serverId));
-      if (provider && await provider.authorizationUrlValue()) {
-        this.persistStatus(pluginId, serverId, "needs-auth", "Authentication required");
+      if (provider && (error instanceof UnauthorizedError || await provider.authorizationUrlValue())) {
+        this.persistStatus(pluginId, serverId, "needs-auth", error instanceof UnauthorizedError ? error.message : "Authentication required");
         await this.notifyChanged();
       }
       throw error;
