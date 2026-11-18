@@ -15,6 +15,7 @@ import {
   StreamableHTTPClientTransport,
   UnauthorizedError,
   auth,
+  computeScopeUnion,
   extractWWWAuthenticateParams,
   type ClientCapabilities,
   type ClientOptions,
@@ -299,12 +300,31 @@ export function redirectGuardFetch(url: URL, baseHeaders: Record<string, string>
 
 /** Coordinate the SDK's OAuth flow, without serializing authenticated reads. */
 function coordinatedOAuthFetch(provider: McpOAuthProvider, serverUrl: URL, fetchFn: typeof fetch): typeof fetch {
+  let requiredScope: string | undefined;
+  const retainRequiredScope = (response: Response): Response => {
+    const challenge = extractWWWAuthenticateParams(response);
+    if (response.status === 401) requiredScope = computeScopeUnion(requiredScope, challenge.scope);
+    if (response.status !== 403 || challenge.error !== "insufficient_scope" || !requiredScope) return response;
+    // The transport does not see the 401 consumed below. Give its normal SDK
+    // step-up the same accumulated requirements it would otherwise retain.
+    // These are requested scopes, never a replacement for AS-owned tokens.scope.
+    const scope = computeScopeUnion(requiredScope, challenge.scope);
+    const headers = new Headers(response.headers);
+    const params = [
+      ["error", challenge.error], ["error_description", challenge.errorDescription],
+      ["resource_metadata", challenge.resourceMetadataUrl?.toString()], ["scope", scope],
+    ].filter((entry): entry is [string, string] => typeof entry[1] === "string");
+    headers.set("www-authenticate", `Bearer ${params.map(([name, value]) => `${name}=${JSON.stringify(value)}`).join(", ")}`);
+    return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  };
   return async (input, init) => {
     // Keep a replayable Request when a transport supplies one instead of init.body.
     const retryInput = input instanceof Request ? input.clone() : input;
-    const response = await fetchFn(input, init);
+    let response = await fetchFn(input, init);
     const requestUrl = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
-    if (response.status !== 401 || !isMcpRequest(requestUrl, serverUrl, input, init)) return response;
+    if (!isMcpRequest(requestUrl, serverUrl, input, init)) return response;
+    response = retainRequiredScope(response);
+    if (response.status !== 401) return response;
     const rejectedAuthorization = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get("authorization");
     await response.body?.cancel();
     let attempt = oauthAttempts.get(provider);
@@ -335,7 +355,7 @@ function coordinatedOAuthFetch(provider: McpOAuthProvider, serverUrl: URL, fetch
       await retried.body?.cancel();
       throw new UnauthorizedError("MCP server rejected refreshed credentials");
     }
-    return retried;
+    return retainRequiredScope(retried);
   };
 }
 

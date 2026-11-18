@@ -8,7 +8,7 @@ import { AgentPluginsStore } from "./store.js";
 import type { PluginRecord } from "./types.js";
 const cleanup: (() => Promise<void> | void)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); vi.restoreAllMocks(); });
-async function fixture(allCapabilities = true) {
+async function fixture(allCapabilities = true, options: { omitRefreshScope?: boolean; initialScope?: string | null; refreshScope?: string } = {}) {
   let clock = Date.now();
   vi.spyOn(Date, "now").mockImplementation(() => clock);
   const db = new Database(":memory:"); cleanup.push(() => { db.close(); });
@@ -20,6 +20,7 @@ async function fixture(allCapabilities = true) {
     contentHash: null, installedAt: 1, updatedAt: 1,
   };
   store.upsertPlugin(plugin);
+  let stepUp = false;
   let parallelReads = false, releaseReads: (() => void) | undefined;
   let lateUnauthorized = false, releaseUnauthorized: (() => void) | undefined, acceptedAfterRefresh = false;
   let generation = 0, expiresAt = clock + 300_000, revoked = false, rejectFresh = false, origin = "";
@@ -41,7 +42,7 @@ async function fixture(allCapabilities = true) {
         counts.invalid++; return json(res, { error: "invalid_grant" }, 400);
       }
       generation++; expiresAt = clock + 300_000;
-      return json(res, { access_token: `fixture-access-${generation}`, refresh_token: `fixture-refresh-${generation}`, token_type: "Bearer", expires_in: 300, scope: "fixture:read" });
+      return json(res, { access_token: `fixture-access-${generation}`, refresh_token: `fixture-refresh-${generation}`, token_type: "Bearer", expires_in: 300, ...(options.omitRefreshScope ? {} : { scope: options.refreshScope ?? "fixture:read" }) });
     }
     if (req.url === "/register") { counts.registrations++; return json(res, { error: "unexpected_registration" }, 400); }
     if (req.url !== "/mcp") return json(res, {}, 404);
@@ -60,6 +61,10 @@ async function fixture(allCapabilities = true) {
     if (message.method === "prompts/list") return json(res, { jsonrpc: "2.0", id: message.id, result: { prompts: [] } });
     if (message.method === "resources/list") return json(res, { jsonrpc: "2.0", id: message.id, result: { resources: [] } });
     if (message.method === "resources/templates/list") return json(res, { jsonrpc: "2.0", id: message.id, result: { resourceTemplates: [] } });
+    if (message.method === "tools/call" && stepUp) {
+      res.setHeader("www-authenticate", `Bearer error="insufficient_scope" scope="fixture:write" resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"`);
+      return json(res, {}, 403);
+    }
     if (message.method === "tools/call") {
       counts.reads++;
       if (generation > 0) { acceptedAfterRefresh = true; releaseUnauthorized?.(); }
@@ -79,7 +84,7 @@ async function fixture(allCapabilities = true) {
   const secrets = new DeferredOAuthCredentialStore(backend);
   const provider = new McpOAuthProvider("fixture", new URL(origin + "/mcp"), new URL("http://127.0.0.1/callback"), secrets);
   await provider.saveClientInformation({ client_id: "fixture-client", token_endpoint_auth_method: "none", issuer: origin });
-  await provider.saveTokens({ access_token: "fixture-access-0", refresh_token: "fixture-refresh-0", token_type: "Bearer", scope: "fixture:read", issuer: origin });
+  await provider.saveTokens({ access_token: "fixture-access-0", refresh_token: "fixture-refresh-0", token_type: "Bearer", ...(options.initialScope === null ? {} : { scope: options.initialScope ?? "fixture:read" }), issuer: origin });
   const newGateway = (clientProvider: McpOAuthProvider) => {
     const gateway = new McpGateway(store, { info() {}, warn() {}, error() {} }, { oauth: { async getProvider() { return clientProvider; } } });
     cleanup.push(() => gateway.close()); return gateway;
@@ -87,7 +92,7 @@ async function fixture(allCapabilities = true) {
   const gateway = newGateway(provider);
   clock += 1000; await gateway.startServer(plugin.id, "fixture");
   const id = (await gateway.listTools())[0]!.opaqueId;
-  return { gateway, id, counts, provider, store, backend, advance(milliseconds = 301_000) { clock += milliseconds; }, parallelReads() { parallelReads = true; }, delayUnauthorized() { lateUnauthorized = true; }, revoke() { revoked = true; }, rejectFresh() { rejectFresh = true; },
+  return { gateway, id, counts, provider, store, backend, stepUp() { stepUp = true; }, advance(milliseconds = 301_000) { clock += milliseconds; }, parallelReads() { parallelReads = true; }, delayUnauthorized() { lateUnauthorized = true; }, revoke() { revoked = true; }, rejectFresh() { rejectFresh = true; },
     async restartClient() {
       await gateway.close();
       const reloaded = new McpOAuthProvider("fixture", new URL(origin + "/mcp"), new URL("http://127.0.0.1/callback"), new DeferredOAuthCredentialStore(backend));
@@ -165,5 +170,35 @@ describe("rotating OAuth refresh over real HTTP", () => {
     await f.gateway.call(f.id, {});
     expect(f.counts).toMatchObject({ refresh: 1, invalid: 0, reads: 1, registrations: 0 });
     expect(await f.provider.status()).toBe("authenticated");
+  });
+});
+
+
+describe("scope context after coordinated refresh", () => {
+  it("retains the 401 read context when refresh omits scope before SDK step-up", async () => {
+    const f = await fixture(false, { omitRefreshScope: true }); f.advance(299_500);
+    await f.gateway.call(f.id, {});
+    f.stepUp();
+    await expect(f.gateway.call(f.id, {})).rejects.toThrow();
+    expect(new URL((await f.provider.authorizationUrlValue())!).searchParams.get("scope")!.split(" ").sort()).toEqual(["fixture:read", "fixture:write"]);
+  });
+
+  it("keeps the context from late 401 even when neither token response states scope", async () => {
+    const f = await fixture(false, { omitRefreshScope: true, initialScope: null }); f.advance(299_500); f.delayUnauthorized();
+    await Promise.all([f.gateway.call(f.id, {}), f.gateway.call(f.id, {})]);
+    expect(f.counts).toMatchObject({ refresh: 1, invalid: 0, reads: 2 });
+    expect((await f.provider.tokens())?.scope).toBeUndefined();
+    f.stepUp();
+    await expect(f.gateway.call(f.id, {})).rejects.toThrow();
+    expect(new URL((await f.provider.authorizationUrlValue())!).searchParams.get("scope")!.split(" ").sort()).toEqual(["fixture:read", "fixture:write"]);
+  });
+
+  it("leaves an explicit token scope under authorization-server authority", async () => {
+    const f = await fixture(false, { refreshScope: "fixture:limited" }); f.advance(299_500);
+    await f.gateway.call(f.id, {});
+    expect((await f.provider.tokens())?.scope).toBe("fixture:limited");
+    f.stepUp();
+    await expect(f.gateway.call(f.id, {})).rejects.toThrow();
+    expect(new URL((await f.provider.authorizationUrlValue())!).searchParams.get("scope")!.split(" ").sort()).toEqual(["fixture:limited", "fixture:read", "fixture:write"]);
   });
 });
