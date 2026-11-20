@@ -544,6 +544,15 @@ export class McpGateway implements McpRuntime {
     const provider = await this.providerFor(pluginId, serverId, new URL(cfg.url!));
     const existing = await provider.authorizationUrlValue();
     if (existing) return existing;
+    if (record.status === "needs-auth") {
+      // The server rejected these tokens without the SDK starting a browser
+      // flow (e.g. refreshed credentials were refused). Reusing the open
+      // connection would return no URL, so drop the rejected tokens, keep the
+      // client registration, and start a fresh authorization.
+      await this.closeServer(pluginId, serverId);
+      await provider.invalidateCredentials("tokens");
+      this.persistStatus(pluginId, serverId, "idle", null);
+    }
     try {
       await this.startServer(pluginId, serverId);
     } catch (error) {

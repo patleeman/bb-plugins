@@ -156,6 +156,15 @@ describe("rotating OAuth refresh over real HTTP", () => {
     await expect(f.gateway.call(f.id, {})).rejects.toThrow("authorization is required");
     expect(f.counts.refresh).toBe(1);
   });
+  it("offers a fresh sign-in after refreshed credentials are rejected", async () => {
+    const f = await fixture(false); f.advance(299_500); f.rejectFresh();
+    await expect(f.gateway.call(f.id, {})).rejects.toThrow("rejected refreshed credentials");
+    const url = await f.gateway.authUrl("refresh-plugin", "fixture");
+    expect(url).toMatch(/\/authorize\?/);
+    expect(await f.gateway.authStatus("refresh-plugin", "fixture")).toBe("authorizing");
+    expect(await f.provider.tokens()).toBeUndefined();
+    expect(f.counts).toMatchObject({ refresh: 1, registrations: 0 });
+  });
   it("coordinates each provider separately", async () => {
     const first = await fixture(false), second = await fixture(false);
     first.advance(299_500); second.advance(299_500);
