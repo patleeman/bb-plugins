@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { definePluginApp, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./server";
 import { serversNeedingAttention } from "./src/attention";
+import { CONFIRM_CHANNEL } from "./src/confirm-channel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
@@ -23,9 +24,138 @@ type Snapshot = {
   }[];
   skills: { pluginId: string; skillName: string; status: string; lastError: string | null; enabled: boolean }[];
   mcpServers: { pluginId: string; serverId: string; type: string; status: string; authStatus?: string; lastError: string | null; approved: number; enabled: boolean; configJson: string }[];
+  requests?: ApprovalRequest[];
   updates?: PluginUpdate[];
   dataDir: string | null;
 };
+
+type ApprovalRequest = {
+  id: string;
+  pluginId: string;
+  serverId: string;
+  source: "cli" | "agent" | "update";
+  threadId: string | null;
+  reason: string | null;
+  createdAt: number;
+};
+
+type GrantAction = "approve" | "enable" | "disable" | "update";
+
+const CONFIRM_TIMEOUT_MS = 10_000;
+
+function randomNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * A person's go-ahead for one trust change: the server sends a one-time token
+ * over realtime, which reaches BB app windows and not the bb CLI.
+ */
+function useConfirm() {
+  const rpc = useRpc<typeof rpcContract>();
+  const waiters = useRef(new Map<string, (token: string) => void>());
+  useRealtime(CONFIRM_CHANNEL, (payload) => {
+    const message = payload as { clientNonce?: unknown; token?: unknown } | null;
+    if (typeof message?.clientNonce !== "string" || typeof message.token !== "string") return;
+    const resolve = waiters.current.get(message.clientNonce);
+    if (!resolve) return;
+    waiters.current.delete(message.clientNonce);
+    resolve(message.token);
+  });
+  return useCallback(async (action: GrantAction, id: string, serverId?: string): Promise<string> => {
+    const clientNonce = randomNonce();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Listen before asking: the token can arrive before the reply does.
+    const token = new Promise<string>((resolve, reject) => {
+      timer = setTimeout(() => {
+        waiters.current.delete(clientNonce);
+        reject(new Error("BB did not confirm in time. Check that this window is connected, then try again."));
+      }, CONFIRM_TIMEOUT_MS);
+      waiters.current.set(clientNonce, (value) => { clearTimeout(timer); resolve(value); });
+    });
+    token.catch(() => {});
+    try {
+      await rpc.call("requestConfirmToken", { action, id, ...(serverId ? { serverId } : {}), clientNonce });
+      return await token;
+    } finally {
+      clearTimeout(timer);
+      waiters.current.delete(clientNonce);
+    }
+  }, [rpc]);
+}
+
+function withToken<T extends object>(input: T, confirmToken: string | undefined): T & { confirmToken?: string } {
+  return confirmToken ? { ...input, confirmToken } : input;
+}
+
+function requestSourceLabel(request: ApprovalRequest): string {
+  if (request.source === "agent") return request.threadId ? `Asked by an agent (thread ${request.threadId})` : "Asked by an agent";
+  if (request.source === "cli") return request.threadId ? `Asked from the CLI (thread ${request.threadId})` : "Asked from the CLI";
+  return "Changed by an update";
+}
+
+function serverSummary(server: Snapshot["mcpServers"][number] | undefined): string {
+  if (!server) return "";
+  try {
+    const cfg = JSON.parse(server.configJson) as Record<string, unknown>;
+    if (server.type === "stdio") {
+      const args = Array.isArray(cfg.args) ? ` ${(cfg.args as unknown[]).map(String).join(" ")}` : "";
+      return `Runs: ${String(cfg.command ?? "—")}${args}`;
+    }
+    return `Connects to: ${String(cfg.url ?? "—")}`;
+  } catch {
+    return "";
+  }
+}
+
+function ApprovalRequests({
+  snap,
+  busyKey,
+  onApprove,
+  onDecline,
+  compact = false,
+}: {
+  snap: Snapshot;
+  busyKey: string | null;
+  onApprove: (pluginId: string, serverId: string) => void;
+  onDecline: (requestId: string) => void;
+  compact?: boolean;
+}) {
+  const requests = snap.requests ?? [];
+  if (requests.length === 0) return null;
+  const names = new Map(snap.plugins.map((plugin) => [plugin.id, plugin.name]));
+  return (
+    <ul aria-label="Approval requests" className={compact ? "space-y-2" : "divide-y divide-border"}>
+      {requests.map((request) => {
+        const server = snap.mcpServers.find((s) => s.pluginId === request.pluginId && s.serverId === request.serverId);
+        const summary = serverSummary(server);
+        const key = `approve:${request.pluginId}:${request.serverId}`;
+        return (
+          <li key={request.id} className={compact ? "space-y-1" : "space-y-1 px-4 py-3"}>
+            <div className="truncate text-xs font-medium">
+              <span className="font-mono">{request.serverId}</span>
+              <span className="font-normal text-muted-foreground"> · {names.get(request.pluginId) ?? request.pluginId}</span>
+            </div>
+            <p className="text-[11px] text-muted-foreground">{requestSourceLabel(request)}</p>
+            {request.reason && <p className="text-[11px] leading-snug">{request.reason}</p>}
+            {summary && <p className="truncate font-mono text-[11px] text-muted-foreground" title={summary}>{summary}</p>}
+            <div className="flex gap-2 pt-1">
+              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busyKey === key || !server?.enabled} onClick={() => onApprove(request.pluginId, request.serverId)}>
+                Approve {request.serverId}
+              </Button>
+              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground" disabled={busyKey === key} onClick={() => onDecline(request.id)}>
+                Decline
+              </Button>
+            </div>
+            {server && !server.enabled && <p className="text-[11px] text-muted-foreground">Enable this server before approving it.</p>}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 type PluginUpdate = {
   id: string;
@@ -572,6 +702,7 @@ function PluginRow({
 function AgentPluginsView() {
   const { snap, err, load } = useSnapshot();
   const rpc = useRpc<typeof rpcContract>();
+  const confirm = useConfirm();
   const [localErr, setLocalErr] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [updates, setUpdates] = useState<Record<string, PluginUpdate>>({});
@@ -719,7 +850,8 @@ function AgentPluginsView() {
     setPendingAction(key);
     setLocalErr(null);
     try {
-      const result = await rpc.call("update", { id });
+      const confirmToken = await confirm("update", id);
+      const result = await rpc.call("update", withToken({ id }, confirmToken));
       toast.success(`${plugin?.name ?? result.name ?? "Plugin"} updated`, {
         description: result.version ? `Now running v${result.version}.` : "The latest tracked source is installed.",
         duration: 5000,
@@ -750,15 +882,25 @@ function AgentPluginsView() {
   };
 
   const approve = async (p: string, s: string) => {
+    const key = `approve:${p}:${s}`;
+    setPendingAction(key);
     try {
-      await rpc.call("approve", { id: p, serverId: s });
-      toast.success(`${s} approved`, { duration: 4000 });
+      const alreadyApproved = snap?.mcpServers.some((server) => server.pluginId === p && server.serverId === s && server.approved === 1);
+      const confirmToken = alreadyApproved ? undefined : await confirm("approve", p, s);
+      await rpc.call("approve", withToken({ id: p, serverId: s }, confirmToken));
+      toast.success(alreadyApproved ? `${s} restarted` : `${s} approved`, { duration: 4000 });
       await load();
     } catch (e) {
       const message = errorText(e);
       setLocalErr(message);
       notifyError(message, `agent-plugins:approve:${p}:${s}:error`);
+    } finally {
+      setPendingAction(null);
     }
+  };
+
+  const decline = (requestId: string) => {
+    void runAction(`decline:${requestId}`, () => rpc.call("declineRequest", { requestId }), "Request declined");
   };
 
   const runAuthAction = async (method: AuthMethod, p: string, s: string) => {
@@ -814,9 +956,10 @@ function AgentPluginsView() {
   };
 
   const setMcpEnabled = (pluginId: string, serverId: string, enabled: boolean) => {
-    void runAction(`mcp:${pluginId}:${serverId}`, () =>
-      rpc.call("setMcpEnabled", { id: pluginId, serverId, enabled }),
-    );
+    void runAction(`mcp:${pluginId}:${serverId}`, async () => {
+      const confirmToken = await confirm(enabled ? "enable" : "disable", pluginId, serverId);
+      return rpc.call("setMcpEnabled", withToken({ id: pluginId, serverId, enabled }, confirmToken));
+    });
   };
 
   return (
@@ -837,6 +980,16 @@ function AgentPluginsView() {
             </p>
           )}
         </div>
+
+        {snap && (snap.requests ?? []).length > 0 && (
+          <div className="rounded-lg border border-warning/50 bg-card">
+            <div className="border-b border-border px-4 py-3">
+              <h2 className="text-sm font-medium">Waiting for your approval</h2>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">Agents and the CLI can ask; only you can approve. Approving lets agents run this server.</p>
+            </div>
+            <ApprovalRequests snap={snap} busyKey={pendingAction} onApprove={(p, s) => void approve(p, s)} onDecline={decline} />
+          </div>
+        )}
 
         <div className="rounded-lg border border-border bg-card">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
@@ -909,6 +1062,7 @@ const ATTENTION_POLL_MS = 60_000;
 // MCP server needs to sign in again or failed to connect.
 function McpAttentionOverlay() {
   const { snap, load, rpc } = useSnapshot();
+  const confirm = useConfirm();
   const [pending, setPending] = useState<string | null>(null);
   const [dismissedKey, setDismissedKey] = useState<string | null>(null);
 
@@ -927,9 +1081,38 @@ function McpAttentionOverlay() {
   }, [load]);
 
   const attention = snap ? serversNeedingAttention(snap) : [];
-  // Closing hides the panel until the set of broken servers changes.
-  const attentionKey = attention.map((server) => `${server.pluginId}:${server.serverId}:${server.status}`).join("|");
-  if (attention.length === 0 || attentionKey === dismissedKey) return null;
+  const requests = snap?.requests ?? [];
+  // Closing hides the panel until the set of broken servers or requests changes.
+  const attentionKey = [
+    ...attention.map((server) => `${server.pluginId}:${server.serverId}:${server.status}`),
+    ...requests.map((request) => `request:${request.id}:${request.createdAt}`),
+  ].join("|");
+  if ((attention.length === 0 && requests.length === 0) || attentionKey === dismissedKey) return null;
+
+  const approveRequest = async (p: string, s: string) => {
+    const key = `approve:${p}:${s}`;
+    setPending(key);
+    try {
+      const confirmToken = await confirm("approve", p, s);
+      await rpc.call("approve", withToken({ id: p, serverId: s }, confirmToken));
+      toast.success(`${s} approved`, { duration: 4000 });
+    } catch (e) {
+      notifyError(errorText(e), `agent-plugins:${key}:error`);
+    } finally {
+      setPending(null);
+      await load();
+    }
+  };
+
+  const declineRequest = async (requestId: string) => {
+    try {
+      await rpc.call("declineRequest", { requestId });
+    } catch (e) {
+      notifyError(errorText(e), `agent-plugins:decline:${requestId}:error`);
+    } finally {
+      await load();
+    }
+  };
 
   const run = async (method: AuthMethod, p: string, s: string) => {
     const key = `mcp-auth:${p}:${s}`;
@@ -959,6 +1142,12 @@ function McpAttentionOverlay() {
           Close
         </button>
       </div>
+      {snap && requests.length > 0 && (
+        <div className="space-y-1">
+          <h3 className="text-[11px] font-medium text-warning">Waiting for your approval</h3>
+          <ApprovalRequests snap={snap} busyKey={pending} compact onApprove={(p, s) => void approveRequest(p, s)} onDecline={(id) => void declineRequest(id)} />
+        </div>
+      )}
       <ul className="space-y-2">
         {attention.map((server) => {
           const key = `mcp-auth:${server.pluginId}:${server.serverId}`;

@@ -48,6 +48,18 @@ export interface McpServerRecord {
   enabled: number; // 0/1
 }
 
+/** A pending ask, from an agent or the CLI, for a person to approve a server. */
+export interface ApprovalRequestRecord {
+  id: string;
+  pluginId: string;
+  serverId: string;
+  /** What asked: the `bb` CLI, an agent tool, or an update that changed the server's code. */
+  source: "cli" | "agent" | "update";
+  threadId: string | null;
+  reason: string | null;
+  createdAt: number;
+}
+
 export interface AgentPluginSnapshot {
   plugins: PluginRecord[];
   skills: PluginSkillRecord[];

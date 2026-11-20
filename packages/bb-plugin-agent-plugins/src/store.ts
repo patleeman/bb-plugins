@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import type { PluginRecord, PluginSkillRecord, McpServerRecord } from "./types.js";
+import type { ApprovalRequestRecord, PluginRecord, PluginSkillRecord, McpServerRecord } from "./types.js";
 
 export class AgentPluginsStore {
   constructor(
@@ -67,6 +67,18 @@ export class AgentPluginsStore {
       // enabled without rewriting their rows.
       `ALTER TABLE plugin_skills ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`,
       `ALTER TABLE mcp_servers ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`,
+      // Pending asks from agents or the CLI for a person to approve a server.
+      // New table only: existing approvals in mcp_servers are untouched.
+      `CREATE TABLE IF NOT EXISTS approval_requests (
+        id TEXT PRIMARY KEY,
+        pluginId TEXT NOT NULL REFERENCES plugins(id) ON DELETE CASCADE,
+        serverId TEXT NOT NULL,
+        source TEXT NOT NULL CHECK(source IN ('cli','agent','update')),
+        threadId TEXT,
+        reason TEXT,
+        createdAt INTEGER NOT NULL,
+        UNIQUE (pluginId, serverId)
+      )`,
     ]);
   }
 
@@ -166,10 +178,41 @@ export class AgentPluginsStore {
   }
 
   deleteMcpServer(pluginId: string, serverId: string): boolean {
+    this.deleteApprovalRequests(pluginId, serverId);
     const result = this.db
       .prepare(`DELETE FROM mcp_servers WHERE pluginId = ? AND serverId = ?`)
       .run(pluginId, serverId);
     return result.changes > 0;
+  }
+
+  listApprovalRequests(): ApprovalRequestRecord[] {
+    return this.db.prepare(`SELECT * FROM approval_requests ORDER BY createdAt ASC`).all() as ApprovalRequestRecord[];
+  }
+
+  getApprovalRequest(id: string): ApprovalRequestRecord | undefined {
+    return this.db.prepare(`SELECT * FROM approval_requests WHERE id = ?`).get(id) as ApprovalRequestRecord | undefined;
+  }
+
+  /** One pending request per server: a repeat ask refreshes who asked and why. */
+  upsertApprovalRequest(record: ApprovalRequestRecord): ApprovalRequestRecord {
+    this.db
+      .prepare(
+        `INSERT INTO approval_requests (id, pluginId, serverId, source, threadId, reason, createdAt)
+         VALUES (@id, @pluginId, @serverId, @source, @threadId, @reason, @createdAt)
+         ON CONFLICT(pluginId, serverId) DO UPDATE SET
+           source=excluded.source, threadId=excluded.threadId, reason=excluded.reason, createdAt=excluded.createdAt`,
+      )
+      .run(record as unknown as Record<string, unknown>);
+    return this.db
+      .prepare(`SELECT * FROM approval_requests WHERE pluginId = ? AND serverId = ?`)
+      .get(record.pluginId, record.serverId) as ApprovalRequestRecord;
+  }
+
+  deleteApprovalRequests(pluginId: string, serverId?: string): number {
+    const result = serverId === undefined
+      ? this.db.prepare(`DELETE FROM approval_requests WHERE pluginId = ?`).run(pluginId)
+      : this.db.prepare(`DELETE FROM approval_requests WHERE pluginId = ? AND serverId = ?`).run(pluginId, serverId);
+    return result.changes;
   }
 
   snapshot() {
@@ -177,6 +220,7 @@ export class AgentPluginsStore {
       plugins: this.listPlugins(),
       skills: this.listSkills(),
       mcpServers: this.listMcpServers(),
+      requests: this.listApprovalRequests(),
     };
   }
 

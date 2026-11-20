@@ -70,8 +70,12 @@ describe("Agent Plugins settings", () => {
           };
           return { enabled, status: enabled ? "active" : "skipped", lastError: null };
         },
-        setMcpEnabled: ({ id, serverId, enabled }: { id: string; serverId: string; enabled: boolean }) => {
-          calls.push({ method: "setMcpEnabled", input: { id, serverId, enabled } });
+        requestConfirmToken: (input: { clientNonce: string }) => {
+          setTimeout(() => void slot.emitRealtime("agent-plugins-confirm", { clientNonce: input.clientNonce, token: "tok-toggle" }), 0);
+          return { sent: true };
+        },
+        setMcpEnabled: ({ id, serverId, enabled, confirmToken }: { id: string; serverId: string; enabled: boolean; confirmToken?: string }) => {
+          calls.push({ method: "setMcpEnabled", input: { id, serverId, enabled, confirmToken } });
           snapshot = {
             ...snapshot,
             mcpServers: snapshot.mcpServers.map((server) => server.serverId === serverId ? { ...server, enabled, status: enabled ? "idle" : "disabled" } : server),
@@ -97,7 +101,7 @@ describe("Agent Plugins settings", () => {
     fireEvent.click(mcpSwitch);
     await waitFor(() => expect(calls).toContainEqual({
       method: "setMcpEnabled",
-      input: { id: "plugin-1", serverId: "docs", enabled: false },
+      input: { id: "plugin-1", serverId: "docs", enabled: false, confirmToken: "tok-toggle" },
     }));
     await slot.findByRole("switch", { name: "Enable MCP server docs" });
   });
@@ -127,6 +131,11 @@ describe("Agent Plugins settings", () => {
             }],
           };
         },
+        requestConfirmToken: (input: { clientNonce: string }) => {
+          calls.push({ method: "requestConfirmToken", input });
+          setTimeout(() => void slot.emitRealtime("agent-plugins-confirm", { clientNonce: input.clientNonce, token: "tok-update", expiresAt: Date.now() + 60_000 }), 0);
+          return { sent: true };
+        },
         update: (input: unknown) => {
           calls.push({ method: "update", input });
           available = false;
@@ -138,7 +147,8 @@ describe("Agent Plugins settings", () => {
     const updateButton = await slot.findByRole("button", { name: "Update Example Plugin to version 1.1.0" });
     expect(slot.getByText("Update available · v1.1.0")).toBeTruthy();
     fireEvent.click(updateButton);
-    await waitFor(() => expect(calls).toContainEqual({ method: "update", input: { id: "plugin-1" } }));
+    await waitFor(() => expect(calls).toContainEqual({ method: "update", input: { id: "plugin-1", confirmToken: "tok-update" } }));
+    expect(calls).toContainEqual({ method: "requestConfirmToken", input: expect.objectContaining({ action: "update", id: "plugin-1" }) });
     await waitFor(() => expect(calls).toContainEqual({ method: "checkUpdates", input: { id: "plugin-1" } }));
   });
 
@@ -437,5 +447,99 @@ describe("Agent Plugins settings", () => {
     await waitFor(() => expect(calls).toEqual([{ id: "plugin-1", serverId: "fastmail", callbackUrl }]));
     await waitFor(() => expect(slot.queryByRole("textbox", { name: "Callback URL for fastmail" })).toBeNull());
     expect(slot.queryByText(/one-use-secret/)).toBeNull();
+  });
+
+  it("lists approval requests and approves one with a token delivered over realtime", async () => {
+    let snapshot = {
+      plugins: [{
+        id: "plugin-1", name: "Example Plugin", version: "1.0.0", specVersion: "1.0.0",
+        sourceType: "path", sourceIntent: "path:/tmp/example-plugin", sourceResolved: null,
+        status: "needs-approval", approval: "pending", lastError: null,
+      }],
+      skills: [],
+      mcpServers: [{
+        pluginId: "plugin-1", serverId: "docs", type: "stdio", status: "needs-approval",
+        lastError: null, approved: 0, enabled: true,
+        configJson: JSON.stringify({ type: "stdio", command: "node", args: ["server.js"] }),
+      }],
+      requests: [{
+        id: "req-1", pluginId: "plugin-1", serverId: "docs", source: "agent",
+        threadId: "thr_example", reason: "Search the docs", createdAt: 1,
+      }] as unknown[],
+      dataDir: "/tmp/bb",
+    };
+    const calls: Array<{ method: string; input: unknown }> = [];
+    const slot = renderSlot(panel, { subPath: "" }, {
+      rpc: {
+        snapshot: () => snapshot,
+        checkUpdates: () => ({ updates: [] }),
+        requestConfirmToken: (input: { clientNonce: string }) => {
+          calls.push({ method: "requestConfirmToken", input });
+          // A token for someone else's request must not be used.
+          setTimeout(() => void slot.emitRealtime("agent-plugins-confirm", { clientNonce: "someone-else", token: "wrong" }), 0);
+          setTimeout(() => void slot.emitRealtime("agent-plugins-confirm", { clientNonce: input.clientNonce, token: "tok-approve" }), 5);
+          return { sent: true };
+        },
+        approve: (input: unknown) => {
+          calls.push({ method: "approve", input });
+          snapshot = {
+            ...snapshot,
+            requests: [],
+            mcpServers: snapshot.mcpServers.map((server) => ({ ...server, approved: 1, status: "idle" })),
+          };
+          return { approved: true };
+        },
+      } as never,
+    });
+
+    expect(await slot.findByText("Waiting for your approval")).toBeTruthy();
+    expect(slot.getByText("Asked by an agent (thread thr_example)")).toBeTruthy();
+    expect(slot.getByText("Search the docs")).toBeTruthy();
+    expect(slot.getByText("Runs: node server.js")).toBeTruthy();
+
+    fireEvent.click(slot.getByRole("button", { name: "Approve docs" }));
+    await waitFor(() => expect(calls).toContainEqual({
+      method: "approve",
+      input: { id: "plugin-1", serverId: "docs", confirmToken: "tok-approve" },
+    }));
+    expect(calls).toContainEqual({
+      method: "requestConfirmToken",
+      input: expect.objectContaining({ action: "approve", id: "plugin-1", serverId: "docs" }),
+    });
+    await waitFor(() => expect(slot.queryByText("Waiting for your approval")).toBeNull());
+  });
+
+  it("declines an approval request without approving the server", async () => {
+    let snapshot = {
+      plugins: [{
+        id: "plugin-1", name: "Example Plugin", version: "1.0.0", specVersion: "1.0.0",
+        sourceType: "path", sourceIntent: "path:/tmp/example-plugin", sourceResolved: null,
+        status: "needs-approval", approval: "pending", lastError: null,
+      }],
+      skills: [],
+      mcpServers: [{
+        pluginId: "plugin-1", serverId: "docs", type: "stdio", status: "needs-approval",
+        lastError: null, approved: 0, enabled: true, configJson: JSON.stringify({ type: "stdio", command: "node" }),
+      }],
+      requests: [{ id: "req-1", pluginId: "plugin-1", serverId: "docs", source: "cli", threadId: null, reason: null, createdAt: 1 }] as unknown[],
+      dataDir: "/tmp/bb",
+    };
+    const calls: Array<{ method: string; input: unknown }> = [];
+    const slot = renderSlot(panel, { subPath: "" }, {
+      rpc: {
+        snapshot: () => snapshot,
+        checkUpdates: () => ({ updates: [] }),
+        declineRequest: (input: unknown) => {
+          calls.push({ method: "declineRequest", input });
+          snapshot = { ...snapshot, requests: [] };
+          return { declined: true };
+        },
+      } as never,
+    });
+
+    expect(await slot.findByText("Asked from the CLI")).toBeTruthy();
+    fireEvent.click(slot.getByRole("button", { name: "Decline" }));
+    await waitFor(() => expect(calls).toEqual([{ method: "declineRequest", input: { requestId: "req-1" } }]));
+    await waitFor(() => expect(slot.queryByText("Waiting for your approval")).toBeNull());
   });
 });

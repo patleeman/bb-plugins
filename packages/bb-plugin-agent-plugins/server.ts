@@ -15,7 +15,8 @@ import { oauthCallbackUrl, validatePastedCallback } from "./src/callback-url.js"
 import { parseSource, fetchSource, probeSource } from "./src/source.js";
 import { materializeSkill, unmaterializeSkill } from "./src/skills-impl.js";
 import { ensureDir, hashDirectory, rimraf, atomicRename, LIMITS } from "./src/safe-fs.js";
-import type { CatalogPrompt, CatalogResource, CatalogResourceTemplate, CatalogTool, McpServerRecord, PluginRecord, PluginSkillRecord } from "./src/types.js";
+import { CONFIRM_CHANNEL, GrantGate, USER_ONLY_MESSAGE, isPluginCaller, type GrantAction } from "./src/approvals.js";
+import type { ApprovalRequestRecord, CatalogPrompt, CatalogResource, CatalogResourceTemplate, CatalogTool, McpServerRecord, PluginRecord, PluginSkillRecord } from "./src/types.js";
 
 const jsonRecordSchema = z.record(z.string(), z.unknown());
 
@@ -33,6 +34,7 @@ const snapshotSchema = z.object({
   plugins: z.array(z.record(z.string(), z.unknown())),
   skills: z.array(z.record(z.string(), z.unknown())),
   mcpServers: z.array(z.record(z.string(), z.unknown())),
+  requests: z.array(z.record(z.string(), z.unknown())),
   updates: z.array(updateResultSchema),
   dataDir: z.string().nullable(),
 }).strict();
@@ -89,12 +91,15 @@ export const rpcContract = defineRpcContract({
   setLoggingLevel: { input: z.object({ level: z.string().min(1) }).strict(), output: z.object({ updated: z.boolean() }).strict() },
   install: { input: z.object({ source: z.string().min(1), tagPrefix: z.string().optional() }).strict(), output: z.object({ id: z.string(), name: z.string().nullable(), version: z.string().nullable() }).strict() },
   checkUpdates: { input: z.object({ id: z.string().min(1).optional(), refresh: z.boolean().optional() }).strict(), output: z.object({ updates: z.array(updateResultSchema) }).strict() },
-  update: { input: z.object({ id: z.string().min(1) }).strict(), output: z.object({ id: z.string(), name: z.string().nullable(), version: z.string().nullable() }).strict() },
+  update: { input: z.object({ id: z.string().min(1), confirmToken: z.string().min(1).optional() }).strict(), output: z.object({ id: z.string(), name: z.string().nullable(), version: z.string().nullable() }).strict() },
   remove: { input: z.object({ id: z.string().min(1), purgeData: z.boolean().optional() }).strict(), output: z.object({ deleted: z.boolean() }).strict() },
   refresh: { input: z.object({ id: z.string().min(1) }).strict(), output: z.object({ id: z.string(), name: z.string().nullable() }).strict() },
-  approve: { input: z.object({ id: z.string().min(1), serverId: z.string().min(1) }).strict(), output: z.object({ approved: z.boolean() }).strict() },
+  // Trust changes. Each needs a person: see src/approvals.ts.
+  requestConfirmToken: { input: z.object({ action: z.enum(["approve", "enable", "disable", "update"]), id: z.string().min(1), serverId: z.string().optional(), clientNonce: z.string().min(16).max(128) }).strict(), output: z.object({ sent: z.boolean() }).strict() },
+  approve: { input: z.object({ id: z.string().min(1), serverId: z.string().min(1), confirmToken: z.string().min(1).optional() }).strict(), output: z.object({ approved: z.boolean() }).strict() },
+  declineRequest: { input: z.object({ requestId: z.string().min(1) }).strict(), output: z.object({ declined: z.boolean() }).strict() },
   setSkillEnabled: { input: z.object({ id: z.string().min(1), skillName: z.string().min(1), enabled: z.boolean() }).strict(), output: z.object({ enabled: z.boolean(), status: z.string(), lastError: z.string().nullable() }).strict() },
-  setMcpEnabled: { input: z.object({ id: z.string().min(1), serverId: z.string().min(1), enabled: z.boolean() }).strict(), output: z.object({ enabled: z.boolean(), status: z.string(), lastError: z.string().nullable() }).strict() },
+  setMcpEnabled: { input: z.object({ id: z.string().min(1), serverId: z.string().min(1), enabled: z.boolean(), confirmToken: z.string().min(1).optional() }).strict(), output: z.object({ enabled: z.boolean(), status: z.string(), lastError: z.string().nullable() }).strict() },
   authenticate: { input: z.object({ id: z.string().min(1), serverId: z.string().min(1) }).strict(), output: z.object({ url: z.string().nullable(), status: z.string() }).strict() },
   reconnect: { input: z.object({ id: z.string().min(1), serverId: z.string().min(1) }).strict(), output: authActionOutput },
   reauthorize: { input: z.object({ id: z.string().min(1), serverId: z.string().min(1) }).strict(), output: authActionOutput },
@@ -167,6 +172,41 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   const store = new AgentPluginsStore(bb.storage.database(), (db, s) => bb.storage.migrate(db, s));
+  const grants = new GrantGate();
+
+  function findPlugin(id: string): PluginRecord {
+    const p = store.getPlugin(id) ?? store.getPluginByName(id);
+    if (!p) throw new Error(`not found: ${id}`);
+    return p;
+  }
+
+  /**
+   * Record that an agent or the CLI wants a server approved. This never grants
+   * anything: a person approves or declines it from Agent Plugins in BB.
+   */
+  async function requestApproval(
+    id: string,
+    serverId: string,
+    source: ApprovalRequestRecord["source"],
+    threadId: string | null,
+    reason: string | null,
+  ): Promise<{ approved: boolean; request: ApprovalRequestRecord | null; plugin: PluginRecord }> {
+    const p = findPlugin(id);
+    const srv = store.listMcpServers(p.id).find((s) => s.serverId === serverId);
+    if (!srv) throw new Error(`server not found: ${serverId}`);
+    if (srv.approved === 1) return { approved: true, request: null, plugin: p };
+    const request = store.upsertApprovalRequest({
+      id: randomId(),
+      pluginId: p.id,
+      serverId,
+      source,
+      threadId: threadId && threadId.length <= 200 ? threadId : null,
+      reason: reason ? reason.slice(0, 500) : null,
+      createdAt: Date.now(),
+    });
+    await publishChanged({ kind: "approval-requested", id: p.id, serverId });
+    return { approved: false, request, plugin: p };
+  }
   const oauthSettings = bb.settings.define({
     oauthCredentials: {
       type: "string",
@@ -379,12 +419,14 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }, { auth: "none" });
 
-  async function approveServer(id: string, serverId: string): Promise<void> {
-    const p = store.getPlugin(id) ?? store.getPluginByName(id);
-    if (!p) throw new Error(`not found: ${id}`);
+  async function approveServer(id: string, serverId: string, ctx: unknown, confirmToken: string | undefined): Promise<void> {
+    const p = findPlugin(id);
     const srv = store.listMcpServers(p.id).find((s) => s.serverId === serverId);
     if (!srv) throw new Error(`server not found: ${serverId}`);
     if (srv.enabled !== 1) throw new Error(`Enable MCP server ${serverId} before approving it`);
+    // Restarting a server that is already approved changes no trust, so the
+    // page's Retry button needs no confirmation.
+    if (srv.approved !== 1) grants.assert(ctx, { action: "approve", pluginId: p.id, serverId }, confirmToken);
 
     let cfg: Record<string, unknown>;
     try {
@@ -396,7 +438,9 @@ export default async function plugin(bb: BbPluginApi) {
     if (!validation.valid) throw new Error(`Cannot approve invalid server ${serverId}: ${validation.errors.join("; ")}`);
     store.transaction(() => {
       store.upsertMcpServer({ ...srv, approved: 1, status: "idle", lastError: null });
-      if (p.approval === "pending" || p.status === "needs-approval") {
+      store.deleteApprovalRequests(p.id, serverId);
+      const stillPending = store.listMcpServers(p.id).some((s) => s.serverId !== serverId && s.status === "needs-approval");
+      if (!stillPending && (p.approval === "pending" || p.status === "needs-approval")) {
         store.upsertPlugin({ ...p, status: "active", approval: "approved", updatedAt: Date.now() } as import("./src/types.js").PluginRecord);
       }
     });
@@ -473,11 +517,11 @@ export default async function plugin(bb: BbPluginApi) {
     return { enabled: updated.enabled === 1, status: updated.status, lastError: updated.lastError };
   }
 
-  async function setMcpEnabled(id: string, serverId: string, enabled: boolean) {
-    const p = store.getPlugin(id) ?? store.getPluginByName(id);
-    if (!p) throw new Error(`not found: ${id}`);
+  async function setMcpEnabled(id: string, serverId: string, enabled: boolean, ctx: unknown, confirmToken: string | undefined) {
+    const p = findPlugin(id);
     const srv = store.listMcpServers(p.id).find((s) => s.serverId === serverId);
     if (!srv) throw new Error(`server not found: ${serverId}`);
+    grants.assert(ctx, { action: enabled ? "enable" : "disable", pluginId: p.id, serverId }, confirmToken);
 
     if (!enabled) {
       store.upsertMcpServer({ ...srv, enabled: 0, status: "disabled", lastError: null });
@@ -544,7 +588,7 @@ export default async function plugin(bb: BbPluginApi) {
     }));
     const installedIds = new Set(s.plugins.map((plugin) => plugin.id));
     const updates = [...updateCache.values()].filter((update) => installedIds.has(update.id));
-    return { plugins: s.plugins as unknown as Record<string, unknown>[], skills: skills as unknown as Record<string, unknown>[], mcpServers: redactedMcp as unknown as Record<string, unknown>[], updates, dataDir: dd };
+    return { plugins: s.plugins as unknown as Record<string, unknown>[], skills: skills as unknown as Record<string, unknown>[], mcpServers: redactedMcp as unknown as Record<string, unknown>[], requests: s.requests as unknown as Record<string, unknown>[], updates, dataDir: dd };
   };
 
   // Static bridge
@@ -612,8 +656,27 @@ export default async function plugin(bb: BbPluginApi) {
     parameters: z.object({ opaqueId: z.string().min(1) }).strict(),
     async execute(input, ctx) { return JSON.stringify(await gateway.readResource(input.opaqueId, ctx.signal), null, 2); },
   });
+  bb.agents.registerTool({
+    name: "agent_plugins_request_approval",
+    description: "Ask the user to approve an Agent Plugin MCP server. This does not approve it: the user approves or declines it in BB under Agent Plugins.",
+    instructions: "Use when a server you need shows `needs-approval`. Tell the user what you asked for and why; do not try to approve it another way.",
+    presentation: { label: { pending: "Requesting MCP server approval", completed: "Approval requested" } },
+    parameters: z.object({
+      pluginId: z.string().min(1).describe("Installed plugin id or name."),
+      serverId: z.string().min(1).describe("MCP server id inside that plugin."),
+      reason: z.string().max(500).optional().describe("One sentence the user sees: why you need this server."),
+    }).strict(),
+    async execute(input, ctx) {
+      try {
+        const result = await requestApproval(input.pluginId, input.serverId, "agent", ctx.threadId ?? null, input.reason ?? null);
+        return JSON.stringify(result.approved
+          ? { approved: true, message: `${input.serverId} is already approved.` }
+          : { approved: false, requested: true, requestId: result.request!.id, message: `Asked the user to approve ${input.serverId}. It stays off until they approve it in BB → Agent Plugins.` });
+      } catch (e) { return JSON.stringify({ isError: true, error: errorText(e) }); }
+    },
+  });
   bb.agents.configure(() => ({
-    tools: ["agent_plugins_list_tools", "agent_plugins_describe_tool", "agent_plugins_call", "agent_plugins_list_prompts", "agent_plugins_get_prompt", "agent_plugins_list_resources", "agent_plugins_read_resource"],
+    tools: ["agent_plugins_list_tools", "agent_plugins_describe_tool", "agent_plugins_call", "agent_plugins_list_prompts", "agent_plugins_get_prompt", "agent_plugins_list_resources", "agent_plugins_read_resource", "agent_plugins_request_approval"],
     skills: [],
     instructions: "Agent Plugins bridge ready — search MCP tools with agent_plugins_list_tools({query}), get input schemas with agent_plugins_describe_tool, then call with agent_plugins_call.",
   }));
@@ -621,7 +684,18 @@ export default async function plugin(bb: BbPluginApi) {
   // -------------------------------------------------------------------------
   // Core install logic — transactional staging → validation → atomic activation
   // -------------------------------------------------------------------------
-  async function doInstall(sourceInput: string, tagPrefix?: string, existing?: PluginRecord): Promise<{ id: string; name: string | null; version: string | null }> {
+  /**
+   * `trustedUpdate` is true only when a person confirmed this update in the
+   * app. Without it, a stdio server keeps its approval only if the plugin's
+   * files are unchanged: its command may be the same while the code it runs
+   * is not.
+   */
+  async function doInstall(
+    sourceInput: string,
+    tagPrefix?: string,
+    existing?: PluginRecord,
+    options: { trustedUpdate?: boolean; threadId?: string | null } = {},
+  ): Promise<{ id: string; name: string | null; version: string | null }> {
     const dd = await getDataDir();
     const parsed = parseSource(sourceInput, tagPrefix);
     const lockKey = existing ? `plugin:${existing.id}` : parsed.normalized;
@@ -744,11 +818,16 @@ export default async function plugin(bb: BbPluginApi) {
         bb.log.warn(`[agent-plugins] mcp disabled for ${name}: ${errorText(err)}`);
       }
 
+      const codeChanged = existing !== undefined && existing.contentHash !== contentHash;
+      const revokedServerIds: string[] = [];
       const updatedMcpServers: McpServerRecord[] = mcpServers.map((srv) => {
         const previous = previousServerById.get(srv.id);
         const unchanged = previous !== undefined && srv.valid && sameMcpConfig(previous, srv.type ?? "stdio", srv.raw);
         const enabled = previous?.enabled ?? 1;
-        const approved = unchanged ? previous!.approved : 0;
+        const runsLocalCode = (srv.type ?? "stdio") === "stdio";
+        const keepApproval = unchanged && (!runsLocalCode || !codeChanged || options.trustedUpdate === true);
+        const approved = keepApproval ? previous!.approved : 0;
+        if (previous?.approved === 1 && approved === 0 && srv.valid) revokedServerIds.push(srv.id);
         const status = !srv.valid
           ? "error"
           : enabled !== 1
@@ -876,6 +955,19 @@ export default async function plugin(bb: BbPluginApi) {
           else store.deleteSkill(installId!, previous.skillName);
         }
         for (const serverId of removedServerIds) store.deleteMcpServer(installId!, serverId);
+        // A server that lost its approval in this update goes back to the
+        // person who approved it, as a pending request they can see.
+        for (const serverId of revokedServerIds) {
+          store.upsertApprovalRequest({
+            id: randomId(),
+            pluginId: installId!,
+            serverId,
+            source: "update",
+            threadId: options.threadId ?? null,
+            reason: "The update changed this server's configuration or code.",
+            createdAt: now,
+          });
+        }
       });
 
       // Close old connections only after the new generation and DB state are
@@ -1033,7 +1125,7 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   bb.rpc.register(rpcContract, {
-    async snapshot() { return await buildSnapshot() as unknown as { plugins: Record<string, unknown>[]; skills: Record<string, unknown>[]; mcpServers: Record<string, unknown>[]; updates: UpdateResult[]; dataDir: string | null }; },
+    async snapshot() { return await buildSnapshot() as unknown as { plugins: Record<string, unknown>[]; skills: Record<string, unknown>[]; mcpServers: Record<string, unknown>[]; requests: Record<string, unknown>[]; updates: UpdateResult[]; dataDir: string | null }; },
     async listTools() { return { tools: await gateway.listTools() }; },
     async callTool({ opaqueId, args }) { return gateway.call(opaqueId, args as Record<string, unknown>); },
     async listPrompts() { return { prompts: await gateway.listPrompts() }; },
@@ -1053,10 +1145,17 @@ export default async function plugin(bb: BbPluginApi) {
       // the page-wide call is the throttled background path.
       return { updates: await requestedUpdateResults(plugins, refresh === true || Boolean(id)) };
     },
-    async update({ id }) {
-      const plugin = store.getPlugin(id) ?? store.getPluginByName(id);
-      if (!plugin) throw new Error(`not found: ${id}`);
-      return doInstall(plugin.sourceIntent, plugin.tagPrefix ?? undefined, plugin);
+    async update({ id, confirmToken }, ctx?: unknown) {
+      const plugin = findPlugin(id);
+      // Anyone may update; only a person's confirmed update keeps a stdio
+      // server approved when the plugin's code changed. A token that was sent
+      // but does not check out is an error, not a silent downgrade.
+      let trustedUpdate = false;
+      if (confirmToken !== undefined) {
+        grants.assert(ctx, { action: "update", pluginId: plugin.id, serverId: "" }, confirmToken);
+        trustedUpdate = true;
+      }
+      return doInstall(plugin.sourceIntent, plugin.tagPrefix ?? undefined, plugin, { trustedUpdate });
     },
     async remove({ id, purgeData }) {
       const p = store.getPlugin(id) ?? store.getPluginByName(id);
@@ -1088,15 +1187,36 @@ export default async function plugin(bb: BbPluginApi) {
       // Compatibility endpoint retained for older Agent Plugins clients.
       return { id: p.id, name: p.name };
     },
-    async approve({ id, serverId }) {
-      await approveServer(id, serverId);
+    async requestConfirmToken({ action, id, serverId, clientNonce }, ctx?: unknown) {
+      if (isPluginCaller(ctx)) throw new Error(USER_ONLY_MESSAGE);
+      const p = findPlugin(id);
+      const targetServer = action === "update" ? "" : (serverId ?? "");
+      if (action !== "update" && !store.listMcpServers(p.id).some((s) => s.serverId === targetServer)) {
+        throw new Error(`server not found: ${targetServer}`);
+      }
+      const { token, expiresAt } = grants.issue({ action: action as GrantAction, pluginId: p.id, serverId: targetServer });
+      // Delivered only over realtime, which BB app windows receive and the
+      // bb CLI does not: see src/approvals.ts.
+      await bb.realtime.publish(CONFIRM_CHANNEL, { clientNonce, token, expiresAt });
+      return { sent: true };
+    },
+    async approve({ id, serverId, confirmToken }, ctx?: unknown) {
+      await approveServer(id, serverId, ctx, confirmToken);
       return { approved: true };
+    },
+    async declineRequest({ requestId }) {
+      // Declining only removes the ask; it never grants anything.
+      const request = store.getApprovalRequest(requestId);
+      if (!request) return { declined: false };
+      store.deleteApprovalRequests(request.pluginId, request.serverId);
+      await publishChanged({ kind: "approval-declined", id: request.pluginId, serverId: request.serverId });
+      return { declined: true };
     },
     async setSkillEnabled({ id, skillName, enabled }) {
       return setSkillEnabled(id, skillName, enabled);
     },
-    async setMcpEnabled({ id, serverId, enabled }) {
-      return setMcpEnabled(id, serverId, enabled);
+    async setMcpEnabled({ id, serverId, enabled, confirmToken }, ctx?: unknown) {
+      return setMcpEnabled(id, serverId, enabled, ctx, confirmToken);
     },
     async authenticate({ id, serverId }) {
       const p = store.getPlugin(id) ?? store.getPluginByName(id);
@@ -1178,7 +1298,7 @@ export default async function plugin(bb: BbPluginApi) {
       { name: "show", summary: "Show one plugin", usage: "bb agent-plugins show <id> [--json]" },
       { name: "install", summary: "Install from path/git/npm", usage: "bb agent-plugins install <path|git:url|npm:spec> [--tag-prefix <p>] [--json]" },
       { name: "outdated", summary: "Check tracked Agent Plugins for updates", usage: "bb agent-plugins outdated [--json]" },
-      { name: "update", summary: "Update one installed Agent Plugin", usage: "bb agent-plugins update <id> [--json]" },
+      { name: "update", summary: "Update one installed Agent Plugin (a stdio server whose code changed needs approval again)", usage: "bb agent-plugins update <id> [--json]" },
       { name: "remove", summary: "Remove a plugin", usage: "bb agent-plugins remove <id> [--purge-data] [--json]" },
       { name: "tools", summary: "List or search MCP tools via bridge", usage: "bb agent-plugins tools [--query <words>] [--server <serverId>] [--limit <n>] [--offset <n>] [--json]" },
       { name: "describe", summary: "Show full MCP tool definitions", usage: "bb agent-plugins describe <opaqueId>… [--json]" },
@@ -1186,10 +1306,12 @@ export default async function plugin(bb: BbPluginApi) {
       { name: "prompts", summary: "List MCP prompts via bridge", usage: "bb agent-plugins prompts [--json]" },
       { name: "resources", summary: "List MCP resources via bridge", usage: "bb agent-plugins resources [--json]" },
       { name: "skills", summary: "List materialized skills", usage: "bb agent-plugins skills [--json]" },
-      { name: "approve", summary: "Approve an MCP server", usage: "bb agent-plugins approve <id> <serverId> [--json]" },
+      { name: "request-approval", summary: "Ask the user to approve an MCP server; only they can approve it, in BB → Agent Plugins", usage: "bb agent-plugins request-approval <id> <serverId> [--reason <text>] [--json]" },
+      { name: "approve", summary: "Same as request-approval: the CLI cannot approve a server", usage: "bb agent-plugins approve <id> <serverId> [--reason <text>] [--json]" },
+      { name: "requests", summary: "List approval requests waiting for the user", usage: "bb agent-plugins requests [--json]" },
       { name: "auth", summary: "Start or inspect MCP OAuth", usage: "bb agent-plugins auth <id> <serverId> [--json]" },
     ],
-    async run(argv, _ctx) {
+    async run(argv, ctx) {
       const [cmd = "list", ...rest] = argv;
       const asJson = rest.includes("--json");
       const snap = store.snapshot();
@@ -1235,7 +1357,7 @@ export default async function plugin(bb: BbPluginApi) {
         const plugin = store.getPlugin(id) ?? store.getPluginByName(id);
         if (!plugin) return { exitCode: 1, stderr: `not found: ${id}\n` };
         try {
-          const result = await doInstall(plugin.sourceIntent, plugin.tagPrefix ?? undefined, plugin);
+          const result = await doInstall(plugin.sourceIntent, plugin.tagPrefix ?? undefined, plugin, { trustedUpdate: false, threadId: ctx?.threadId ?? null });
           return { exitCode: 0, stdout: asJson ? JSON.stringify(result, null, 2) + "\n" : `Updated ${result.name} to ${result.version ?? "the latest source"}\n` };
         } catch (e) {
           return { exitCode: 1, stderr: `${errorText(e)}\n` };
@@ -1316,15 +1438,36 @@ export default async function plugin(bb: BbPluginApi) {
       if (cmd === "skills") {
         return { exitCode: 0, stdout: (asJson ? JSON.stringify(snap.skills, null, 2) : snap.skills.map(s => `${s.skillName} [${s.status}] ${s.pluginId}`).join("\n")) + "\n" };
       }
-      if (cmd === "approve") {
-        const id = rest[0]; const serverId = rest[1];
-        if (!id || !serverId || serverId === "--json") return { exitCode: 2, stderr: "Usage: bb agent-plugins approve <id> <serverId> [--json]\n" };
+      if (cmd === "approve" || cmd === "request-approval") {
+        // The CLI is reachable from any agent's shell, so it can only ask.
+        const reasonIdx = rest.indexOf("--reason");
+        const reason = reasonIdx !== -1 ? rest[reasonIdx + 1] ?? null : null;
+        const positional = rest.filter((arg, idx) => arg !== "--json" && arg !== "--reason" && !(reasonIdx !== -1 && idx === reasonIdx + 1));
+        const [id, serverId] = positional;
+        if (!id || !serverId) return { exitCode: 2, stderr: `Usage: bb agent-plugins ${cmd} <id> <serverId> [--reason <text>] [--json]\n` };
         try {
-          await approveServer(id, serverId);
-          return { exitCode: 0, stdout: (asJson ? JSON.stringify({ approved: true }) : `Approved ${serverId}\n`) };
+          const result = await requestApproval(id, serverId, "cli", ctx?.threadId ?? null, reason);
+          if (result.approved) {
+            return { exitCode: 0, stdout: asJson ? JSON.stringify({ approved: true, requested: false }) + "\n" : `${serverId} is already approved.\n` };
+          }
+          return {
+            exitCode: 0,
+            stdout: asJson
+              ? JSON.stringify({ approved: false, requested: true, requestId: result.request!.id }) + "\n"
+              : `Asked for approval of ${serverId} (${result.plugin.name}). It is NOT approved yet: the user approves or declines it in BB → Agent Plugins.\n`,
+          };
         } catch (e) {
           return { exitCode: 1, stderr: `${errorText(e)}\n` };
         }
+      }
+      if (cmd === "requests") {
+        const requests = store.listApprovalRequests();
+        return {
+          exitCode: 0,
+          stdout: asJson
+            ? JSON.stringify({ requests }, null, 2) + "\n"
+            : (requests.length === 0 ? "No approval requests.\n" : requests.map((r) => `${r.id} ${r.pluginId} ${r.serverId} [${r.source}]${r.reason ? ` — ${r.reason}` : ""}`).join("\n") + "\n"),
+        };
       }
       if (cmd === "auth") {
         const id = rest[0]; const serverId = rest[1];
@@ -1337,7 +1480,7 @@ export default async function plugin(bb: BbPluginApi) {
           return { exitCode: 0, stdout: asJson ? JSON.stringify({ url, status }, null, 2) + "\n" : `${status}${url ? ` — authorize at ${url}` : ""}\n` };
         } catch (e) { return { exitCode: 1, stderr: `${errorText(e)}\n` }; }
       }
-      return { exitCode: 2, stderr: "Usage: bb agent-plugins <list|show|install|outdated|update|remove|tools|describe|call|prompts|resources|skills|approve|auth> …\n" };
+      return { exitCode: 2, stderr: "Usage: bb agent-plugins <list|show|install|outdated|update|remove|tools|describe|call|prompts|resources|skills|request-approval|requests|auth> …\n" };
     },
   });
 
